@@ -9,7 +9,7 @@ const weekdayNames = [
 ];
 
 export function parseDateOnly(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day));
 }
 

@@ -67,9 +67,18 @@ function asString(value: unknown, fallback: string): string {
   return fallback;
 }
 
+function field(record: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined) return record[key];
+  }
+  return undefined;
+}
+
 function normalizeActivity(activity: ActivityPayload, index: number): NormalizedActivity {
-  const id = asString(activity.id || activity.unique_id, `atividade_${index + 1}`);
+  const id = asString(field(activity, "id", "unique_id", "unique id"), `atividade_${index + 1}`);
   const nome = asString(activity.nome || activity.name, id);
+  const rawOffset = activity.offsetDias ?? field(activity, "diasAntecedencia");
+  const rawEquipe = activity.equipe || field(activity, "tipo equipe");
 
   return {
     ...activity,
@@ -82,9 +91,10 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     quantidadeBase: normalizeQuantityBase(activity.quantidadeBase),
     etapaCompra: normalizePurchaseStage(activity.etapaCompra),
     peso: Number(activity.peso ?? 1),
-    equipe: activity.equipe || null,
+    equipe: typeof rawEquipe === "string" && rawEquipe ? rawEquipe : null,
     atividadeServicoAncoraId: activity.atividadeServicoAncoraId || null,
     interdependenciasMasterIds: Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [],
+    offsetDias: rawOffset === undefined || rawOffset === null || rawOffset === "" ? undefined : Number(rawOffset),
     raw: { ...activity }
   };
 }

@@ -179,6 +179,53 @@ describe("schedule engine", () => {
     expect(result.lines[0].ambiente).toBe("Ambiente unique");
     expect(result.lines[0].produto).toBe("prod_fallback");
   });
+
+  it("aceita aliases reais do Bubble com espacos e data ISO", () => {
+    const payload = normalizePayload(basePayload({
+      obra_json: [{ "unique id": "obra_bubble", dataInicio: "2026-05-01T03:00:00.000Z" }],
+      obra_ambiente_json: [{ "unique id": "amb_obra_1", "nome ambiente": "Area Social" }],
+      obra_ambiente_produto_json: [{
+        "unique id": "oap_bubble_1",
+        "ambiente x obra": "amb_obra_1",
+        produto: "produto_1",
+        "nome produto": "Piso",
+        quantidade: 150
+      }],
+      atividades_json: [
+        {
+          "unique id": "serv_bubble_1",
+          nome: "Servico Bubble",
+          tipo: "Servico",
+          ordem: 1,
+          duracao: 1,
+          "tipo equipe": "Equipe Bubble"
+        },
+        {
+          "unique id": "compra_bubble_1",
+          nome: "Compra Bubble",
+          tipo: "Compra",
+          ordem: 2,
+          duracao: 1,
+          atividadeServicoAncoraId: "serv_bubble_1",
+          diasAntecedencia: 1,
+          etapaCompra: "Recebimento"
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(2);
+    expect(result.lines[0].atividadeId).toBe("compra_bubble_1");
+    expect(result.lines[1].atividadeId).toBe("serv_bubble_1");
+    expect(result.lines[1].data_programada).toBe("2026-05-01");
+    expect(result.lines[1].obraAmbienteProdutoId).toBe("oap_bubble_1");
+    expect(result.lines[1].ambiente).toBe("Area Social");
+    expect(result.lines[1].produto).toBe("Piso");
+    expect(result.lines[1].produtoId).toBe("produto_1");
+    expect(result.lines[1].equipe).toBe("Equipe Bubble");
+  });
+
   it("cobre fallbacks vazios de obra, tipo, ambiente, produto e ordenacao", () => {
     expect(() => runScheduleEngine(normalizePayload(basePayload({ obra_json: [] })))).toThrow("dataInicio");
     expect(() => normalizePayload(basePayload({ atividades_json: [{ id: "x", nome: "X", tipo: "" as never }] }))).toThrow("Tipo de atividade invalido");

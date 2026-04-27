@@ -31,12 +31,12 @@ function cloneCountFor(activity: NormalizedActivity, product: ObraAmbienteProdut
 
 function getProductName(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.produtoNome || product.produto || product.produtoId || "") || null;
+  return String(product.produtoNome || product["nome produto"] || product.produto || product.produtoId || "") || null;
 }
 
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.ambienteId || product.obraAmbienteId || "") || null;
+  return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product.ambiente || "") || null;
 }
 
 function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
@@ -52,8 +52,8 @@ function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Da
     atividadeTipo: activity.tipo,
     atividadeServicoAncoraId: activity.atividadeServicoAncoraId,
     atividadeServicoAncoraNome: anchor?.nome || null,
-    obraAmbienteProdutoId: ctx.product ? String(ctx.product.id || ctx.product.unique_id || "") || null : null,
-    produtoId: ctx.product ? String(ctx.product.produtoId || "") || null : null,
+    obraAmbienteProdutoId: ctx.product ? String(ctx.product.id || ctx.product.unique_id || ctx.product["unique id"] || "") || null : null,
+    produtoId: ctx.product ? String(ctx.product.produtoId || ctx.product.produto || "") || null : null,
     ambienteId,
     data_programada: dateOnly,
     codigo_d: `D${daysFromStart >= 0 ? "+" : ""}${daysFromStart}`,
@@ -63,7 +63,7 @@ function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Da
     nome_atividade: activity.nome,
     equipe: activity.equipe,
     peso: activity.peso,
-    ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambienteId) : null,
+    ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || ambienteId) : null,
     produto: getProductName(ctx.product),
     ordem: activity.ordem,
     clone_index: cloneIndex,
@@ -141,7 +141,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
 export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineResult {
   const obraStart = getObraStart(payload);
   const product = payload.obra_ambiente_produto_json[0] || null;
-  const ambientesById = new Map(payload.obra_ambiente_json.map((ambiente) => [String(ambiente.id || ambiente.unique_id || ""), ambiente]));
+  const ambientesById = new Map(payload.obra_ambiente_json.map((ambiente) => [String(ambiente.id || ambiente.unique_id || ambiente["unique id"] || ""), ambiente]));
   const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort((a, b) => a.ordem - b.ordem);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
   const servicesById = new Map(services.map((service) => [service.id, service]));
