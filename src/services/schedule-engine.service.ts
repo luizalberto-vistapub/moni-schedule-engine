@@ -116,13 +116,12 @@ function placeService(ctx: PlacementContext, service: NormalizedActivity): void 
 }
 
 function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedActivity[], servicesById: Map<string, NormalizedActivity>): void {
-  const ordered = [...activities].sort((a, b) => {
-    if (a.atividadeServicoAncoraId === b.atividadeServicoAncoraId && a.tipo !== b.tipo) return a.tipo === "Projeto" ? -1 : 1;
-    return a.ordem - b.ordem;
-  });
+  const purchases = activities.filter((activity) => activity.tipo === "Compra").sort((a, b) => a.ordem - b.ordem);
+  const projects = activities.filter((activity) => activity.tipo === "Projeto").sort((a, b) => a.ordem - b.ordem);
   const anchorCounters = new Map<string, number>();
+  const purchaseLinesByAnchor = new Map<string, ScheduleLine[]>();
 
-  for (const activity of ordered) {
+  for (const activity of purchases) {
     const anchorId = activity.atividadeServicoAncoraId;
     if (!anchorId) continue;
     const anchorStart = ctx.serviceStarts.get(anchorId);
@@ -130,9 +129,31 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     if (!anchorStart || !anchor) continue;
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
-    const defaultOffset = activity.tipo === "Projeto" ? currentCounter + 2 : currentCounter + 1;
+    const defaultOffset = currentCounter + 1;
     const offset = Number(activity.offsetDias ?? defaultOffset);
     const date = previousBusinessDay(addBusinessDays(anchorStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
+    const line = buildLine(ctx, activity, date, 1, anchor);
+    ctx.lines.push(line);
+    purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
+    anchorCounters.set(counterKey, currentCounter + 1);
+  }
+
+  for (const activity of projects) {
+    const anchorId = activity.atividadeServicoAncoraId;
+    if (!anchorId) continue;
+    const anchorStart = ctx.serviceStarts.get(anchorId);
+    const anchor = servicesById.get(anchorId);
+    if (!anchorStart || !anchor) continue;
+    const purchasesForAnchor = purchaseLinesByAnchor.get(anchorId) || [];
+    const avisoOrcamento = purchasesForAnchor.find((line) => line.subtipo_compra === "AVISO_ORCAMENTO");
+    const earliestPurchase = [...purchasesForAnchor].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
+    const referenceDate = avisoOrcamento?.data_programada || earliestPurchase?.data_programada;
+    const counterKey = `${anchorId}:${activity.tipo}`;
+    const currentCounter = anchorCounters.get(counterKey) || 0;
+    const defaultOffset = currentCounter + 2;
+    const offset = Number(activity.offsetDias ?? defaultOffset);
+    const referenceStart = referenceDate ? parseDateOnly(referenceDate) : anchorStart;
+    const date = previousBusinessDay(addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
     ctx.lines.push(buildLine(ctx, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
   }

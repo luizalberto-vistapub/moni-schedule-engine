@@ -108,7 +108,8 @@ describe("schedule engine", () => {
         { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "limite de compra" },
         { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" },
         { id: "solta_1", nome: "Compra solta", tipo: "Compra", ordem: 3 },
-        { id: "sem_ancora", nome: "Projeto sem ancora existente", tipo: "Projeto", ordem: 4, atividadeServicoAncoraId: "missing" }
+        { id: "compra_sem_ancora", nome: "Compra sem ancora existente", tipo: "Compra", ordem: 4, atividadeServicoAncoraId: "missing" },
+        { id: "sem_ancora", nome: "Projeto sem ancora existente", tipo: "Projeto", ordem: 5, atividadeServicoAncoraId: "missing" }
       ]
     }));
 
@@ -119,6 +120,58 @@ describe("schedule engine", () => {
     expect(result.lines[2].data_programada).toBe("2026-05-04");
     expect(result.lines[0].data_programada < result.lines[1].data_programada).toBe(true);
     expect(result.lines[1].data_programada < result.lines[2].data_programada).toBe(true);
+  });
+
+  it("posiciona projeto com antecedencia relativa ao aviso de orcamento", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 6,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-05-01T03:00:00.000Z" }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+        {
+          id: "compra_aviso",
+          nome: "Aviso",
+          tipo: "Compra",
+          ordem: 1,
+          atividadeServicoAncoraId: "serv_1",
+          etapaCompra: "Aviso de orcamento",
+          diasAntecedencia: 4
+        },
+        {
+          id: "projeto_1",
+          nome: "Projeto",
+          tipo: "Projeto",
+          ordem: 1,
+          atividadeServicoAncoraId: "serv_1",
+          diasAntecedencia: 4
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const project = result.lines.find((line) => line.atividadeId === "projeto_1");
+    const purchase = result.lines.find((line) => line.atividadeId === "compra_aviso");
+    const service = result.lines.find((line) => line.atividadeId === "serv_1");
+
+    expect(project?.data_programada).toBe("2026-04-22");
+    expect(purchase?.data_programada).toBe("2026-04-27");
+    expect(service?.data_programada).toBe("2026-05-01");
+  });
+
+  it("posiciona projeto relativo ao servico quando nao ha compra ancora", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 1, atividadeServicoAncoraId: "serv_1", diasAntecedencia: 2 },
+        { id: "projeto_sem_ancora", nome: "Projeto solto", tipo: "Projeto", ordem: 2 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => line.atividadeId)).toEqual(["projeto_1", "serv_1"]);
+    expect(result.lines[0].data_programada).toBe("2026-04-30");
+    expect(result.lines[1].data_programada).toBe("2026-05-04");
   });
 
   it("usa duracao fixa quando quantidade variavel nao tem base ou quantidade", () => {
