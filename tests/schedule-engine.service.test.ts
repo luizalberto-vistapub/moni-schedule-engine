@@ -33,6 +33,79 @@ describe("schedule engine", () => {
     expect(result.lines).toHaveLength(6);
   });
 
+  it("associa cada atividade ao produto e ambiente correspondentes", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [
+        { id: "amb_garagem", nome: "Garagem" },
+        { id: "amb_social", nome: "Area Social" }
+      ],
+      obra_ambiente_produto_json: [
+        { id: "oap_p2", ambienteId: "amb_social", produto: "prod_2", "nome produto": "PRODUTO 2", quantidade: 60 },
+        { id: "oap_p1", ambienteId: "amb_garagem", produto: "prod_1", "nome produto": "PRODUTO 1", quantidade: 150 },
+        { id: "oap_p3", ambienteId: "amb_garagem", produto: "prod_3", "nome produto": "PRODUTO 3", quantidade: 1 }
+      ],
+      atividades_json: [
+        {
+          id: "serv_p1",
+          nome: "Servico P1",
+          tipo: "Servico",
+          produto: "prod_1",
+          ordem: 1,
+          duracao: 4,
+          duracaoVariavel: true,
+          quantidadeBase: 50,
+          peso: 3,
+          equipe: "Paisagismo"
+        },
+        {
+          id: "serv_p2",
+          nome: "Servico P2",
+          tipo: "Servico",
+          produto: "prod_2",
+          ordem: 1,
+          duracao: 1,
+          peso: 1,
+          equipe: "Civil"
+        },
+        {
+          id: "compra_p1",
+          nome: "Compra P1",
+          tipo: "Compra",
+          produto: "prod_1",
+          ordem: 1,
+          atividadeServicoAncoraId: "serv_p1",
+          etapaCompra: "Recebimento",
+          diasAntecedencia: 1
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const p1ServiceLines = result.lines.filter((line) => line.atividadeId === "serv_p1");
+    const p2Service = result.lines.find((line) => line.atividadeId === "serv_p2");
+    const p1Purchase = result.lines.find((line) => line.atividadeId === "compra_p1");
+
+    expect(p1ServiceLines).toHaveLength(12);
+    expect(p1ServiceLines[0]).toMatchObject({
+      obraAmbienteProdutoId: "oap_p1",
+      produtoId: "prod_1",
+      produto: "PRODUTO 1",
+      ambiente: "Garagem"
+    });
+    expect(p2Service).toMatchObject({
+      obraAmbienteProdutoId: "oap_p2",
+      produtoId: "prod_2",
+      produto: "PRODUTO 2",
+      ambiente: "Area Social"
+    });
+    expect(p1Purchase).toMatchObject({
+      obraAmbienteProdutoId: "oap_p1",
+      produtoId: "prod_1",
+      produto: "PRODUTO 1",
+      ambiente: "Garagem"
+    });
+  });
+
   it("payload com quantidadeBase vazia normaliza para null", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [

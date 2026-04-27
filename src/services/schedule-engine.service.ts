@@ -7,7 +7,8 @@ import { stableLineId } from "../utils/ids.js";
 interface PlacementContext {
   payload: NormalizedSchedulePayload;
   obraStart: Date;
-  product: ObraAmbienteProdutoPayload | null;
+  productsByProductId: Map<string, ObraAmbienteProdutoPayload>;
+  fallbackProduct: ObraAmbienteProdutoPayload | null;
   ambientesById: Map<string, ObraAmbientePayload>;
   serviceStarts: Map<string, Date>;
   lines: ScheduleLine[];
@@ -34,14 +35,29 @@ function getProductName(product: ObraAmbienteProdutoPayload | null): string | nu
   return String(product.produtoNome || product["nome produto"] || product.produto || product.produtoId || "") || null;
 }
 
+function getProductId(product: ObraAmbienteProdutoPayload | null): string | null {
+  if (!product) return null;
+  return String(product.produtoId || product.produto || "") || null;
+}
+
+function getActivityProductId(activity: NormalizedActivity): string | null {
+  return String(activity.produto || activity.produtoId || "") || null;
+}
+
+function productForActivity(ctx: PlacementContext, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+  const productId = getActivityProductId(activity);
+  if (productId) return ctx.productsByProductId.get(productId) || null;
+  return ctx.fallbackProduct;
+}
+
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
   return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product.ambiente || "") || null;
 }
 
-function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
+function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
   const dateOnly = formatDateOnly(date);
-  const ambienteId = getAmbienteId(ctx.product);
+  const ambienteId = getAmbienteId(product);
   const ambiente = ambienteId ? ctx.ambientesById.get(ambienteId) : undefined;
   const daysFromStart = differenceInCalendarDays(ctx.obraStart, date) + 1;
 
@@ -52,8 +68,8 @@ function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Da
     atividadeTipo: activity.tipo,
     atividadeServicoAncoraId: activity.atividadeServicoAncoraId,
     atividadeServicoAncoraNome: anchor?.nome || null,
-    obraAmbienteProdutoId: ctx.product ? String(ctx.product.id || ctx.product.unique_id || ctx.product["unique id"] || "") || null : null,
-    produtoId: ctx.product ? String(ctx.product.produtoId || ctx.product.produto || "") || null : null,
+    obraAmbienteProdutoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
+    produtoId: getProductId(product),
     ambienteId,
     data_programada: dateOnly,
     codigo_d: `D${daysFromStart >= 0 ? "+" : ""}${daysFromStart}`,
@@ -64,7 +80,7 @@ function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Da
     equipe: activity.equipe,
     peso: activity.peso,
     ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || ambienteId) : null,
-    produto: getProductName(ctx.product),
+    produto: getProductName(product),
     ordem: activity.ordem,
     clone_index: cloneIndex,
     anchor_service_name: anchor?.nome || null,
@@ -109,14 +125,15 @@ function latestDependencyDate(ctx: PlacementContext, service: NormalizedActivity
 function placeService(ctx: PlacementContext, service: NormalizedActivity): void {
   const dependencyDate = latestDependencyDate(ctx, service);
   let cursor = dependencyDate ? addBusinessDays(dependencyDate, 1, ctx.payload.dias_trabalho_semana) : ctx.obraStart;
-  const totalClones = cloneCountFor(service, ctx.product);
+  const product = productForActivity(ctx, service);
+  const totalClones = cloneCountFor(service, product);
   let firstDate: Date | null = null;
 
   for (let cloneIndex = 1; cloneIndex <= totalClones; cloneIndex += 1) {
     cursor = nextBusinessDay(cursor, ctx.payload.dias_trabalho_semana);
     while (!canPlaceService(ctx, service, cursor)) cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
     if (!firstDate) firstDate = cursor;
-    ctx.lines.push(buildLine(ctx, service, cursor, cloneIndex));
+    ctx.lines.push(buildLine(ctx, product, service, cursor, cloneIndex));
     reserveServiceDate(ctx, service, cursor);
     cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
   }
@@ -136,12 +153,13 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const anchorStart = ctx.serviceStarts.get(anchorId);
     const anchor = servicesById.get(anchorId);
     if (!anchorStart || !anchor) continue;
+    const product = productForActivity(ctx, anchor);
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
     const defaultOffset = currentCounter + 1;
     const offset = Number(activity.offsetDias ?? defaultOffset);
     const date = previousBusinessDay(addBusinessDays(anchorStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
-    const line = buildLine(ctx, activity, date, 1, anchor);
+    const line = buildLine(ctx, product, activity, date, 1, anchor);
     ctx.lines.push(line);
     purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
     anchorCounters.set(counterKey, currentCounter + 1);
@@ -153,6 +171,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const anchorStart = ctx.serviceStarts.get(anchorId);
     const anchor = servicesById.get(anchorId);
     if (!anchorStart || !anchor) continue;
+    const product = productForActivity(ctx, anchor);
     const purchasesForAnchor = purchaseLinesByAnchor.get(anchorId) || [];
     const avisoOrcamento = purchasesForAnchor.find((line) => line.subtipo_compra === "AVISO_ORCAMENTO");
     const earliestPurchase = [...purchasesForAnchor].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
@@ -163,7 +182,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const offset = Number(activity.offsetDias ?? defaultOffset);
     const referenceStart = referenceDate ? parseDateOnly(referenceDate) : anchorStart;
     const date = previousBusinessDay(addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
-    ctx.lines.push(buildLine(ctx, activity, date, 1, anchor));
+    ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
   }
 }
@@ -179,7 +198,12 @@ function compareServiceOrder(a: NormalizedActivity, b: NormalizedActivity): numb
 
 export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineResult {
   const obraStart = getObraStart(payload);
-  const product = payload.obra_ambiente_produto_json[0] || null;
+  const fallbackProduct = payload.obra_ambiente_produto_json[0] || null;
+  const productsByProductId = new Map(
+    payload.obra_ambiente_produto_json
+      .map((product) => [getProductId(product), product] as const)
+      .filter((entry): entry is [string, ObraAmbienteProdutoPayload] => Boolean(entry[0]))
+  );
   const ambientesById = new Map(payload.obra_ambiente_json.map((ambiente) => [String(ambiente.id || ambiente.unique_id || ambiente["unique id"] || ""), ambiente]));
   const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort(compareServiceOrder);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
@@ -187,7 +211,8 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const ctx: PlacementContext = {
     payload,
     obraStart,
-    product,
+    productsByProductId,
+    fallbackProduct,
     ambientesById,
     serviceStarts: new Map(),
     lines: [],
