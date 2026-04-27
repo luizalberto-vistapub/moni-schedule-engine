@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { getRequestId } from "../src/middleware/request-logger.middleware.js";
+import { getLogLevel } from "../src/utils/logger.js";
 
 describe("request observability", () => {
   it("gets request id from a string header", () => {
@@ -21,5 +22,13 @@ describe("request observability", () => {
 
     expect(getRequestId(absent)).toMatch(/[0-9a-f-]{36}/);
     expect(getRequestId(emptyArray)).toMatch(/[0-9a-f-]{36}/);
+  });
+
+  it("falls back to info for missing or invalid log levels", () => {
+    expect(getLogLevel()).toBe("silent");
+    expect(getLogLevel("")).toBe("info");
+    expect(getLogLevel("undefined")).toBe("info");
+    expect(getLogLevel("verbose")).toBe("info");
+    expect(getLogLevel("debug")).toBe("debug");
   });
 });
