@@ -1,0 +1,215 @@
+import { describe, expect, it } from "vitest";
+import { addBusinessDays, isBusinessDay, nextBusinessDay, previousBusinessDay } from "../src/services/business-days.service.js";
+import { normalizePayload } from "../src/services/normalize-payload.service.js";
+import { buildScheduleResponse } from "../src/services/response-builder.service.js";
+import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
+import { parseDateOnly, formatDateOnly } from "../src/utils/dates.js";
+import { basePayload } from "./test-helpers.js";
+
+describe("schedule engine", () => {
+  it("duracao fixa gera N clones", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico fixo", tipo: "Servico", ordem: 1, duracao: 3, duracaoVariavel: false, peso: 2 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(3);
+    expect(result.lines.map((line) => line.clone_index)).toEqual([1, 2, 3]);
+  });
+
+  it("duracao variavel calcula ceil(duracao * quantidade / quantidadeBase)", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [{ id: "oap_1", quantidade: 15 }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico variavel", tipo: "Servico", ordem: 1, duracao: 2, duracaoVariavel: true, quantidadeBase: 5, peso: 2 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(6);
+  });
+
+  it("payload com quantidadeBase vazia normaliza para null", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", quantidadeBase: "", duracao: 1 }
+      ]
+    }));
+
+    expect(payload.atividades_json[0].quantidadeBase).toBeNull();
+  });
+
+  it("resposta contem cronograma e lines com o mesmo tamanho", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico fixo", tipo: "Servico", ordem: 1, duracao: 2, duracaoVariavel: false }
+      ]
+    }));
+    const result = runScheduleEngine(payload);
+    const response = buildScheduleResponse(result, new Date());
+
+    expect(response.cronograma).toHaveLength(response.lines.length);
+    expect(response.scheduleLines).toHaveLength(response.lines.length);
+    expect(response.cronogramaLinhas).toHaveLength(response.lines.length);
+    expect(response.activityObras).toHaveLength(response.lines.length);
+  });
+
+  it("normaliza aliases, ids fallback, etapaCompra e interdependencias", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { unique_id: "serv_unique", name: "Servico por name", tipo: "Servico", quantidadeBase: "0", etapaCompra: "aviso de orcamento", interdependenciasMasterIds: "bad" as never },
+        { tipo: "Compra", atividadeServicoAncoraId: "serv_unique", etapaCompra: "recebimento" }
+      ]
+    }));
+
+    expect(payload.atividades_json[0].id).toBe("serv_unique");
+    expect(payload.atividades_json[0].nome).toBe("Servico por name");
+    expect(payload.atividades_json[0].quantidadeBase).toBeNull();
+    expect(payload.atividades_json[0].interdependenciasMasterIds).toEqual([]);
+    expect(payload.atividades_json[1].id).toBe("atividade_2");
+    expect(payload.atividades_json[1].etapaCompra).toBe("RECEBIMENTO");
+  });
+
+  it("rejeita tipo de atividade invalido", () => {
+    expect(() => normalizePayload(basePayload({
+      atividades_json: [{ id: "x", nome: "X", tipo: "Outra" as never }]
+    }))).toThrow("Tipo de atividade invalido");
+  });
+
+  it("respeita dias uteis, sabado opcional, dependencia e peso diario", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 5,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-05-03" }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1, peso: 6 },
+        { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1, peso: 6 },
+        { id: "serv_3", nome: "Servico 3", tipo: "Servico", ordem: 3, duracao: 1, interdependenciasMasterIds: ["serv_2"] }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-05", "2026-05-06"]);
+    expect(isBusinessDay(parseDateOnly("2026-05-09"), 5)).toBe(false);
+    expect(isBusinessDay(parseDateOnly("2026-05-09"), 6)).toBe(true);
+    expect(formatDateOnly(nextBusinessDay(parseDateOnly("2026-05-03"), 5))).toBe("2026-05-04");
+    expect(formatDateOnly(previousBusinessDay(parseDateOnly("2026-05-03"), 5))).toBe("2026-05-01");
+    expect(formatDateOnly(addBusinessDays(parseDateOnly("2026-05-08"), 1, 6))).toBe("2026-05-09");
+  });
+
+  it("posiciona projeto antes de compra e ambos antes do servico ancora", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 10, duracao: 1 },
+        { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "limite de compra" },
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" },
+        { id: "solta_1", nome: "Compra solta", tipo: "Compra", ordem: 3 },
+        { id: "sem_ancora", nome: "Projeto sem ancora existente", tipo: "Projeto", ordem: 4, atividadeServicoAncoraId: "missing" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => line.tipo)).toEqual(["Projeto", "Compra", "Servi\u00e7o"]);
+    expect(result.lines[1].subtipo_compra).toBe("LIMITE_COMPRA");
+    expect(result.lines[2].data_programada).toBe("2026-05-04");
+    expect(result.lines[0].data_programada < result.lines[1].data_programada).toBe(true);
+    expect(result.lines[1].data_programada < result.lines[2].data_programada).toBe(true);
+  });
+
+  it("usa duracao fixa quando quantidade variavel nao tem base ou quantidade", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 2, duracaoVariavel: true, quantidadeBase: null }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(2);
+    expect(result.lines[0].produto).toBeNull();
+    expect(result.lines[0].ambiente).toBeNull();
+  });
+
+  it("cobre fallbacks de normalizacao e dias uteis", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "", name: "Nome fallback", tipo: "Projeto", etapaCompra: "etapa desconhecida", equipe: "" }
+      ]
+    }));
+
+    expect(payload.atividades_json[0].id).toBe("atividade_1");
+    expect(payload.atividades_json[0].nome).toBe("Nome fallback");
+    expect(payload.atividades_json[0].etapaCompra).toBeNull();
+    expect(payload.atividades_json[0].equipe).toBeNull();
+    expect(formatDateOnly(addBusinessDays(parseDateOnly("2026-05-03"), 0, 5))).toBe("2026-05-04");
+  });
+
+  it("ignora dependencia inexistente e escolhe a dependencia mais recente", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1 },
+        { id: "serv_3", nome: "Servico 3", tipo: "Servico", ordem: 3, duracao: 1, interdependenciasMasterIds: ["missing", "serv_1", "serv_2"] }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-04", "2026-05-05"]);
+  });
+
+  it("usa fallbacks de ambiente por unique_id e produto por produtoId", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [{ unique_id: "amb_unique", name: "Ambiente unique" }],
+      obra_ambiente_produto_json: [{ unique_id: "oap_unique", obraAmbienteId: "amb_unique", produtoId: "prod_fallback", quantidade: 1 }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines[0].obraAmbienteProdutoId).toBe("oap_unique");
+    expect(result.lines[0].ambiente).toBe("Ambiente unique");
+    expect(result.lines[0].produto).toBe("prod_fallback");
+  });
+  it("cobre fallbacks vazios de obra, tipo, ambiente, produto e ordenacao", () => {
+    expect(() => runScheduleEngine(normalizePayload(basePayload({ obra_json: [] })))).toThrow("dataInicio");
+    expect(() => normalizePayload(basePayload({ atividades_json: [{ id: "x", nome: "X", tipo: "" as never }] }))).toThrow("Tipo de atividade invalido");
+
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [{ id: "amb_raw" }],
+      obra_ambiente_produto_json: [{ ambienteId: "amb_raw", quantidade: 1 }],
+      atividades_json: [
+        { id: "serv_b", nome: "Servico B", tipo: "Servico", ordem: 1, duracao: 1, peso: 1 },
+        { id: "serv_a", nome: "Servico A", tipo: "Servico", ordem: 1, duracao: 1, peso: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(2);
+    expect(result.lines[0].obraAmbienteProdutoId).toBeNull();
+    expect(result.lines[0].produtoId).toBeNull();
+    expect(result.lines[0].ambiente).toBe("amb_raw");
+    expect(result.lines[0].data_programada).toBe(result.lines[1].data_programada);
+  });
+  it("cobre ambiente sem id nem unique_id", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [{}],
+      obra_ambiente_produto_json: [],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(1);
+  });});

@@ -1,0 +1,61 @@
+﻿{
+  "cronograma_unique_id": "cronograma_example",
+  "mode": "generate",
+  "dias_trabalho_semana": 5,
+  "timezone": "America/Sao_Paulo",
+  "requested_by": "bubble",
+  "reason": "initial generation example",
+  "numero": 1,
+  "previous_version_id": null,
+  "obra_json": [
+    {
+      "id": "obra_1",
+      "dataInicio": "2026-05-04"
+    }
+  ],
+  "obra_ambiente_json": [
+    {
+      "id": "amb_1",
+      "nome": "Sala"
+    }
+  ],
+  "obra_ambiente_produto_json": [
+    {
+      "id": "oap_1",
+      "ambienteId": "amb_1",
+      "produtoId": "prod_1",
+      "produtoNome": "Piso",
+      "quantidade": 15
+    }
+  ],
+  "atividades_json": [
+    {
+      "id": "serv_1",
+      "nome": "Instalar piso",
+      "tipo": "Servico",
+      "ordem": 1,
+      "duracao": 2,
+      "duracaoVariavel": true,
+      "quantidadeBase": 5,
+      "peso": 5,
+      "equipe": "Equipe A"
+    },
+    {
+      "id": "projeto_1",
+      "nome": "Projeto do piso",
+      "tipo": "Projeto",
+      "ordem": 2,
+      "atividadeServicoAncoraId": "serv_1"
+    },
+    {
+      "id": "compra_1",
+      "nome": "Comprar piso",
+      "tipo": "Compra",
+      "ordem": 3,
+      "atividadeServicoAncoraId": "serv_1",
+      "etapaCompra": "limite de compra"
+    }
+  ],
+  "atividade_obra_json": [],
+  "events_json": []
+}

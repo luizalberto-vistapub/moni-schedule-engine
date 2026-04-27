@@ -1,0 +1,48 @@
+﻿{
+  "cronograma_unique_id": "cronograma_example",
+  "mode": "recalculate",
+  "dias_trabalho_semana": 5,
+  "timezone": "America/Sao_Paulo",
+  "requested_by": "bubble",
+  "reason": "activity changed example",
+  "numero": 2,
+  "previous_version_id": "schedule_version_previous",
+  "obra_json": [
+    {
+      "id": "obra_1",
+      "dataInicio": "2026-05-04"
+    }
+  ],
+  "obra_ambiente_json": [
+    {
+      "id": "amb_1",
+      "nome": "Sala"
+    }
+  ],
+  "obra_ambiente_produto_json": [
+    {
+      "id": "oap_1",
+      "ambienteId": "amb_1",
+      "produtoId": "prod_1",
+      "produtoNome": "Piso",
+      "quantidade": 12
+    }
+  ],
+  "atividades_json": [
+    {
+      "id": "serv_1",
+      "nome": "Instalar piso",
+      "tipo": "Servico",
+      "ordem": 1,
+      "duracao": 1,
+      "peso": 5
+    }
+  ],
+  "atividade_obra_json": [],
+  "events_json": [
+    {
+      "type": "activity_duration_changed",
+      "atividadeId": "serv_1"
+    }
+  ]
+}
