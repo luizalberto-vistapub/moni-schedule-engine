@@ -101,6 +101,37 @@ describe("schedule engine", () => {
     expect(formatDateOnly(addBusinessDays(parseDateOnly("2026-05-08"), 1, 6))).toBe("2026-05-09");
   });
 
+  it("calcula limite de peso por equipe no mesmo dia", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "civil_1", nome: "Civil 1", tipo: "Servico", ordem: 1, duracao: 1, peso: 7, equipe: "Civil" },
+        { id: "paisagismo_1", nome: "Paisagismo 1", tipo: "Servico", ordem: 1, duracao: 1, peso: 7, equipe: "Paisagismo" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-04"]);
+  });
+
+  it("usa createdAt como desempate quando mesma ordem e mesma equipe passam de peso 10", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "nova", nome: "Nova", tipo: "Servico", ordem: 1, duracao: 1, peso: 6, equipe: "Civil", createdAt: "2026-04-12T00:00:00.000Z" },
+        { id: "antiga", nome: "Antiga", tipo: "Servico", ordem: 1, duracao: 1, peso: 7, equipe: "Civil", createdAt: "2026-04-10T00:00:00.000Z" },
+        { id: "outra_equipe", nome: "Outra equipe", tipo: "Servico", ordem: 1, duracao: 1, peso: 8, equipe: "Paisagismo", createdAt: "2026-04-11T00:00:00.000Z" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
+      ["antiga", "2026-05-04"],
+      ["outra_equipe", "2026-05-04"],
+      ["nova", "2026-05-05"]
+    ]);
+  });
+
   it("posiciona projeto antes de compra e ambos antes do servico ancora", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [

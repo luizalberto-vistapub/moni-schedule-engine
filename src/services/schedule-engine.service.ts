@@ -72,16 +72,25 @@ function buildLine(ctx: PlacementContext, activity: NormalizedActivity, date: Da
   };
 }
 
+function teamKey(activity: NormalizedActivity): string {
+  return activity.equipe || "__sem_equipe__";
+}
+
+function weightKey(activity: NormalizedActivity, dateOnly: string): string {
+  return `${dateOnly}:${teamKey(activity)}`;
+}
+
 function canPlaceService(ctx: PlacementContext, activity: NormalizedActivity, date: Date): boolean {
   const dateOnly = formatDateOnly(date);
-  const currentWeight = ctx.teamWeightByDay.get(dateOnly) || 0;
+  const currentWeight = ctx.teamWeightByDay.get(weightKey(activity, dateOnly)) || 0;
   const activityDates = ctx.activityDays.get(activity.id) || new Set<string>();
   return currentWeight + activity.peso <= 10 && !activityDates.has(dateOnly);
 }
 
 function reserveServiceDate(ctx: PlacementContext, activity: NormalizedActivity, date: Date): void {
   const dateOnly = formatDateOnly(date);
-  ctx.teamWeightByDay.set(dateOnly, (ctx.teamWeightByDay.get(dateOnly) || 0) + activity.peso);
+  const key = weightKey(activity, dateOnly);
+  ctx.teamWeightByDay.set(key, (ctx.teamWeightByDay.get(key) || 0) + activity.peso);
   const activityDates = ctx.activityDays.get(activity.id) || new Set<string>();
   activityDates.add(dateOnly);
   ctx.activityDays.set(activity.id, activityDates);
@@ -159,11 +168,20 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
   }
 }
 
+function compareServiceOrder(a: NormalizedActivity, b: NormalizedActivity): number {
+  return (
+    a.ordem - b.ordem
+    || teamKey(a).localeCompare(teamKey(b))
+    || String(a.createdAt || "").localeCompare(String(b.createdAt || ""))
+    || a.id.localeCompare(b.id)
+  );
+}
+
 export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineResult {
   const obraStart = getObraStart(payload);
   const product = payload.obra_ambiente_produto_json[0] || null;
   const ambientesById = new Map(payload.obra_ambiente_json.map((ambiente) => [String(ambiente.id || ambiente.unique_id || ambiente["unique id"] || ""), ambiente]));
-  const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort((a, b) => a.ordem - b.ordem);
+  const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort(compareServiceOrder);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
   const servicesById = new Map(services.map((service) => [service.id, service]));
   const ctx: PlacementContext = {
