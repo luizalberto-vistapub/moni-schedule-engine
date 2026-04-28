@@ -174,6 +174,56 @@ describe("schedule engine", () => {
     expect(formatDateOnly(addBusinessDays(parseDateOnly("2026-05-08"), 1, 6))).toBe("2026-05-09");
   });
 
+  it("inicia dependente apos o ultimo clone da dependencia", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "base", nome: "Base", tipo: "Servico", ordem: 1, duracao: 3, peso: 2 },
+        { id: "dependente", nome: "Dependente", tipo: "Servico", ordem: 1, duracao: 1, peso: 2, interdependenciasMasterIds: ["base"] }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
+      ["base", "2026-05-04"],
+      ["base", "2026-05-05"],
+      ["base", "2026-05-06"],
+      ["dependente", "2026-05-07"]
+    ]);
+  });
+
+  it("inicia uma ordem somente apos a ordem anterior terminar", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "ordem_1_a", nome: "Ordem 1 A", tipo: "Servico", ordem: 1, duracao: 2, peso: 5, equipe: "Civil" },
+        { id: "ordem_1_b", nome: "Ordem 1 B", tipo: "Servico", ordem: 1, duracao: 3, peso: 5, equipe: "Paisagismo" },
+        { id: "ordem_2", nome: "Ordem 2", tipo: "Servico", ordem: 2, duracao: 1, peso: 1, equipe: "Civil" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const ordem2 = result.lines.find((line) => line.atividadeId === "ordem_2");
+
+    expect(result.lines.filter((line) => line.atividadeId === "ordem_1_a").map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-05"]);
+    expect(result.lines.filter((line) => line.atividadeId === "ordem_1_b").map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-05", "2026-05-06"]);
+    expect(ordem2?.data_programada).toBe("2026-05-07");
+  });
+
+  it("mantem progresso quando ha ciclo de dependencia na mesma ordem", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "ciclo_a", nome: "Ciclo A", tipo: "Servico", ordem: 1, duracao: 1, peso: 1, interdependenciasMasterIds: ["ciclo_b"] },
+        { id: "ciclo_b", nome: "Ciclo B", tipo: "Servico", ordem: 1, duracao: 1, peso: 1, interdependenciasMasterIds: ["ciclo_a"] }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines).toHaveLength(2);
+    expect(result.lines.map((line) => line.atividadeId)).toEqual(["ciclo_a", "ciclo_b"]);
+    expect(result.lines.map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-05"]);
+  });
+
   it("calcula limite de peso por equipe no mesmo dia", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
@@ -262,6 +312,31 @@ describe("schedule engine", () => {
     expect(service?.data_programada).toBe("2026-05-01");
   });
 
+  it("formata codigo D-0 no dia anterior ao D+1", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 6,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-05-01T03:00:00.000Z" }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+        {
+          id: "compra_1",
+          nome: "Compra",
+          tipo: "Compra",
+          ordem: 1,
+          atividadeServicoAncoraId: "serv_1",
+          etapaCompra: "Recebimento",
+          diasAntecedencia: 1
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const purchase = result.lines.find((line) => line.atividadeId === "compra_1");
+
+    expect(purchase?.data_programada).toBe("2026-04-30");
+    expect(purchase?.codigo_d).toBe("D-0");
+  });
+
   it("posiciona projeto relativo ao servico quando nao ha compra ancora", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
@@ -293,6 +368,21 @@ describe("schedule engine", () => {
     expect(result.lines[0].ambiente).toBeNull();
   });
 
+  it("nao usa fallback quando atividade declara produto inexistente", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [{ id: "oap_1", produto: "produto_existente", quantidade: 10 }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, produto: "produto_inexistente" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines[0].obraAmbienteProdutoId).toBeNull();
+    expect(result.lines[0].produtoId).toBeNull();
+    expect(result.lines[0].produto).toBeNull();
+  });
+
   it("cobre fallbacks de normalizacao e dias uteis", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
@@ -318,7 +408,7 @@ describe("schedule engine", () => {
 
     const result = runScheduleEngine(payload);
 
-    expect(result.lines.map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-04", "2026-05-05"]);
+    expect(result.lines.map((line) => line.data_programada)).toEqual(["2026-05-04", "2026-05-05", "2026-05-06"]);
   });
 
   it("usa fallbacks de ambiente por unique_id e produto por produtoId", () => {

@@ -11,6 +11,8 @@ interface PlacementContext {
   fallbackProduct: ObraAmbienteProdutoPayload | null;
   ambientesById: Map<string, ObraAmbientePayload>;
   serviceStarts: Map<string, Date>;
+  serviceEnds: Map<string, Date>;
+  serviceCloneDates: Map<string, Date[]>;
   lines: ScheduleLine[];
   teamWeightByDay: Map<string, number>;
   activityDays: Map<string, Set<string>>;
@@ -55,6 +57,12 @@ function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | nul
   return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product.ambiente || "") || null;
 }
 
+function formatCodigoD(daysFromStart: number): string {
+  if (daysFromStart > 0) return `D+${daysFromStart}`;
+  if (daysFromStart === 0) return "D-0";
+  return `D${daysFromStart}`;
+}
+
 function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
   const dateOnly = formatDateOnly(date);
   const ambienteId = getAmbienteId(product);
@@ -72,7 +80,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     produtoId: getProductId(product),
     ambienteId,
     data_programada: dateOnly,
-    codigo_d: `D${daysFromStart >= 0 ? "+" : ""}${daysFromStart}`,
+    codigo_d: formatCodigoD(daysFromStart),
     dia_semana: weekdayName(date),
     tipo: activity.tipo,
     subtipo_compra: activity.tipo === "Compra" ? activity.etapaCompra : null,
@@ -112,33 +120,74 @@ function reserveServiceDate(ctx: PlacementContext, activity: NormalizedActivity,
   ctx.activityDays.set(activity.id, activityDates);
 }
 
-function latestDependencyDate(ctx: PlacementContext, service: NormalizedActivity): Date | null {
+function latestDependencyEndDate(ctx: PlacementContext, service: NormalizedActivity): Date | null {
   let latest: Date | null = null;
   for (const dependencyId of service.interdependenciasMasterIds) {
-    const dependencyStart = ctx.serviceStarts.get(dependencyId);
-    if (!dependencyStart) continue;
-    if (!latest || dependencyStart > latest) latest = dependencyStart;
+    const dependencyEnd = ctx.serviceEnds.get(dependencyId);
+    if (!dependencyEnd) continue;
+    if (!latest || dependencyEnd > latest) latest = dependencyEnd;
   }
   return latest;
 }
 
-function placeService(ctx: PlacementContext, service: NormalizedActivity): void {
-  const dependencyDate = latestDependencyDate(ctx, service);
-  let cursor = dependencyDate ? addBusinessDays(dependencyDate, 1, ctx.payload.dias_trabalho_semana) : ctx.obraStart;
+function laterDate(a: Date, b: Date): Date {
+  return a > b ? a : b;
+}
+
+function placeService(ctx: PlacementContext, service: NormalizedActivity, earliestStart: Date): void {
+  const dependencyEnd = latestDependencyEndDate(ctx, service);
+  let cursor = dependencyEnd ? laterDate(earliestStart, addBusinessDays(dependencyEnd, 1, ctx.payload.dias_trabalho_semana)) : earliestStart;
   const product = productForActivity(ctx, service);
   const totalClones = cloneCountFor(service, product);
   let firstDate: Date | null = null;
+  let lastDate: Date | null = null;
+  const cloneDates: Date[] = [];
 
   for (let cloneIndex = 1; cloneIndex <= totalClones; cloneIndex += 1) {
     cursor = nextBusinessDay(cursor, ctx.payload.dias_trabalho_semana);
     while (!canPlaceService(ctx, service, cursor)) cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
     if (!firstDate) firstDate = cursor;
+    lastDate = cursor;
+    cloneDates.push(cursor);
     ctx.lines.push(buildLine(ctx, product, service, cursor, cloneIndex));
     reserveServiceDate(ctx, service, cursor);
     cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
   }
 
   if (firstDate) ctx.serviceStarts.set(service.id, firstDate);
+  if (lastDate) ctx.serviceEnds.set(service.id, lastDate);
+  if (cloneDates.length) ctx.serviceCloneDates.set(service.id, cloneDates);
+}
+
+function hasUnplacedDependencyInSameOrder(service: NormalizedActivity, sameOrderIds: Set<string>, ctx: PlacementContext): boolean {
+  return service.interdependenciasMasterIds.some((dependencyId) => sameOrderIds.has(dependencyId) && !ctx.serviceEnds.has(dependencyId));
+}
+
+function placeServices(ctx: PlacementContext, services: NormalizedActivity[]): void {
+  const servicesByOrder = new Map<number, NormalizedActivity[]>();
+  for (const service of services) {
+    servicesByOrder.set(service.ordem, [...(servicesByOrder.get(service.ordem) || []), service]);
+  }
+
+  let previousOrderEnd: Date | null = null;
+  for (const ordem of [...servicesByOrder.keys()].sort((a, b) => a - b)) {
+    const group = [...servicesByOrder.get(ordem)!].sort(compareServiceOrder);
+    const sameOrderIds = new Set(group.map((service) => service.id));
+    const groupEarliestStart = previousOrderEnd ? addBusinessDays(previousOrderEnd, 1, ctx.payload.dias_trabalho_semana) : ctx.obraStart;
+    const pending = [...group];
+
+    while (pending.length) {
+      const index = pending.findIndex((service) => !hasUnplacedDependencyInSameOrder(service, sameOrderIds, ctx));
+      const [service] = pending.splice(index >= 0 ? index : 0, 1);
+      placeService(ctx, service, groupEarliestStart);
+    }
+
+    const groupEnd = group.reduce<Date | null>((latest, service) => {
+      const serviceEnd = ctx.serviceEnds.get(service.id)!;
+      return latest ? laterDate(latest, serviceEnd) : serviceEnd;
+    }, null);
+    previousOrderEnd = previousOrderEnd && groupEnd ? laterDate(previousOrderEnd, groupEnd) : groupEnd;
+  }
 }
 
 function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedActivity[], servicesById: Map<string, NormalizedActivity>): void {
@@ -215,12 +264,14 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     fallbackProduct,
     ambientesById,
     serviceStarts: new Map(),
+    serviceEnds: new Map(),
+    serviceCloneDates: new Map(),
     lines: [],
     teamWeightByDay: new Map(),
     activityDays: new Map()
   };
 
-  for (const service of services) placeService(ctx, service);
+  placeServices(ctx, services);
   placeAnchoredActivities(ctx, anchored, servicesById);
   ctx.lines.sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
 
