@@ -18,7 +18,7 @@ export const payloadSchema = z.object({
   atividades_json: z.array(z.record(z.unknown())).default([]),
   atividade_obra_json: recordArray,
   events_json: recordArray
-}) as unknown as z.ZodType<SchedulePayload>;
+}).passthrough() as unknown as z.ZodType<SchedulePayload>;
 
 function normalizeActivityType(value: unknown): NormalizedActivity["tipo"] {
   const text = String(value || "")

@@ -6,6 +6,9 @@ export type PurchaseStage = "AVISO_ORCAMENTO" | "LIMITE_ORCAMENTO" | "LIMITE_COM
 export interface ObraPayload {
   id?: string;
   unique_id?: string;
+  "unique id"?: string;
+  nome?: string;
+  name?: string;
   dataInicio?: string;
   data_inicio?: string;
   startDate?: string;
@@ -15,6 +18,7 @@ export interface ObraPayload {
 export interface ObraAmbientePayload {
   id?: string;
   unique_id?: string;
+  "unique id"?: string;
   nome?: string;
   name?: string;
   [key: string]: unknown;
@@ -71,6 +75,10 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
 
 export interface SchedulePayload {
   cronograma_unique_id: string;
+  versao_cronograma_unique_id?: string;
+  versao_cronograma_id?: string;
+  versaoCronograma?: string;
+  version_id?: string;
   mode: ScheduleMode;
   dias_trabalho_semana: 5 | 6;
   timezone?: string;

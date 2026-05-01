@@ -1,5 +1,6 @@
 ﻿{
   "cronograma_unique_id": "cronograma_example",
+  "versao_cronograma_unique_id": "versao_cronograma_example",
   "mode": "generate",
   "dias_trabalho_semana": 5,
   "timezone": "America/Sao_Paulo",
@@ -10,6 +11,7 @@
   "obra_json": [
     {
       "id": "obra_1",
+      "nome": "Obra exemplo",
       "dataInicio": "2026-05-04"
     }
   ],

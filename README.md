@@ -4,7 +4,7 @@ Servidor Node.js + TypeScript para processar o motor de cronograma de obra do si
 
 ## Arquitetura
 
-O Bubble segue responsável por orquestração, montagem do payload, persistência e interface. Este servidor calcula o cronograma a partir do payload recebido no Step 12 do Workflow 1.
+O Bubble segue responsável por orquestração, montagem do payload e interface. Este servidor calcula o cronograma a partir do payload recebido no Step 12 do Workflow 1, responde `201 Created` e persiste as linhas calculadas via Bulk Data API do Bubble.
 
 ## Requisitos
 
@@ -19,6 +19,19 @@ npm run dev
 ```
 
 O servidor escuta em `process.env.PORT || 3000` e faz bind em `0.0.0.0`.
+
+## Variáveis de ambiente
+
+```bash
+PORT=3000
+NODE_ENV=development
+BUBBLE_API_TOKEN=seu_token
+BUBBLE_API_BASE_URL=https://moni-29694.bubbleapps.io
+BUBBLE_API_VERSION=version-test
+BUBBLE_BULK_BATCH_SIZE=500
+```
+
+Sem `BUBBLE_API_TOKEN`, o servidor calcula e responde `201`, mas pula a persistência no Bubble.
 
 ## Scripts
 
@@ -44,6 +57,7 @@ curl -X POST http://localhost:3000/api/v1/schedules/generate \
   -H "Content-Type: application/json" \
   -d '{
     "cronograma_unique_id": "cronograma_123",
+    "versao_cronograma_unique_id": "versao_cronograma_123",
     "mode": "generate",
     "dias_trabalho_semana": 5,
     "timezone": "America/Sao_Paulo",
@@ -63,6 +77,8 @@ curl -X POST http://localhost:3000/api/v1/schedules/generate \
 ```
 
 Payloads completos de exemplo ficam em `examples/generate.payload.json` e `examples/recalculate.payload.json`.
+
+O payload precisa incluir o `unique id` da `VersaoCronograma` em `versao_cronograma_unique_id` (também são aceitos `versao_cronograma_id`, `versaoCronograma` ou `version_id`). O `cronograma_unique_id` e o `id`/`unique_id` da primeira `obra_json` são usados nas referências do bulk.
 
 ## Recalcular cronograma
 

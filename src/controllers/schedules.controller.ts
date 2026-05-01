@@ -1,8 +1,8 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError } from "zod";
+import { persistScheduleBulks } from "../services/bubble-bulk.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
-import { buildScheduleResponse } from "../services/response-builder.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode } from "../types/payload.types.js";
 
@@ -36,7 +36,6 @@ function validateRecalculateEvents(mode: ScheduleMode, events: Record<string, un
 }
 
 async function handleSchedule(req: ObservedRequest, res: Response, mode: ScheduleMode) {
-  const startedAt = new Date();
   const log = requestLog(req);
 
   try {
@@ -54,19 +53,35 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }, "schedule calculation started");
 
     const result = runScheduleEngine(payload);
-    const response = buildScheduleResponse(result, startedAt);
 
     log?.info({
       requestId: req.id,
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
-      linesCount: response.metrics.linesCount,
-      durationMs: response.metrics.durationMs,
-      warningsCount: response.validations.warnings.length,
-      errorsCount: response.validations.errors.length
+      linesCount: result.lines.length,
+      warningsCount: result.validations.warnings.length,
+      errorsCount: result.validations.errors.length
     }, "schedule calculation finished");
 
-    res.json(response);
+    void persistScheduleBulks(payload, result.lines, { requestId: req.id, log })
+      .then(() => {
+        log?.info({
+          requestId: req.id,
+          cronogramaUniqueId: payload.cronograma_unique_id,
+          mode: payload.mode,
+          linesCount: result.lines.length
+        }, "schedule bulk persistence finished");
+      })
+      .catch((error) => {
+        log?.error({
+          requestId: req.id,
+          cronogramaUniqueId: payload.cronograma_unique_id,
+          mode: payload.mode,
+          error
+        }, "schedule bulk persistence failed");
+      });
+
+    res.sendStatus(201);
   } catch (error) {
     if (error instanceof ZodError) {
       log?.warn({ requestId: req.id, issues: error.issues }, "schedule payload validation failed");
