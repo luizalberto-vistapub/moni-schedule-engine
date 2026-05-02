@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import { ZodError } from "zod";
 import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
+import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/response-builder.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode } from "../types/payload.types.js";
 
@@ -37,6 +38,7 @@ function validateRecalculateEvents(mode: ScheduleMode, events: Record<string, un
 
 async function handleSchedule(req: ObservedRequest, res: Response, mode: ScheduleMode) {
   const log = requestLog(req);
+  const startedAt = new Date();
 
   try {
     const parsedPayload = payloadSchema.parse(req.body);
@@ -53,14 +55,16 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }, "schedule calculation started");
 
     const result = runScheduleEngine(payload);
+    const response = buildScheduleResponse(result, startedAt);
 
     log?.info({
       requestId: req.id,
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
-      linesCount: result.lines.length,
-      warningsCount: result.validations.warnings.length,
-      errorsCount: result.validations.errors.length
+      linesCount: response.metrics.linesCount,
+      durationMs: response.metrics.durationMs,
+      warningsCount: response.validations.warnings.length,
+      errorsCount: response.validations.errors.length
     }, "schedule calculation finished");
 
     await persistScheduleBulks(payload, result.lines, { requestId: req.id, log });
@@ -72,39 +76,17 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       linesCount: result.lines.length
     }, "schedule bulk persistence finished");
 
-    res.sendStatus(201);
+    res.status(201).json(response);
   } catch (error) {
     if (error instanceof ZodError) {
       log?.warn({ requestId: req.id, issues: error.issues }, "schedule payload validation failed");
-      res.status(400).json({
-        ok: false,
-        error: {
-          message: "Invalid payload",
-          code: "INVALID_PAYLOAD",
-          details: error.flatten()
-        },
-        validations: {
-          warnings: [],
-          errors: error.issues.map((issue) => issue.message)
-        }
-      });
+      res.status(400).json(buildScheduleErrorResponse("Invalid payload", "INVALID_PAYLOAD", error.flatten(), error.issues.map((issue) => issue.message)));
       return;
     }
 
     if (error instanceof BubbleBulkPayloadError) {
       log?.warn({ requestId: req.id, error }, "schedule bulk payload validation failed");
-      res.status(400).json({
-        ok: false,
-        error: {
-          message: error.message,
-          code: "BUBBLE_BULK_PAYLOAD_ERROR",
-          details: {}
-        },
-        validations: {
-          warnings: [],
-          errors: [error.message]
-        }
-      });
+      res.status(400).json(buildScheduleErrorResponse(error.message, "BUBBLE_BULK_PAYLOAD_ERROR"));
       return;
     }
 
@@ -112,35 +94,13 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       const message = error.message;
       const statusCode = error instanceof BubbleBulkRequestError ? 502 : 500;
       log?.error({ requestId: req.id, error }, "schedule bulk persistence failed");
-      res.status(statusCode).json({
-        ok: false,
-        error: {
-          message,
-          code: error instanceof BubbleBulkRequestError ? "BUBBLE_BULK_REQUEST_ERROR" : "BUBBLE_BULK_CONFIG_ERROR",
-          details: {}
-        },
-        validations: {
-          warnings: [],
-          errors: [message]
-        }
-      });
+      res.status(statusCode).json(buildScheduleErrorResponse(message, error instanceof BubbleBulkRequestError ? "BUBBLE_BULK_REQUEST_ERROR" : "BUBBLE_BULK_CONFIG_ERROR"));
       return;
     }
 
     const message = error instanceof Error ? error.message : "Unexpected error";
     log?.error({ requestId: req.id, error }, "schedule calculation failed");
-    res.status(500).json({
-      ok: false,
-      error: {
-        message,
-        code: "SCHEDULE_ENGINE_ERROR",
-        details: {}
-      },
-      validations: {
-        warnings: [],
-        errors: [message]
-      }
-    });
+    res.status(500).json(buildScheduleErrorResponse(message, "SCHEDULE_ENGINE_ERROR"));
   }
 }
 

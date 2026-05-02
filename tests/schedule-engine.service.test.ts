@@ -116,7 +116,7 @@ describe("schedule engine", () => {
     expect(payload.atividades_json[0].quantidadeBase).toBeNull();
   });
 
-  it("resposta contem cronograma e lines com o mesmo tamanho", () => {
+  it("resposta resumida contem metricas e nao contem listas de linhas", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
         { id: "serv_1", nome: "Servico fixo", tipo: "Servico", ordem: 1, duracao: 2, duracaoVariavel: false }
@@ -125,10 +125,16 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
     const response = buildScheduleResponse(result, new Date());
 
-    expect(response.cronograma).toHaveLength(response.lines.length);
-    expect(response.scheduleLines).toHaveLength(response.lines.length);
-    expect(response.cronogramaLinhas).toHaveLength(response.lines.length);
-    expect(response.activityObras).toHaveLength(response.lines.length);
+    expect(response.ok).toBe(true);
+    expect(response.serverVersionId).toMatch(/^schedule_version_/);
+    expect(response.version.id).toBe(response.serverVersionId);
+    expect(response.metrics.linesCount).toBe(result.lines.length);
+    expect(response.metrics.servicesCount).toBe(result.lines.length);
+    expect(response.metrics.purchasesCount).toBe(0);
+    expect(response.metrics.projectsCount).toBe(0);
+    expect(response.validations).toEqual({ warnings: [], errors: [] });
+    expect("lines" in response).toBe(false);
+    expect("cronograma" in response).toBe(false);
   });
 
   it("normaliza aliases, ids fallback, etapaCompra e interdependencias", () => {

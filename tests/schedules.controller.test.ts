@@ -71,6 +71,21 @@ describe("schedule controllers", () => {
       }));
 
     expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.serverVersionId).toMatch(/^schedule_version_/);
+    expect(response.body.version.id).toBe(response.body.serverVersionId);
+    expect(response.body.metrics).toMatchObject({
+      linesCount: 3,
+      servicesCount: 1,
+      purchasesCount: 1,
+      projectsCount: 1
+    });
+    expect(Date.parse(response.body.metrics.startedAt)).not.toBeNaN();
+    expect(Date.parse(response.body.metrics.finishedAt)).not.toBeNaN();
+    expect(typeof response.body.metrics.durationMs).toBe("number");
+    expect(response.body.validations).toEqual({ warnings: [], errors: [] });
+    expect(response.body.lines).toBeUndefined();
+    expect(response.body.cronograma).toBeUndefined();
   });
 
   it("recalculates using the same engine path", async () => {
@@ -97,6 +112,7 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
     expect(response.body.validations.errors).toContain("events_json items must include a non-empty type when mode is recalculate");
   });
@@ -112,6 +128,7 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
   });
 
@@ -120,6 +137,7 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
     expect(response.body.validations.errors.length).toBeGreaterThan(0);
   });
@@ -131,6 +149,7 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(500);
     expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("SCHEDULE_ENGINE_ERROR");
   });
 
@@ -155,6 +174,7 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("BUBBLE_BULK_PAYLOAD_ERROR");
     expect(response.body.validations.errors[0]).toContain("versao_cronograma_unique_id");
   });
@@ -175,6 +195,7 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(502);
     expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("BUBBLE_BULK_REQUEST_ERROR");
   });
 
