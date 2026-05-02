@@ -245,7 +245,7 @@ describe("schedule controllers", () => {
     expect(JSON.parse(String(cronogramaLinhaRecords[0].dados_brutos_json))).toMatchObject({ nome_atividade: "Assentar piso" });
 
     expect(atividadeObraRecords[0]).toMatchObject({
-      copyduracao_boolean: false,
+      copyduracao: false,
       cronograma_custom_cronograma: "cronograma_1",
       datafimprevista_date: "2026-05-04T00:00:00.000Z",
       datainicioprevista_date: "2026-05-04T00:00:00.000Z",

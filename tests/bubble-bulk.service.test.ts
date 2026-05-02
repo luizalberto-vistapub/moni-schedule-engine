@@ -192,6 +192,19 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("marks Atividade x Obra cloned duration after the first clone", () => {
+    const { payload, lines } = payloadWithOneLine();
+    const [line] = lines;
+
+    const records = buildAtividadeObraRecords(payload, [
+      { ...line, clone_index: 1 },
+      { ...line, clone_index: 2 }
+    ]);
+
+    expect(records.map((record) => record.copyduracao)).toEqual([false, true]);
+    expect(records[0]).not.toHaveProperty("copyduracao_boolean");
+  });
+
   it("reports missing obra id when version id is present", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,

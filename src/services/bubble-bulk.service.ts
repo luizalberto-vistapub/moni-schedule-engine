@@ -186,7 +186,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
     const ambiente = line.ambiente ? currentAmbientesByName.get(line.ambiente) : undefined;
 
     return {
-      copyduracao_boolean: line.clone_index > 1,
+      copyduracao: line.clone_index > 1,
       cronograma_custom_cronograma: payload.cronograma_unique_id,
       datafimprevista_date: toBubbleDate(line.data_programada),
       datainicioprevista_date: toBubbleDate(line.data_programada),
