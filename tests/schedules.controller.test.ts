@@ -229,20 +229,20 @@ describe("schedule controllers", () => {
     const atividadeObraRecords = buildAtividadeObraRecords(payload, result.lines);
 
     expect(cronogramaLinhaRecords[0]).toMatchObject({
-      bpjkdb: "versao_1",
-      bpjkdc: "obra_1",
-      bpjkdd: result.lines[0].atividade_obra_id_externo,
-      bpjkde: "2026-05-04T00:00:00.000Z",
-      bpjkdh: "Servi\u00e7o",
-      bpjkdj: "Assentar piso",
-      bpjkdk: "Pedreiro",
-      bpjkdl: 2,
-      bpjkdm: "Sala",
-      bpjkdn: "Piso",
-      bpjkdo: 1,
-      bpjkdp: 1
+      versao_cronograma: "versao_1",
+      obra: "obra_1",
+      id_atividade_obra_externo: result.lines[0].atividade_obra_id_externo,
+      data_programada: "2026-05-04T00:00:00.000Z",
+      tipo: "Servi\u00e7o",
+      nome_atividade: "Assentar piso",
+      equipe: "Pedreiro",
+      peso: 2,
+      ambiente: "Sala",
+      produto: "Piso",
+      ordem: 1,
+      indice_clone: 1
     });
-    expect(JSON.parse(String(cronogramaLinhaRecords[0].bpjkdr))).toMatchObject({ nome_atividade: "Assentar piso" });
+    expect(JSON.parse(String(cronogramaLinhaRecords[0].dados_brutos_json))).toMatchObject({ nome_atividade: "Assentar piso" });
 
     expect(atividadeObraRecords[0]).toMatchObject({
       copyduracao_boolean: false,

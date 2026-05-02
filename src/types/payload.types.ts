@@ -79,6 +79,9 @@ export interface SchedulePayload {
   versao_cronograma_id?: string;
   versaoCronograma?: string;
   version_id?: string;
+  bubble_api_version?: string;
+  bubble_version?: string;
+  version?: string;
   mode: ScheduleMode;
   dias_trabalho_semana: 5 | 6;
   timezone?: string;

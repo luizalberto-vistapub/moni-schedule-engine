@@ -53,6 +53,20 @@ describe("Bubble bulk persistence", () => {
     expect(String(fetchMock.mock.calls[0]![1]?.body)).not.toContain("[");
   });
 
+  it("uses Bubble API version from the request body", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      text: async () => ""
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine({ bubble_api_version: "version-739n8" });
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/cronogramalinha/bulk");
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividade_x_obra/bulk");
+  });
+
   it("allows overriding Bubble Data API type names", async () => {
     process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE = "custom_cronograma_linha";
     process.env.BUBBLE_ATIVIDADE_OBRA_TYPE = "custom_atividade_obra";
@@ -134,8 +148,18 @@ describe("Bubble bulk persistence", () => {
     const isoRecords = buildCronogramaLinhaRecords(payload, [{ ...line, data_programada: "2026-05-04T03:00:00.000Z" }]);
     const invalidRecords = buildCronogramaLinhaRecords(payload, [{ ...line, data_programada: "not-a-date" }]);
 
-    expect(isoRecords[0].bpjkde).toBe("2026-05-04T03:00:00.000Z");
-    expect(invalidRecords[0].bpjkde).toBe("not-a-date");
+    expect(isoRecords[0].data_programada).toBe("2026-05-04T03:00:00.000Z");
+    expect(invalidRecords[0].data_programada).toBe("not-a-date");
+  });
+
+  it("requires Bubble API version in the request body", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      text: async () => ""
+    })));
+    const { payload, lines } = payloadWithOneLine({ bubble_api_version: undefined });
+
+    await expect(persistScheduleBulks(payload, lines)).rejects.toThrow("bubble_api_version");
   });
 
   it("uses empty strings for optional line values when building records", () => {
@@ -154,11 +178,11 @@ describe("Bubble bulk persistence", () => {
     const atividadeObraRecords = buildAtividadeObraRecords(payload, [lineWithoutOptionalValues]);
 
     expect(cronogramaLinhaRecords[0]).toMatchObject({
-      bpjkdi: "",
-      bpjkdk: "",
-      bpjkdm: "",
-      bpjkdn: "",
-      bpjkdq: ""
+      subtipo_compra: "",
+      equipe: "",
+      ambiente: "",
+      produto: "",
+      nome_servico_ancora: ""
     });
     expect(atividadeObraRecords[0]).toMatchObject({
       equipe_option_os_tipoequipe: "",

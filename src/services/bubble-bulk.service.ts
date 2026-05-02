@@ -70,12 +70,21 @@ function stringValue(value: unknown): string | null {
   return null;
 }
 
+function normalizeBubbleVersion(value: string): string {
+  return value.replace(/^\/+|\/+$/g, "");
+}
+
 function bubbleId(record: Record<string, unknown> | undefined): string | null {
   return stringValue(recordValue(record, "unique id", "unique_id", "id", "_id"));
 }
 
 function versaoCronogramaId(payload: NormalizedSchedulePayload): string | null {
   return stringValue(recordValue(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
+}
+
+function bubbleApiVersion(payload: NormalizedSchedulePayload): string | null {
+  const version = stringValue(recordValue(payload as unknown as Record<string, unknown>, "bubble_api_version", "bubble_version", "version"));
+  return version ? normalizeBubbleVersion(version) : null;
 }
 
 function obraId(payload: NormalizedSchedulePayload): string | null {
@@ -146,23 +155,23 @@ export function buildCronogramaLinhaRecords(payload: NormalizedSchedulePayload, 
   if (!versionId || !currentObraId) return [];
 
   return lines.map((line) => ({
-    bpjkdb: versionId,
-    bpjkdc: currentObraId,
-    bpjkdd: line.atividade_obra_id_externo,
-    bpjkde: toBubbleDate(line.data_programada),
-    bpjkdf: line.codigo_d,
-    bpjkdg: line.dia_semana,
-    bpjkdh: line.tipo,
-    bpjkdi: line.subtipo_compra || "",
-    bpjkdj: line.nome_atividade,
-    bpjkdk: line.equipe || "",
-    bpjkdl: line.peso,
-    bpjkdm: line.ambiente || "",
-    bpjkdn: line.produto || "",
-    bpjkdo: line.ordem,
-    bpjkdp: line.clone_index,
-    bpjkdq: line.anchor_service_name || "",
-    bpjkdr: JSON.stringify(line)
+    versao_cronograma: versionId,
+    obra: currentObraId,
+    id_atividade_obra_externo: line.atividade_obra_id_externo,
+    data_programada: toBubbleDate(line.data_programada),
+    codigo_dia: line.codigo_d,
+    dia_semana: line.dia_semana,
+    tipo: line.tipo,
+    subtipo_compra: line.subtipo_compra || "",
+    nome_atividade: line.nome_atividade,
+    equipe: line.equipe || "",
+    peso: line.peso,
+    ambiente: line.ambiente || "",
+    produto: line.produto || "",
+    ordem: line.ordem,
+    indice_clone: line.clone_index,
+    nome_servico_ancora: line.anchor_service_name || "",
+    dados_brutos_json: JSON.stringify(line)
   }));
 }
 
@@ -244,7 +253,8 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 }
 
 export async function persistScheduleBulks(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
-  const config = readConfig();
+  const requestedBubbleApiVersion = bubbleApiVersion(payload);
+  const config = { ...readConfig(), version: requestedBubbleApiVersion || DEFAULT_BUBBLE_API_VERSION };
   if (!config.apiToken) {
     throw new BubbleBulkConfigError("BUBBLE_API_TOKEN is required to persist schedule bulks");
   }
@@ -252,14 +262,16 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   const cronogramaLinhaRecords = buildCronogramaLinhaRecords(payload, lines);
   const atividadeObraRecords = buildAtividadeObraRecords(payload, lines);
 
-  if (!cronogramaLinhaRecords.length || !atividadeObraRecords.length) {
+  if (!cronogramaLinhaRecords.length || !atividadeObraRecords.length || !requestedBubbleApiVersion) {
     const missingFields = [
+      requestedBubbleApiVersion ? null : "bubble_api_version",
       versaoCronogramaId(payload) ? null : "versao_cronograma_unique_id",
       obraId(payload) ? null : "obra_json[0].unique id"
     ].filter(Boolean);
 
     options.log?.warn({
       requestId: options.requestId,
+      hasBubbleApiVersion: Boolean(requestedBubbleApiVersion),
       hasVersaoCronogramaId: Boolean(versaoCronogramaId(payload)),
       hasObraId: Boolean(obraId(payload)),
       linesCount: lines.length,

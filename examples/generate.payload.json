@@ -1,6 +1,7 @@
 ﻿{
   "cronograma_unique_id": "cronograma_example",
   "versao_cronograma_unique_id": "versao_cronograma_example",
+  "bubble_api_version": "version-test",
   "mode": "generate",
   "dias_trabalho_semana": 5,
   "timezone": "America/Sao_Paulo",

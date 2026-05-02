@@ -27,7 +27,6 @@ PORT=3000
 NODE_ENV=development
 BUBBLE_API_TOKEN=seu_token
 BUBBLE_API_BASE_URL=https://moni-29694.bubbleapps.io
-BUBBLE_API_VERSION=version-test
 BUBBLE_BULK_BATCH_SIZE=500
 BUBBLE_CRONOGRAMA_LINHA_TYPE=cronogramalinha
 BUBBLE_ATIVIDADE_OBRA_TYPE=atividade_x_obra
@@ -60,6 +59,7 @@ curl -X POST http://localhost:3000/api/v1/schedules/generate \
   -d '{
     "cronograma_unique_id": "cronograma_123",
     "versao_cronograma_unique_id": "versao_cronograma_123",
+    "bubble_api_version": "version-739n8",
     "mode": "generate",
     "dias_trabalho_semana": 5,
     "timezone": "America/Sao_Paulo",
@@ -79,6 +79,8 @@ curl -X POST http://localhost:3000/api/v1/schedules/generate \
 ```
 
 Payloads completos de exemplo ficam em `examples/generate.payload.json` e `examples/recalculate.payload.json`.
+
+O branch/versao da API do Bubble deve vir no body em `bubble_api_version` (tambem sao aceitos `bubble_version` ou `version`), por exemplo `version-739n8`.
 
 O payload precisa incluir o `unique id` da `VersaoCronograma` em `versao_cronograma_unique_id` (também são aceitos `versao_cronograma_id`, `versaoCronograma` ou `version_id`). O `cronograma_unique_id` e o `id`/`unique_id` da primeira `obra_json` são usados nas referências do bulk.
 
