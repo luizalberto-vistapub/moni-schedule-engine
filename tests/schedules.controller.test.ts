@@ -1,5 +1,5 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/app.js";
 import { basePayload } from "./test-helpers.js";
 import { buildAtividadeObraRecords, buildCronogramaLinhaRecords } from "../src/services/bubble-bulk.service.js";
@@ -7,6 +7,19 @@ import { normalizePayload } from "../src/services/normalize-payload.service.js";
 import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 
 describe("schedule controllers", () => {
+  beforeEach(() => {
+    process.env.BUBBLE_API_TOKEN = "test_token";
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      text: async () => ""
+    })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.BUBBLE_API_TOKEN;
+  });
+
   it("returns health status", async () => {
     const response = await request(app).get("/health");
 
@@ -49,6 +62,7 @@ describe("schedule controllers", () => {
     const response = await request(app)
       .post("/api/v1/schedules/generate")
       .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
         atividades_json: [
           { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
           { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" },
@@ -63,6 +77,7 @@ describe("schedule controllers", () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
       .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
         mode: "",
         events_json: [{ type: "noop" }],
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
@@ -123,11 +138,44 @@ describe("schedule controllers", () => {
     const response = await request(app)
       .post("/api/v1/schedules/generate")
       .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
         mode: "",
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
     expect(response.status).toBe(201);
+  });
+
+  it("returns 400 when Bubble ids required for bulk persistence are missing", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.error.code).toBe("BUBBLE_BULK_PAYLOAD_ERROR");
+    expect(response.body.validations.errors[0]).toContain("versao_cronograma_unique_id");
+  });
+
+  it("returns 502 when Bubble bulk persistence fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      text: async () => "Unauthorized"
+    })));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(502);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.error.code).toBe("BUBBLE_BULK_REQUEST_ERROR");
   });
 
   it("builds Bubble bulk records for cronograma lines and atividade x obra", () => {

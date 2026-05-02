@@ -31,7 +31,7 @@ BUBBLE_API_VERSION=version-test
 BUBBLE_BULK_BATCH_SIZE=500
 ```
 
-Sem `BUBBLE_API_TOKEN`, o servidor calcula e responde `201`, mas pula a persistência no Bubble.
+Sem `BUBBLE_API_TOKEN`, o servidor retorna erro de configuração e não responde `201`, porque `201 Created` só deve acontecer depois da persistência no Bubble.
 
 ## Scripts
 

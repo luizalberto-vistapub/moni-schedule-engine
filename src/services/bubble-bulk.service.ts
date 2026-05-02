@@ -18,6 +18,27 @@ interface PersistScheduleOptions {
   log?: Logger;
 }
 
+export class BubbleBulkConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BubbleBulkConfigError";
+  }
+}
+
+export class BubbleBulkPayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BubbleBulkPayloadError";
+  }
+}
+
+export class BubbleBulkRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BubbleBulkRequestError";
+  }
+}
+
 function readConfig(): BubbleBulkConfig {
   const rawBatchSize = Number(process.env.BUBBLE_BULK_BATCH_SIZE || DEFAULT_BATCH_SIZE);
 
@@ -108,7 +129,7 @@ function assertBulkBodySucceeded(typeName: string, responseText: string): void {
   }
 
   if (failures.length) {
-    throw new Error(`Bubble bulk ${typeName} returned ${failures.length} row error(s): ${JSON.stringify(failures.slice(0, 3))}`);
+    throw new BubbleBulkRequestError(`Bubble bulk ${typeName} returned ${failures.length} row error(s): ${JSON.stringify(failures.slice(0, 3))}`);
   }
 }
 
@@ -183,7 +204,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 
     const responseText = await response.text();
     if (!response.ok) {
-      throw new Error(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
+      throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
     }
     assertBulkBodySucceeded(typeName, responseText);
 
@@ -199,21 +220,27 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 export async function persistScheduleBulks(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
   const config = readConfig();
   if (!config.apiToken) {
-    options.log?.warn({ requestId: options.requestId }, "BUBBLE_API_TOKEN not configured; skipping bubble bulk persistence");
-    return;
+    throw new BubbleBulkConfigError("BUBBLE_API_TOKEN is required to persist schedule bulks");
   }
 
   const cronogramaLinhaRecords = buildCronogramaLinhaRecords(payload, lines);
   const atividadeObraRecords = buildAtividadeObraRecords(payload, lines);
 
   if (!cronogramaLinhaRecords.length || !atividadeObraRecords.length) {
+    const missingFields = [
+      versaoCronogramaId(payload) ? null : "versao_cronograma_unique_id",
+      obraId(payload) ? null : "obra_json[0].unique id"
+    ].filter(Boolean);
+
     options.log?.warn({
       requestId: options.requestId,
       hasVersaoCronogramaId: Boolean(versaoCronogramaId(payload)),
       hasObraId: Boolean(obraId(payload)),
-      linesCount: lines.length
-    }, "missing required Bubble ids; skipping bubble bulk persistence");
-    return;
+      linesCount: lines.length,
+      missingFields
+    }, "missing required Bubble ids");
+
+    throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`);
   }
 
   await Promise.all([

@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError } from "zod";
-import { persistScheduleBulks } from "../services/bubble-bulk.service.js";
+import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode } from "../types/payload.types.js";
@@ -63,23 +63,14 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       errorsCount: result.validations.errors.length
     }, "schedule calculation finished");
 
-    void persistScheduleBulks(payload, result.lines, { requestId: req.id, log })
-      .then(() => {
-        log?.info({
-          requestId: req.id,
-          cronogramaUniqueId: payload.cronograma_unique_id,
-          mode: payload.mode,
-          linesCount: result.lines.length
-        }, "schedule bulk persistence finished");
-      })
-      .catch((error) => {
-        log?.error({
-          requestId: req.id,
-          cronogramaUniqueId: payload.cronograma_unique_id,
-          mode: payload.mode,
-          error
-        }, "schedule bulk persistence failed");
-      });
+    await persistScheduleBulks(payload, result.lines, { requestId: req.id, log });
+
+    log?.info({
+      requestId: req.id,
+      cronogramaUniqueId: payload.cronograma_unique_id,
+      mode: payload.mode,
+      linesCount: result.lines.length
+    }, "schedule bulk persistence finished");
 
     res.sendStatus(201);
   } catch (error) {
@@ -95,6 +86,42 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
         validations: {
           warnings: [],
           errors: error.issues.map((issue) => issue.message)
+        }
+      });
+      return;
+    }
+
+    if (error instanceof BubbleBulkPayloadError) {
+      log?.warn({ requestId: req.id, error }, "schedule bulk payload validation failed");
+      res.status(400).json({
+        ok: false,
+        error: {
+          message: error.message,
+          code: "BUBBLE_BULK_PAYLOAD_ERROR",
+          details: {}
+        },
+        validations: {
+          warnings: [],
+          errors: [error.message]
+        }
+      });
+      return;
+    }
+
+    if (error instanceof BubbleBulkConfigError || error instanceof BubbleBulkRequestError) {
+      const message = error.message;
+      const statusCode = error instanceof BubbleBulkRequestError ? 502 : 500;
+      log?.error({ requestId: req.id, error }, "schedule bulk persistence failed");
+      res.status(statusCode).json({
+        ok: false,
+        error: {
+          message,
+          code: error instanceof BubbleBulkRequestError ? "BUBBLE_BULK_REQUEST_ERROR" : "BUBBLE_BULK_CONFIG_ERROR",
+          details: {}
+        },
+        validations: {
+          warnings: [],
+          errors: [message]
         }
       });
       return;
