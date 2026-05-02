@@ -199,6 +199,22 @@ describe("schedule controllers", () => {
     expect(response.body.error.code).toBe("BUBBLE_BULK_REQUEST_ERROR");
   });
 
+  it("returns 500 when Bubble API token is not configured", async () => {
+    delete process.env.BUBBLE_API_TOKEN;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(500);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
+    expect(response.body.error.code).toBe("BUBBLE_BULK_CONFIG_ERROR");
+  });
+
   it("builds Bubble bulk records for cronograma lines and atividade x obra", () => {
     const payload = normalizePayload(basePayload({
       versao_cronograma_unique_id: "versao_1",
