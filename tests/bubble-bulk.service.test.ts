@@ -18,6 +18,8 @@ describe("Bubble bulk persistence", () => {
     delete process.env.BUBBLE_API_BASE_URL;
     delete process.env.BUBBLE_API_VERSION;
     delete process.env.BUBBLE_BULK_BATCH_SIZE;
+    delete process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE;
+    delete process.env.BUBBLE_ATIVIDADE_OBRA_TYPE;
   });
 
   function payloadWithOneLine(overrides: Record<string, unknown> = {}) {
@@ -46,9 +48,25 @@ describe("Bubble bulk persistence", () => {
     await persistScheduleBulks(payload, lines);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/bpjkda/bulk");
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/cronogramalinha/bulk");
     expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividade_x_obra/bulk");
     expect(String(fetchMock.mock.calls[0]![1]?.body)).not.toContain("[");
+  });
+
+  it("allows overriding Bubble Data API type names", async () => {
+    process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE = "custom_cronograma_linha";
+    process.env.BUBBLE_ATIVIDADE_OBRA_TYPE = "custom_atividade_obra";
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      text: async () => ""
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine();
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_cronograma_linha/bulk");
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_atividade_obra/bulk");
   });
 
   it("throws when Bubble returns a row-level status error", async () => {

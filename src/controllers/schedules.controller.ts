@@ -12,6 +12,21 @@ type ObservedRequest = Request & {
   log?: Logger;
 };
 
+function errorLogFields(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+      errorStack: error.stack
+    };
+  }
+
+  return {
+    errorName: typeof error,
+    errorMessage: String(error)
+  };
+}
+
 function requestLog(req: ObservedRequest): Logger | undefined {
   return req.log;
 }
@@ -79,13 +94,13 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     res.status(201).json(response);
   } catch (error) {
     if (error instanceof ZodError) {
-      log?.warn({ requestId: req.id, issues: error.issues }, "schedule payload validation failed");
+      log?.warn({ requestId: req.id, issues: error.issues, ...errorLogFields(error) }, "schedule payload validation failed");
       res.status(400).json(buildScheduleErrorResponse("Invalid payload", "INVALID_PAYLOAD", error.flatten(), error.issues.map((issue) => issue.message)));
       return;
     }
 
     if (error instanceof BubbleBulkPayloadError) {
-      log?.warn({ requestId: req.id, error }, "schedule bulk payload validation failed");
+      log?.warn({ requestId: req.id, ...errorLogFields(error) }, "schedule bulk payload validation failed");
       res.status(400).json(buildScheduleErrorResponse(error.message, "BUBBLE_BULK_PAYLOAD_ERROR"));
       return;
     }
@@ -93,13 +108,13 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     if (error instanceof BubbleBulkConfigError || error instanceof BubbleBulkRequestError) {
       const message = error.message;
       const statusCode = error instanceof BubbleBulkRequestError ? 502 : 500;
-      log?.error({ requestId: req.id, error }, "schedule bulk persistence failed");
+      log?.error({ requestId: req.id, ...errorLogFields(error) }, "schedule bulk persistence failed");
       res.status(statusCode).json(buildScheduleErrorResponse(message, error instanceof BubbleBulkRequestError ? "BUBBLE_BULK_REQUEST_ERROR" : "BUBBLE_BULK_CONFIG_ERROR"));
       return;
     }
 
     const message = error instanceof Error ? error.message : "Unexpected error";
-    log?.error({ requestId: req.id, error }, "schedule calculation failed");
+    log?.error({ requestId: req.id, ...errorLogFields(error) }, "schedule calculation failed");
     res.status(500).json(buildScheduleErrorResponse(message, "SCHEDULE_ENGINE_ERROR"));
   }
 }

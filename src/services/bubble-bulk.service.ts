@@ -5,12 +5,16 @@ import type { ScheduleLine } from "../types/schedule.types.js";
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const DEFAULT_BATCH_SIZE = 500;
+const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
+const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividade_x_obra";
 
 interface BubbleBulkConfig {
   apiToken?: string;
   baseUrl: string;
   version: string;
   batchSize: number;
+  cronogramaLinhaType: string;
+  atividadeObraType: string;
 }
 
 interface PersistScheduleOptions {
@@ -46,7 +50,9 @@ function readConfig(): BubbleBulkConfig {
     apiToken: process.env.BUBBLE_API_TOKEN,
     baseUrl: (process.env.BUBBLE_API_BASE_URL || DEFAULT_BUBBLE_API_BASE_URL).replace(/\/+$/g, ""),
     version: process.env.BUBBLE_API_VERSION || DEFAULT_BUBBLE_API_VERSION,
-    batchSize: Number.isFinite(rawBatchSize) && rawBatchSize > 0 ? Math.floor(rawBatchSize) : DEFAULT_BATCH_SIZE
+    batchSize: Number.isFinite(rawBatchSize) && rawBatchSize > 0 ? Math.floor(rawBatchSize) : DEFAULT_BATCH_SIZE,
+    cronogramaLinhaType: process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE || DEFAULT_CRONOGRAMA_LINHA_TYPE,
+    atividadeObraType: process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE
   };
 }
 
@@ -193,7 +199,17 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
 
 async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
   for (const [batchIndex, batch] of chunks(records, config.batchSize).entries()) {
-    const response = await fetch(`${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`, {
+    const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
+
+    options.log?.info({
+      requestId: options.requestId,
+      typeName,
+      url,
+      batchIndex,
+      recordsCount: batch.length
+    }, "bubble bulk batch started");
+
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${config.apiToken}`,
@@ -204,6 +220,15 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 
     const responseText = await response.text();
     if (!response.ok) {
+      options.log?.error({
+        requestId: options.requestId,
+        typeName,
+        url,
+        batchIndex,
+        recordsCount: batch.length,
+        statusCode: response.status,
+        responseText
+      }, "bubble bulk batch failed");
       throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
     }
     assertBulkBodySucceeded(typeName, responseText);
@@ -211,6 +236,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
     options.log?.info({
       requestId: options.requestId,
       typeName,
+      url,
       batchIndex,
       recordsCount: batch.length
     }, "bubble bulk batch persisted");
@@ -243,8 +269,6 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`);
   }
 
-  await Promise.all([
-    postBulk("bpjkda", cronogramaLinhaRecords, config, options),
-    postBulk("atividade_x_obra", atividadeObraRecords, config, options)
-  ]);
+  await postBulk(config.cronogramaLinhaType, cronogramaLinhaRecords, config, options);
+  await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
 }
