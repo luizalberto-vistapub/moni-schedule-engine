@@ -29,7 +29,7 @@ BUBBLE_API_TOKEN=seu_token
 BUBBLE_API_BASE_URL=https://moni-29694.bubbleapps.io
 BUBBLE_BULK_BATCH_SIZE=500
 BUBBLE_CRONOGRAMA_LINHA_TYPE=cronogramalinha
-BUBBLE_ATIVIDADE_OBRA_TYPE=atividade_x_obra
+BUBBLE_ATIVIDADE_OBRA_TYPE=atividadexobra
 ```
 
 Sem `BUBBLE_API_TOKEN`, o servidor retorna erro de configuração e não responde `201`, porque `201 Created` só deve acontecer depois da persistência no Bubble.

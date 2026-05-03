@@ -245,22 +245,22 @@ describe("schedule controllers", () => {
     expect(JSON.parse(String(cronogramaLinhaRecords[0].dados_brutos_json))).toMatchObject({ nome_atividade: "Assentar piso" });
 
     expect(atividadeObraRecords[0]).toMatchObject({
-      copyduracao: false,
-      cronograma_custom_cronograma: "cronograma_1",
-      datafimprevista_date: "2026-05-04T00:00:00.000Z",
-      datainicioprevista_date: "2026-05-04T00:00:00.000Z",
-      duracao_number: 1,
-      equipe_option_os_tipoequipe: "Pedreiro",
-      nomeatividade_text: "Assentar piso",
-      nomeobra_text: "Obra Vila Mariana",
-      nomeproduto_text: "Piso",
-      obra_custom_obra: "obra_1",
-      ordem_number: 1,
-      peso_number: 2,
-      status_option_os_statusatividade0: "n_o_iniciada",
-      tipo_option_os_tipoatividade: "Servi\u00e7o",
-      ambiente_text: "Sala",
-      icon_image: "//s3.amazonaws.com/sala.png"
+      copyDuracao: false,
+      cronograma: "cronograma_1",
+      dataFimPrevista: "2026-05-04T00:00:00.000Z",
+      dataInicioPrevista: "2026-05-04T00:00:00.000Z",
+      duracao: 1,
+      equipe: "Pedreiro",
+      nomeAtividade: "Assentar piso",
+      nomeObra: "Obra Vila Mariana",
+      nomeProduto: "Piso",
+      obra: "obra_1",
+      ordemRaiz: 1,
+      peso: 2,
+      status: "n_o_iniciada",
+      tipo: "Servi\u00e7o",
+      ambiente: "Sala",
+      icon: "//s3.amazonaws.com/sala.png"
     });
   });
 });

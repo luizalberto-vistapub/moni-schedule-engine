@@ -6,7 +6,7 @@ const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
-const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividade_x_obra";
+const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 
 interface BubbleBulkConfig {
   apiToken?: string;
@@ -43,6 +43,10 @@ export class BubbleBulkRequestError extends Error {
   }
 }
 
+function normalizeAtividadeObraTypeName(value: string): string {
+  return value === "atividade_x_obra" ? DEFAULT_ATIVIDADE_OBRA_TYPE : value;
+}
+
 function readConfig(): BubbleBulkConfig {
   const rawBatchSize = Number(process.env.BUBBLE_BULK_BATCH_SIZE || DEFAULT_BATCH_SIZE);
 
@@ -52,7 +56,7 @@ function readConfig(): BubbleBulkConfig {
     version: process.env.BUBBLE_API_VERSION || DEFAULT_BUBBLE_API_VERSION,
     batchSize: Number.isFinite(rawBatchSize) && rawBatchSize > 0 ? Math.floor(rawBatchSize) : DEFAULT_BATCH_SIZE,
     cronogramaLinhaType: process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE || DEFAULT_CRONOGRAMA_LINHA_TYPE,
-    atividadeObraType: process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE
+    atividadeObraType: normalizeAtividadeObraTypeName(process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE)
   };
 }
 
@@ -186,22 +190,22 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
     const ambiente = line.ambiente ? currentAmbientesByName.get(line.ambiente) : undefined;
 
     return {
-      copyduracao: line.clone_index > 1,
-      cronograma_custom_cronograma: payload.cronograma_unique_id,
-      datafimprevista_date: toBubbleDate(line.data_programada),
-      datainicioprevista_date: toBubbleDate(line.data_programada),
-      duracao_number: 1,
-      equipe_option_os_tipoequipe: line.equipe || "",
-      nomeatividade_text: line.nome_atividade,
-      nomeobra_text: currentObraNome,
-      nomeproduto_text: line.produto || "",
-      obra_custom_obra: currentObraId,
-      ordem_number: line.ordem,
-      peso_number: line.peso,
-      status_option_os_statusatividade0: "n_o_iniciada",
-      tipo_option_os_tipoatividade: line.tipo,
-      ambiente_text: line.ambiente || "",
-      icon_image: iconFromAmbiente(ambiente) || ""
+      copyDuracao: line.clone_index > 1,
+      cronograma: payload.cronograma_unique_id,
+      dataFimPrevista: toBubbleDate(line.data_programada),
+      dataInicioPrevista: toBubbleDate(line.data_programada),
+      duracao: 1,
+      equipe: line.equipe || "",
+      nomeAtividade: line.nome_atividade,
+      nomeObra: currentObraNome,
+      nomeProduto: line.produto || "",
+      obra: currentObraId,
+      ordemRaiz: line.ordem,
+      peso: line.peso,
+      status: "n_o_iniciada",
+      tipo: line.tipo,
+      ambiente: line.ambiente || "",
+      icon: iconFromAmbiente(ambiente) || ""
     };
   });
 }

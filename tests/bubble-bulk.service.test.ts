@@ -49,7 +49,7 @@ describe("Bubble bulk persistence", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/cronogramalinha/bulk");
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividade_x_obra/bulk");
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
     expect(String(fetchMock.mock.calls[0]![1]?.body)).not.toContain("[");
   });
 
@@ -64,7 +64,7 @@ describe("Bubble bulk persistence", () => {
     await persistScheduleBulks(payload, lines);
 
     expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/cronogramalinha/bulk");
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividade_x_obra/bulk");
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
   });
 
   it("allows overriding Bubble Data API type names", async () => {
@@ -185,10 +185,10 @@ describe("Bubble bulk persistence", () => {
       nome_servico_ancora: ""
     });
     expect(atividadeObraRecords[0]).toMatchObject({
-      equipe_option_os_tipoequipe: "",
-      nomeproduto_text: "",
-      ambiente_text: "",
-      icon_image: ""
+      equipe: "",
+      nomeProduto: "",
+      ambiente: "",
+      icon: ""
     });
   });
 
@@ -201,8 +201,23 @@ describe("Bubble bulk persistence", () => {
       { ...line, clone_index: 2 }
     ]);
 
-    expect(records.map((record) => record.copyduracao)).toEqual([false, true]);
+    expect(records.map((record) => record.copyDuracao)).toEqual([false, true]);
+    expect(records[0]).not.toHaveProperty("copyduracao");
     expect(records[0]).not.toHaveProperty("copyduracao_boolean");
+  });
+
+  it("maps legacy Atividade x Obra typename env to Bubble API typename", async () => {
+    process.env.BUBBLE_ATIVIDADE_OBRA_TYPE = "atividade_x_obra";
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      text: async () => ""
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine();
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
   });
 
   it("reports missing obra id when version id is present", async () => {
