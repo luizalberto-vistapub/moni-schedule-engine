@@ -68,6 +68,20 @@ describe("Bubble bulk persistence", () => {
     expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
   });
 
+  it("adds Bubble version prefix when request body sends only the branch id", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      text: async () => ""
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine({ bubble_api_version: "739n8" });
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/cronogramalinha/bulk");
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
+  });
+
   it("allows overriding Bubble Data API type names", async () => {
     process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE = "custom_cronograma_linha";
     process.env.BUBBLE_ATIVIDADE_OBRA_TYPE = "custom_atividade_obra";

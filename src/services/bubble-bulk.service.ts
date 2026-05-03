@@ -91,7 +91,9 @@ function stringValue(value: unknown): string | null {
 }
 
 function normalizeBubbleVersion(value: string): string {
-  return value.replace(/^\/+|\/+$/g, "");
+  const version = value.replace(/^\/+|\/+$/g, "");
+  if (version === "version-test" || version.startsWith("version-")) return version;
+  return `version-${version}`;
 }
 
 function bubbleId(record: Record<string, unknown> | undefined): string | null {
