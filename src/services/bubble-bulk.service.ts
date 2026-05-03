@@ -202,7 +202,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       obra: currentObraId,
       ordemRaiz: line.ordem,
       peso: line.peso,
-      status: "n_o_iniciada",
+      status: "Não iniciada",
       tipo: line.tipo,
       ambiente: line.ambiente || "",
       icon: iconFromAmbiente(ambiente) || ""

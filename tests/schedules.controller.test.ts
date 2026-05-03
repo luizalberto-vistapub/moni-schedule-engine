@@ -257,7 +257,7 @@ describe("schedule controllers", () => {
       obra: "obra_1",
       ordemRaiz: 1,
       peso: 2,
-      status: "n_o_iniciada",
+      status: "Não iniciada",
       tipo: "Servi\u00e7o",
       ambiente: "Sala",
       icon: "//s3.amazonaws.com/sala.png"
