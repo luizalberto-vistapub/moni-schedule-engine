@@ -1,3 +1,4 @@
+import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, persistScheduleBulks } from "../src/services/bubble-bulk.service.js";
 import { normalizePayload } from "../src/services/normalize-payload.service.js";
@@ -160,6 +161,65 @@ describe("Bubble bulk persistence", () => {
     const { payload, lines } = payloadWithOneLine({ bubble_api_version: undefined });
 
     await expect(persistScheduleBulks(payload, lines)).rejects.toThrow("bubble_api_version");
+  });
+
+  it("logs invalid required Bubble field values before rejecting persistence", async () => {
+    const log = { warn: vi.fn() } as unknown as Logger;
+    const { payload, lines } = payloadWithOneLine({
+      bubble_api_version: { branch: "version-test" },
+      versao_cronograma_unique_id: ["versao_1"],
+      obra_json: [{ id: null, dataInicio: "2026-05-04" }]
+    });
+
+    await expect(persistScheduleBulks(payload, lines, { requestId: "req_1", log })).rejects.toThrow("bubble_api_version");
+
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_1",
+      missingFields: ["bubble_api_version", "versao_cronograma_unique_id", "obra_json[0].unique id"],
+      invalidFields: [
+        {
+          field: "bubble_api_version",
+          receivedValue: { branch: "version-test" },
+          receivedType: "object",
+          normalizedValue: null,
+          reason: "invalid"
+        },
+        {
+          field: "versao_cronograma_unique_id",
+          receivedValue: ["versao_1"],
+          receivedType: "array",
+          normalizedValue: null,
+          reason: "invalid"
+        },
+        {
+          field: "obra_json[0].unique id",
+          receivedValue: null,
+          receivedType: "null",
+          normalizedValue: null,
+          reason: "missing_or_blank"
+        }
+      ]
+    }), "missing required Bubble ids");
+  });
+
+  it("logs undefined received value when the obra record itself is missing", async () => {
+    const log = { warn: vi.fn() } as unknown as Logger;
+    const { payload, lines } = payloadWithOneLine();
+    const payloadWithoutObra = { ...payload, obra_json: [] };
+
+    await expect(persistScheduleBulks(payloadWithoutObra, lines, { log })).rejects.toThrow("obra_json[0].unique id");
+
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({
+      invalidFields: [
+        {
+          field: "obra_json[0].unique id",
+          receivedValue: undefined,
+          receivedType: "undefined",
+          normalizedValue: null,
+          reason: "missing_or_blank"
+        }
+      ]
+    }), "missing required Bubble ids");
   });
 
   it("uses empty strings for optional line values when building records", () => {

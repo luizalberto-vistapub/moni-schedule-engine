@@ -22,6 +22,14 @@ interface PersistScheduleOptions {
   log?: Logger;
 }
 
+interface BubbleFieldDiagnostic {
+  field: string;
+  receivedValue: unknown;
+  receivedType: string;
+  normalizedValue: string | null;
+  reason: "missing_or_blank" | "invalid";
+}
+
 export class BubbleBulkConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -30,7 +38,7 @@ export class BubbleBulkConfigError extends Error {
 }
 
 export class BubbleBulkPayloadError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly invalidFields: BubbleFieldDiagnostic[] = []) {
     super(message);
     this.name = "BubbleBulkPayloadError";
   }
@@ -68,6 +76,14 @@ function recordValue(record: Record<string, unknown> | undefined, ...keys: strin
   return undefined;
 }
 
+function rawRecordValue(record: Record<string, unknown> | undefined, ...keys: string[]): unknown {
+  if (!record) return undefined;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+  }
+  return undefined;
+}
+
 function stringValue(value: unknown): string | null {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -89,6 +105,23 @@ function versaoCronogramaId(payload: NormalizedSchedulePayload): string | null {
 function bubbleApiVersion(payload: NormalizedSchedulePayload): string | null {
   const version = stringValue(recordValue(payload as unknown as Record<string, unknown>, "bubble_api_version", "bubble_version", "version"));
   return version ? normalizeBubbleVersion(version) : null;
+}
+
+function valueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function requiredFieldDiagnostic(field: string, rawValue: unknown, normalizedValue: string | null): BubbleFieldDiagnostic | null {
+  if (normalizedValue) return null;
+  return {
+    field,
+    receivedValue: rawValue,
+    receivedType: valueType(rawValue),
+    normalizedValue,
+    reason: rawValue === undefined || rawValue === null || rawValue === "" ? "missing_or_blank" : "invalid"
+  };
 }
 
 function obraId(payload: NormalizedSchedulePayload): string | null {
@@ -258,6 +291,8 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 
 export async function persistScheduleBulks(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
   const requestedBubbleApiVersion = bubbleApiVersion(payload);
+  const requestedVersaoCronogramaId = versaoCronogramaId(payload);
+  const requestedObraId = obraId(payload);
   const config = { ...readConfig(), version: requestedBubbleApiVersion || DEFAULT_BUBBLE_API_VERSION };
   if (!config.apiToken) {
     throw new BubbleBulkConfigError("BUBBLE_API_TOKEN is required to persist schedule bulks");
@@ -267,22 +302,40 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   const atividadeObraRecords = buildAtividadeObraRecords(payload, lines);
 
   if (!cronogramaLinhaRecords.length || !atividadeObraRecords.length || !requestedBubbleApiVersion) {
+    const invalidFields = [
+      requiredFieldDiagnostic(
+        "bubble_api_version",
+        rawRecordValue(payload as unknown as Record<string, unknown>, "bubble_api_version", "bubble_version", "version"),
+        requestedBubbleApiVersion
+      ),
+      requiredFieldDiagnostic(
+        "versao_cronograma_unique_id",
+        rawRecordValue(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"),
+        requestedVersaoCronogramaId
+      ),
+      requiredFieldDiagnostic(
+        "obra_json[0].unique id",
+        rawRecordValue(payload.obra_json[0], "unique id", "unique_id", "id", "_id"),
+        requestedObraId
+      )
+    ].filter((field): field is BubbleFieldDiagnostic => Boolean(field));
     const missingFields = [
       requestedBubbleApiVersion ? null : "bubble_api_version",
-      versaoCronogramaId(payload) ? null : "versao_cronograma_unique_id",
-      obraId(payload) ? null : "obra_json[0].unique id"
+      requestedVersaoCronogramaId ? null : "versao_cronograma_unique_id",
+      requestedObraId ? null : "obra_json[0].unique id"
     ].filter(Boolean);
 
     options.log?.warn({
       requestId: options.requestId,
       hasBubbleApiVersion: Boolean(requestedBubbleApiVersion),
-      hasVersaoCronogramaId: Boolean(versaoCronogramaId(payload)),
-      hasObraId: Boolean(obraId(payload)),
+      hasVersaoCronogramaId: Boolean(requestedVersaoCronogramaId),
+      hasObraId: Boolean(requestedObraId),
       linesCount: lines.length,
-      missingFields
+      missingFields,
+      invalidFields
     }, "missing required Bubble ids");
 
-    throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`);
+    throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
   await postBulk(config.cronogramaLinhaType, cronogramaLinhaRecords, config, options);

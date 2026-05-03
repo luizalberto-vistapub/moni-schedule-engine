@@ -100,7 +100,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }
 
     if (error instanceof BubbleBulkPayloadError) {
-      log?.warn({ requestId: req.id, ...errorLogFields(error) }, "schedule bulk payload validation failed");
+      log?.warn({ requestId: req.id, invalidFields: error.invalidFields, ...errorLogFields(error) }, "schedule bulk payload validation failed");
       res.status(400).json(buildScheduleErrorResponse(error.message, "BUBBLE_BULK_PAYLOAD_ERROR"));
       return;
     }
