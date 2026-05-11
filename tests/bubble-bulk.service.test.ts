@@ -262,8 +262,12 @@ describe("Bubble bulk persistence", () => {
       equipe: "",
       nomeProduto: "",
       ambiente: "",
+      obraxambienteID: "amb_1",
       icon: ""
     });
+
+    const atividadeObraRecordsWithoutAmbienteId = buildAtividadeObraRecords(payload, [{ ...lineWithoutOptionalValues, ambienteId: null }]);
+    expect(atividadeObraRecordsWithoutAmbienteId[0].obraxambienteID).toBe("");
   });
 
   it("marks Atividade x Obra cloned duration after the first clone", () => {

@@ -240,6 +240,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       status: "Não iniciada",
       tipo: line.tipo,
       ambiente: line.ambiente || "",
+      obraxambienteID: line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || ""
     };
   });
