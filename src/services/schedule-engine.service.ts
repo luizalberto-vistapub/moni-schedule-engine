@@ -57,6 +57,13 @@ function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | nul
   return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product.ambiente || "") || null;
 }
 
+function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
+  if (!ambiente) return fallbackId;
+  const id = [ambiente["unique id"], ambiente.unique_id, ambiente.id, fallbackId]
+    .find((value) => value !== undefined && value !== null && value !== "");
+  return String(id);
+}
+
 function formatCodigoD(daysFromStart: number): string {
   if (daysFromStart > 0) return `D+${daysFromStart}`;
   if (daysFromStart === 0) return "D-0";
@@ -65,8 +72,9 @@ function formatCodigoD(daysFromStart: number): string {
 
 function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
   const dateOnly = formatDateOnly(date);
-  const ambienteId = getAmbienteId(product);
-  const ambiente = ambienteId ? ctx.ambientesById.get(ambienteId) : undefined;
+  const rawAmbienteId = getAmbienteId(product);
+  const ambiente = rawAmbienteId ? ctx.ambientesById.get(rawAmbienteId) : undefined;
+  const ambienteId = getObraAmbienteId(ambiente, rawAmbienteId);
   const daysFromStart = differenceInCalendarDays(ctx.obraStart, date) + 1;
 
   return {
@@ -87,7 +95,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     nome_atividade: activity.nome,
     equipe: activity.equipe,
     peso: activity.peso,
-    ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || ambienteId) : null,
+    ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || rawAmbienteId) : null,
     produto: getProductName(product),
     ordem: activity.ordem,
     clone_index: cloneIndex,
@@ -253,7 +261,14 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
       .map((product) => [getProductId(product), product] as const)
       .filter((entry): entry is [string, ObraAmbienteProdutoPayload] => Boolean(entry[0]))
   );
-  const ambientesById = new Map(payload.obra_ambiente_json.map((ambiente) => [String(ambiente.id || ambiente.unique_id || ambiente["unique id"] || ""), ambiente]));
+  const ambientesById = new Map(
+    payload.obra_ambiente_json.flatMap((ambiente) => {
+      const ids = [ambiente.id, ambiente.unique_id, ambiente["unique id"], ambiente.ambiente]
+        .map((id) => String(id || ""))
+        .filter(Boolean);
+      return ids.map((id) => [id, ambiente] as const);
+    })
+  );
   const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort(compareServiceOrder);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
   const servicesById = new Map(services.map((service) => [service.id, service]));

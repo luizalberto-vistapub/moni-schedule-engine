@@ -262,12 +262,12 @@ describe("Bubble bulk persistence", () => {
       equipe: "",
       nomeProduto: "",
       ambiente: "",
-      obraxambienteID: "amb_1",
+      "ambiente x obra": "amb_1",
       icon: ""
     });
 
     const atividadeObraRecordsWithoutAmbienteId = buildAtividadeObraRecords(payload, [{ ...lineWithoutOptionalValues, ambienteId: null }]);
-    expect(atividadeObraRecordsWithoutAmbienteId[0].obraxambienteID).toBe("");
+    expect(atividadeObraRecordsWithoutAmbienteId[0]["ambiente x obra"]).toBe("");
   });
 
   it("marks Atividade x Obra cloned duration after the first clone", () => {

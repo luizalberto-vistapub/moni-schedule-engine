@@ -479,6 +479,50 @@ describe("schedule engine", () => {
     expect(result.lines[1].equipe).toBe("Equipe Bubble");
   });
 
+  it("resolve obra x ambiente pelo unique id do obra_ambiente_json", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [{
+        "unique id": "1778509663183x408131843469357700",
+        obra: "1778509641991x511373404079390700",
+        ambiente: "1778260028546x369044729899253800",
+        "nome ambiente": "garagem de teste"
+      }],
+      obra_ambiente_produto_json: [{
+        "unique id": "oap_1",
+        ambiente: "1778260028546x369044729899253800",
+        produto: "prod_1",
+        "nome produto": "Piso",
+        quantidade: 1
+      }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines[0].ambienteId).toBe("1778509663183x408131843469357700");
+    expect(result.lines[0].ambiente).toBe("garagem de teste");
+
+    const payloadWithoutObraAmbienteUniqueId = normalizePayload(basePayload({
+      obra_ambiente_json: [{
+        ambiente: "1778260028546x369044729899253800",
+        "nome ambiente": "garagem sem unique id"
+      }],
+      obra_ambiente_produto_json: [{
+        ambiente: "1778260028546x369044729899253800",
+        quantidade: 1
+      }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }
+      ]
+    }));
+    const fallbackResult = runScheduleEngine(payloadWithoutObraAmbienteUniqueId);
+
+    expect(fallbackResult.lines[0].ambienteId).toBe("1778260028546x369044729899253800");
+    expect(fallbackResult.lines[0].ambiente).toBe("garagem sem unique id");
+  });
+
   it("cobre fallbacks vazios de obra, tipo, ambiente, produto e ordenacao", () => {
     expect(() => runScheduleEngine(normalizePayload(basePayload({ obra_json: [] })))).toThrow("dataInicio");
     expect(() => normalizePayload(basePayload({ atividades_json: [{ id: "x", nome: "X", tipo: "" as never }] }))).toThrow("Tipo de atividade invalido");
