@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, PurchaseStage, SchedulePayload } from "../types/payload.types.js";
+import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, PurchaseStage, SchedulePayload } from "../types/payload.types.js";
 
 const recordArray = z.array(z.record(z.unknown())).default([]);
 
@@ -15,6 +15,7 @@ export const payloadSchema = z.object({
   obra_json: z.array(z.record(z.unknown())).min(1),
   obra_ambiente_json: recordArray,
   obra_ambiente_produto_json: recordArray,
+  obra_ambiente_item_composicao_json: recordArray,
   atividades_json: z.array(z.record(z.unknown())).default([]),
   atividade_obra_json: recordArray,
   events_json: recordArray
@@ -67,6 +68,10 @@ function asString(value: unknown, fallback: string): string {
   return fallback;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function field(record: Record<string, unknown>, ...keys: string[]): unknown {
   for (const key of keys) {
     if (record[key] !== undefined) return record[key];
@@ -99,9 +104,77 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
   };
 }
 
+function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActivity[] {
+  if (activity.tipo !== "Servi\u00e7o" || !Array.isArray(activity.raw.atividadeProjeto)) return [];
+
+  return activity.raw.atividadeProjeto
+    .filter((project): project is Record<string, unknown> => typeof project === "object" && project !== null)
+    .map((project, index): NormalizedActivity => {
+      const id = asString(field(project, "idAtividadeProjeto", "id", "unique_id", "unique id"), `${activity.id}_projeto_${index + 1}`);
+      const nome = asString(field(project, "nomeAtividadeProjeto", "nome", "name"), id);
+
+      return {
+        id,
+        nome,
+        tipo: "Projeto",
+        ordem: activity.ordem,
+        duracao: 1,
+        duracaoVariavel: false,
+        quantidadeBase: null,
+        etapaCompra: null,
+        peso: 1,
+        equipe: null,
+        offsetDias: project.diasAntecedencia === undefined || project.diasAntecedencia === null || project.diasAntecedencia === "" ? undefined : Number(project.diasAntecedencia),
+        atividadeServicoAncoraId: activity.id,
+        interdependenciasMasterIds: [],
+        produto: activity.produto,
+        produtoId: activity.produtoId,
+        raw: { ...project, sourceActivityId: activity.id }
+      };
+    });
+}
+
+function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload): ObraAmbienteProdutoPayload {
+  const id = optionalString(product.id) || optionalString(product.unique_id) || optionalString(product["unique id"]);
+  const ambienteId = optionalString(product.ambienteId)
+    || optionalString(product.obraAmbienteId)
+    || optionalString(product["ambiente x obra"])
+    || optionalString(product["id ambiente item composicao"]);
+  const produtoId = optionalString(product.produtoId) || optionalString(product.produto) || optionalString(product["id produto simples"]);
+  const produtoNome = optionalString(product.produtoNome) || optionalString(product["nome produto"]) || optionalString(product["nome produto simples"]);
+
+  return {
+    ...product,
+    id,
+    unique_id: optionalString(product.unique_id) || optionalString(product["unique id"]),
+    ambienteId,
+    obraAmbienteId: ambienteId,
+    produtoId,
+    produto: produtoId,
+    produtoNome,
+    quantidade: product.quantidade ?? product["quantidade produto composto"] ?? null
+  };
+}
+
 export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
+  const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
+  const obraAmbienteProdutos = payload.obra_ambiente_produto_json.length
+    ? payload.obra_ambiente_produto_json
+    : compositionProducts.map(normalizeCompositionProduct);
+  const activities = payload.atividades_json.map(normalizeActivity);
+  const activityIds = new Set(activities.map((activity) => activity.id));
+  const projectActivities = activities
+    .flatMap(normalizeActivityProjects)
+    .filter((activity) => {
+      if (activityIds.has(activity.id)) return false;
+      activityIds.add(activity.id);
+      return true;
+    });
+
   return {
     ...payload,
-    atividades_json: payload.atividades_json.map(normalizeActivity)
+    obra_ambiente_produto_json: obraAmbienteProdutos,
+    obra_ambiente_item_composicao_json: compositionProducts,
+    atividades_json: [...activities, ...projectActivities]
   };
 }

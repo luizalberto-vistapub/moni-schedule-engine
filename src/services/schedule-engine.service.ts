@@ -10,6 +10,7 @@ interface PlacementContext {
   productsByProductId: Map<string, ObraAmbienteProdutoPayload>;
   fallbackProduct: ObraAmbienteProdutoPayload | null;
   ambientesById: Map<string, ObraAmbientePayload>;
+  firstServiceByCompositeId: Map<string, NormalizedActivity>;
   serviceStarts: Map<string, Date>;
   serviceEnds: Map<string, Date>;
   serviceCloneDates: Map<string, Date[]>;
@@ -34,27 +35,36 @@ function cloneCountFor(activity: NormalizedActivity, product: ObraAmbienteProdut
 
 function getProductName(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.produtoNome || product["nome produto"] || product.produto || product.produtoId || "") || null;
+  return String(product.produtoNome || product["nome produto"] || product["nome produto simples"] || product.produto || product.produtoId || product["id produto simples"] || "") || null;
 }
 
 function getProductId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.produtoId || product.produto || "") || null;
+  return String(product.produtoId || product.produto || product["id produto simples"] || "") || null;
+}
+
+function getCompositeProductId(product: ObraAmbienteProdutoPayload | null): string | null {
+  if (!product) return null;
+  return String(product["id produto composto"] || product.produtoCompostoId || product["produto composto"] || "") || null;
 }
 
 function getActivityProductId(activity: NormalizedActivity): string | null {
   return String(activity.produto || activity.produtoId || "") || null;
 }
 
-function productForActivity(ctx: PlacementContext, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+function productForActivityFrom(productsByProductId: Map<string, ObraAmbienteProdutoPayload>, fallbackProduct: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
   const productId = getActivityProductId(activity);
-  if (productId) return ctx.productsByProductId.get(productId) || null;
-  return ctx.fallbackProduct;
+  if (productId) return productsByProductId.get(productId) || null;
+  return fallbackProduct;
+}
+
+function productForActivity(ctx: PlacementContext, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+  return productForActivityFrom(ctx.productsByProductId, ctx.fallbackProduct, activity);
 }
 
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product.ambiente || "") || null;
+  return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product["id ambiente item composicao"] || product.ambiente || "") || null;
 }
 
 function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
@@ -82,7 +92,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     atividadeId: activity.id,
     atividadeNome: activity.nome,
     atividadeTipo: activity.tipo,
-    atividadeServicoAncoraId: activity.atividadeServicoAncoraId,
+    atividadeServicoAncoraId: anchor?.id || activity.atividadeServicoAncoraId || null,
     atividadeServicoAncoraNome: anchor?.nome || null,
     obraAmbienteProdutoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
     produtoId: getProductId(product),
@@ -199,18 +209,29 @@ function placeServices(ctx: PlacementContext, services: NormalizedActivity[]): v
 }
 
 function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedActivity[], servicesById: Map<string, NormalizedActivity>): void {
-  const purchases = activities.filter((activity) => activity.tipo === "Compra").sort((a, b) => a.ordem - b.ordem);
+  const purchases = activities.filter((activity) => activity.tipo === "Compra" && activity.etapaCompra).sort((a, b) => a.ordem - b.ordem);
   const projects = activities.filter((activity) => activity.tipo === "Projeto").sort((a, b) => a.ordem - b.ordem);
   const anchorCounters = new Map<string, number>();
   const purchaseLinesByAnchor = new Map<string, ScheduleLine[]>();
 
+  const resolveAnchor = (activity: NormalizedActivity): NormalizedActivity | null => {
+    if (activity.atividadeServicoAncoraId) {
+      const explicitService = servicesById.get(activity.atividadeServicoAncoraId);
+      if (explicitService) return explicitService;
+      const serviceByComposite = ctx.firstServiceByCompositeId.get(activity.atividadeServicoAncoraId);
+      if (serviceByComposite) return serviceByComposite;
+    }
+    const compositeId = getCompositeProductId(productForActivity(ctx, activity));
+    return compositeId ? ctx.firstServiceByCompositeId.get(compositeId) || null : null;
+  };
+
   for (const activity of purchases) {
-    const anchorId = activity.atividadeServicoAncoraId;
+    const anchor = resolveAnchor(activity);
+    const anchorId = anchor?.id;
     if (!anchorId) continue;
-    const anchorStart = ctx.serviceStarts.get(anchorId);
-    const anchor = servicesById.get(anchorId);
-    if (!anchorStart || !anchor) continue;
-    const product = productForActivity(ctx, anchor);
+    const anchorStart = ctx.serviceStarts.get(anchorId)!;
+    let product = productForActivity(ctx, activity);
+    if (!product) product = productForActivity(ctx, anchor);
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
     const defaultOffset = currentCounter + 1;
@@ -223,12 +244,12 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
   }
 
   for (const activity of projects) {
-    const anchorId = activity.atividadeServicoAncoraId;
+    const anchor = resolveAnchor(activity);
+    const anchorId = anchor?.id;
     if (!anchorId) continue;
-    const anchorStart = ctx.serviceStarts.get(anchorId);
-    const anchor = servicesById.get(anchorId);
-    if (!anchorStart || !anchor) continue;
-    const product = productForActivity(ctx, anchor);
+    const anchorStart = ctx.serviceStarts.get(anchorId)!;
+    let product = productForActivity(ctx, activity);
+    if (!product) product = productForActivity(ctx, anchor);
     const purchasesForAnchor = purchaseLinesByAnchor.get(anchorId) || [];
     const avisoOrcamento = purchasesForAnchor.find((line) => line.subtipo_compra === "AVISO_ORCAMENTO");
     const earliestPurchase = [...purchasesForAnchor].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
@@ -238,7 +259,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const defaultOffset = currentCounter + 2;
     const offset = Number(activity.offsetDias ?? defaultOffset);
     const referenceStart = referenceDate ? parseDateOnly(referenceDate) : anchorStart;
-    const date = previousBusinessDay(addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
+    const date = addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana);
     ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
   }
@@ -272,12 +293,18 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort(compareServiceOrder);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
   const servicesById = new Map(services.map((service) => [service.id, service]));
+  const firstServiceByCompositeId = new Map<string, NormalizedActivity>();
+  for (const service of services) {
+    const compositeId = getCompositeProductId(productForActivityFrom(productsByProductId, fallbackProduct, service));
+    if (compositeId && !firstServiceByCompositeId.has(compositeId)) firstServiceByCompositeId.set(compositeId, service);
+  }
   const ctx: PlacementContext = {
     payload,
     obraStart,
     productsByProductId,
     fallbackProduct,
     ambientesById,
+    firstServiceByCompositeId,
     serviceStarts: new Map(),
     serviceEnds: new Map(),
     serviceCloneDates: new Map(),

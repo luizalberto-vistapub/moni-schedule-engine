@@ -37,6 +37,18 @@ export interface ObraAmbienteProdutoPayload {
   [key: string]: unknown;
 }
 
+export interface ObraAmbienteItemComposicaoPayload extends ObraAmbienteProdutoPayload {
+  "id ambiente item composicao"?: string;
+  "id produto composto"?: string;
+  "nome produto composto"?: string;
+  "categoria produto composto"?: string;
+  "tipo categoria produto composto"?: string;
+  "quantidade produto composto"?: number | null;
+  "unidade medida produto composto"?: string;
+  "id produto simples"?: string;
+  "nome produto simples"?: string;
+}
+
 export interface ActivityPayload {
   id?: string;
   unique_id?: string;
@@ -92,6 +104,7 @@ export interface SchedulePayload {
   obra_json: ObraPayload[];
   obra_ambiente_json: ObraAmbientePayload[];
   obra_ambiente_produto_json: ObraAmbienteProdutoPayload[];
+  obra_ambiente_item_composicao_json?: ObraAmbienteItemComposicaoPayload[];
   atividades_json: ActivityPayload[];
   atividade_obra_json: Record<string, unknown>[];
   events_json: Record<string, unknown>[];
