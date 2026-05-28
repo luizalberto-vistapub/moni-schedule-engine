@@ -152,7 +152,7 @@ function ambientesByName(payload: NormalizedSchedulePayload): Map<string, ObraAm
 }
 
 function toBubbleDate(value: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00:00.000Z`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T12:00:00.000Z`;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
 }

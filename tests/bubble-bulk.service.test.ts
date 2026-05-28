@@ -181,13 +181,15 @@ describe("Bubble bulk persistence", () => {
     expect(buildAtividadeObraRecords(payload, lines)).toEqual([]);
   });
 
-  it("formats ISO dates and keeps invalid dates unchanged when building records", () => {
+  it("formats date-only values at noon UTC and keeps invalid dates unchanged when building records", () => {
     const { payload, lines } = payloadWithOneLine();
     const [line] = lines;
 
+    const dateOnlyRecords = buildCronogramaLinhaRecords(payload, [{ ...line, data_programada: "2026-05-04" }]);
     const isoRecords = buildCronogramaLinhaRecords(payload, [{ ...line, data_programada: "2026-05-04T03:00:00.000Z" }]);
     const invalidRecords = buildCronogramaLinhaRecords(payload, [{ ...line, data_programada: "not-a-date" }]);
 
+    expect(dateOnlyRecords[0].data_programada).toBe("2026-05-04T12:00:00.000Z");
     expect(isoRecords[0].data_programada).toBe("2026-05-04T03:00:00.000Z");
     expect(invalidRecords[0].data_programada).toBe("not-a-date");
   });
