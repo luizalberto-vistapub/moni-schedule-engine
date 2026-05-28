@@ -252,6 +252,7 @@ describe("schedule controllers", () => {
       duracao: 1,
       equipe: "Pedreiro",
       atividade: "serv_1",
+      id_atividade_obra_externo: result.lines[0].atividade_obra_id_externo,
       nomeAtividade: "Assentar piso",
       nomeObra: "Obra Vila Mariana",
       nomeProduto: "Piso",
