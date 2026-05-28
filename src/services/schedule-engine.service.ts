@@ -67,6 +67,11 @@ function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | nul
   return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product["id ambiente item composicao"] || product.ambiente || "") || null;
 }
 
+function getAmbienteItemComposicaoId(product: ObraAmbienteProdutoPayload | null): string | null {
+  if (!product) return null;
+  return String(product["id ambiente item composicao"] || product.ambienteItemComposicaoId || "") || null;
+}
+
 function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
   if (!ambiente) return fallbackId;
   const id = [ambiente["unique id"], ambiente.unique_id, ambiente.id, fallbackId]
@@ -97,6 +102,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     obraAmbienteProdutoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
     produtoId: getProductId(product),
     ambienteId,
+    ambienteItemComposicaoId: getAmbienteItemComposicaoId(product),
     data_programada: dateOnly,
     codigo_d: formatCodigoD(daysFromStart),
     dia_semana: weekdayName(date),

@@ -187,6 +187,17 @@ function assertBulkBodySucceeded(typeName: string, responseText: string): void {
   }
 }
 
+function isMissingAmbienteXObraReference(responseText: string): boolean {
+  return responseText.includes("ambiente x obra") && responseText.includes("MISSING_DATA");
+}
+
+function omitAmbienteXObra(records: Record<string, unknown>[]): Record<string, unknown>[] {
+  return records.map((record) => {
+    const { ["ambiente x obra"]: _ambienteXObra, ...rest } = record;
+    return rest;
+  });
+}
+
 export function buildCronogramaLinhaRecords(payload: NormalizedSchedulePayload, lines: ScheduleLine[]): Record<string, unknown>[] {
   const versionId = versaoCronogramaId(payload);
   const currentObraId = obraId(payload);
@@ -240,7 +251,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       status: "Não iniciada",
       tipo: line.tipo,
       ambiente: line.ambiente || "",
-      "ambiente x obra": line.ambienteId || "",
+      "ambiente x item composicao": line.ambienteItemComposicaoId || "",
+      "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || ""
     };
   });
@@ -269,6 +281,43 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 
     const responseText = await response.text();
     if (!response.ok) {
+      if (
+        typeName === config.atividadeObraType
+        && isMissingAmbienteXObraReference(responseText)
+        && batch.some((record) => record["ambiente x obra"])
+      ) {
+        options.log?.warn({
+          requestId: options.requestId,
+          typeName,
+          url,
+          batchIndex,
+          recordsCount: batch.length,
+          statusCode: response.status,
+          responseText
+        }, "retrying atividade obra bulk without ambiente x obra reference");
+
+        const retryResponse = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "text/plain"
+          },
+          body: ndjson(omitAmbienteXObra(batch))
+        });
+        const retryResponseText = await retryResponse.text();
+        if (retryResponse.ok) {
+          assertBulkBodySucceeded(typeName, retryResponseText);
+          options.log?.info({
+            requestId: options.requestId,
+            typeName,
+            url,
+            batchIndex,
+            recordsCount: batch.length
+          }, "bubble bulk batch persisted without ambiente x obra reference");
+          continue;
+        }
+      }
+
       options.log?.error({
         requestId: options.requestId,
         typeName,

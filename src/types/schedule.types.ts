@@ -10,6 +10,7 @@ export interface ScheduleLine {
   obraAmbienteProdutoId: string | null;
   produtoId: string | null;
   ambienteId: string | null;
+  ambienteItemComposicaoId: string | null;
   data_programada: string;
   codigo_d: string;
   dia_semana: string;

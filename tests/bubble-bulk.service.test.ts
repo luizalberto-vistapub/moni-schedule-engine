@@ -118,6 +118,31 @@ describe("Bubble bulk persistence", () => {
     await expect(persistScheduleBulks(payload, lines)).rejects.toThrow("row error");
   });
 
+  it("retries Atividade x Obra without ambiente x obra when Bubble rejects the reference", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 2) {
+        return {
+          ok: false,
+          status: 400,
+          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Invalid data for field ambiente x obra: object with this id does not exist\",\"body\":{\"statusCode\":400,\"body\":{\"status\":\"MISSING_DATA\"}}}\n"
+        };
+      }
+
+      return {
+        ok: true,
+        text: async (): Promise<string> => ""
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine();
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[1]![1]?.body)).toContain("\"ambiente x obra\"");
+    expect(String(fetchMock.mock.calls[2]![1]?.body)).not.toContain("\"ambiente x obra\"");
+  });
+
   it("ignores non-NDJSON response bodies after a successful bulk status", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
@@ -262,12 +287,39 @@ describe("Bubble bulk persistence", () => {
       equipe: "",
       nomeProduto: "",
       ambiente: "",
+      "ambiente x item composicao": "",
       "ambiente x obra": "amb_1",
       icon: ""
     });
 
     const atividadeObraRecordsWithoutAmbienteId = buildAtividadeObraRecords(payload, [{ ...lineWithoutOptionalValues, ambienteId: null }]);
     expect(atividadeObraRecordsWithoutAmbienteId[0]["ambiente x obra"]).toBe("");
+  });
+
+  it("sends composition ambiente reference to the Bubble ambiente x item composicao field", () => {
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      obra_ambiente_json: [{ "unique id": "amb_item_1", name: "Sala" }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [{
+        "unique id": "item_servico_1",
+        "id ambiente item composicao": "amb_item_1",
+        "id produto composto": "composto_1",
+        "id produto simples": "prod_servico",
+        "nome produto simples": "Mao de obra"
+      }],
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_servico", ordem: 1, duracao: 1 }]
+    }));
+    const result = runScheduleEngine(payload);
+
+    const [record] = buildAtividadeObraRecords(payload, result.lines);
+
+    expect(record).toMatchObject({
+      "ambiente x item composicao": "amb_item_1",
+      "ambiente x obra": ""
+    });
   });
 
   it("marks Atividade x Obra cloned duration after the first clone", () => {
