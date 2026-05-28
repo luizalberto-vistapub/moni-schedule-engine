@@ -251,6 +251,7 @@ describe("schedule controllers", () => {
       dataInicioPrevista: "2026-05-04T12:00:00.000Z",
       duracao: 1,
       equipe: "Pedreiro",
+      atividade: "serv_1",
       nomeAtividade: "Assentar piso",
       nomeObra: "Obra Vila Mariana",
       nomeProduto: "Piso",

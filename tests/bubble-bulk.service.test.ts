@@ -286,6 +286,7 @@ describe("Bubble bulk persistence", () => {
       nome_servico_ancora: ""
     });
     expect(atividadeObraRecords[0]).toMatchObject({
+      atividade: line.atividadeId,
       equipe: "",
       nomeProduto: "",
       ambiente: "",
@@ -319,6 +320,7 @@ describe("Bubble bulk persistence", () => {
     const [record] = buildAtividadeObraRecords(payload, result.lines);
 
     expect(record).toMatchObject({
+      atividade: "serv_1",
       "ambiente x item composicao": "amb_item_1",
       "ambiente x obra": ""
     });

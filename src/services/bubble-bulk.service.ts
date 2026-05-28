@@ -242,6 +242,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       dataInicioPrevista: toBubbleDate(line.data_programada),
       duracao: 1,
       equipe: line.equipe || "",
+      atividade: line.atividadeId,
       nomeAtividade: line.nome_atividade,
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",
