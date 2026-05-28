@@ -5,7 +5,14 @@ import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, 
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
 import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/response-builder.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
-import type { ScheduleMode } from "../types/payload.types.js";
+import type { ScheduleMode, SchedulePayload } from "../types/payload.types.js";
+
+const RECALCULATE_EVENT_TYPES = new Set([
+  "work_start_delayed",
+  "activity_start_delayed",
+  "from_date_delayed",
+  "activity_inserted"
+]);
 
 type ObservedRequest = Request & {
   id?: string | number | object;
@@ -39,6 +46,55 @@ function eventType(event: Record<string, unknown>): string {
   return typeof event.type === "string" ? event.type.trim() : "";
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function field(record: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined) return record[key];
+  }
+  return undefined;
+}
+
+function versionId(payload: SchedulePayload): string {
+  return stringValue(field(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
+}
+
+function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayload): void {
+  if (mode !== "recalculate") return;
+
+  const newVersionId = versionId(payload);
+  const previousVersionId = stringValue(payload.previous_version_id);
+  const issues = [];
+
+  if (!newVersionId) {
+    issues.push({
+      code: "custom" as const,
+      path: ["versao_cronograma_unique_id"],
+      message: "versao_cronograma_unique_id is required for recalculate and must be the new version id"
+    });
+  }
+
+  if (!previousVersionId) {
+    issues.push({
+      code: "custom" as const,
+      path: ["previous_version_id"],
+      message: "previous_version_id is required for recalculate"
+    });
+  }
+
+  if (newVersionId && previousVersionId && newVersionId === previousVersionId) {
+    issues.push({
+      code: "custom" as const,
+      path: ["versao_cronograma_unique_id"],
+      message: "versao_cronograma_unique_id must be different from previous_version_id for recalculate"
+    });
+  }
+
+  if (issues.length) throw new ZodError(issues);
+}
+
 function validateRecalculateEvents(mode: ScheduleMode, events: Record<string, unknown>[]): void {
   if (mode !== "recalculate") return;
   const invalidEventIndex = events.findIndex((event) => !eventType(event));
@@ -51,6 +107,60 @@ function validateRecalculateEvents(mode: ScheduleMode, events: Record<string, un
   }]);
 }
 
+function validateRecalculateEventTypes(mode: ScheduleMode, events: Record<string, unknown>[]): void {
+  if (mode !== "recalculate") return;
+  const unsupportedEventIndex = events.findIndex((event) => {
+    const type = eventType(event);
+    return type && !RECALCULATE_EVENT_TYPES.has(type);
+  });
+  if (unsupportedEventIndex === -1) return;
+
+  throw new ZodError([{
+    code: "custom",
+    path: ["events_json", unsupportedEventIndex, "type"],
+    message: `Unsupported recalculate event type: ${eventType(events[unsupportedEventIndex]!)}`
+  }]);
+}
+
+function eventDate(event: Record<string, unknown>): string {
+  return stringValue(field(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "to"));
+}
+
+function validateRecalculateEventFields(mode: ScheduleMode, events: Record<string, unknown>[]): void {
+  if (mode !== "recalculate") return;
+  const missingWorkStartDateIndex = events.findIndex((event) => eventType(event) === "work_start_delayed" && !eventDate(event));
+  if (missingWorkStartDateIndex === -1) return;
+
+  throw new ZodError([{
+    code: "custom",
+    path: ["events_json", missingWorkStartDateIndex, "new_start_date"],
+    message: "work_start_delayed events must include new_start_date"
+  }]);
+}
+
+function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
+  if (payload.mode !== "recalculate" || !payload.events_json.length) return payload;
+
+  const workStartEvent = payload.events_json.find((event) => eventType(event) === "work_start_delayed");
+  if (!workStartEvent) return payload;
+
+  const newStartDate = eventDate(workStartEvent);
+  if (!newStartDate || !payload.obra_json[0]) return payload;
+
+  return {
+    ...payload,
+    obra_json: [
+      {
+        ...payload.obra_json[0],
+        dataInicio: newStartDate,
+        data_inicio: newStartDate,
+        startDate: newStartDate
+      },
+      ...payload.obra_json.slice(1)
+    ]
+  };
+}
+
 async function handleSchedule(req: ObservedRequest, res: Response, mode: ScheduleMode) {
   const log = requestLog(req);
   const startedAt = new Date();
@@ -59,7 +169,10 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     const parsedPayload = payloadSchema.parse(req.body);
     const requestMode = modeFromRequest(req, mode);
     validateRecalculateEvents(requestMode, parsedPayload.events_json);
-    const payload = normalizePayload({ ...parsedPayload, mode: requestMode });
+    validateRecalculateEventTypes(requestMode, parsedPayload.events_json);
+    validateRecalculateEventFields(requestMode, parsedPayload.events_json);
+    validateRecalculateContract(requestMode, parsedPayload);
+    const payload = normalizePayload(applyRecalculateEvents({ ...parsedPayload, mode: requestMode }));
 
     log?.info({
       requestId: req.id,

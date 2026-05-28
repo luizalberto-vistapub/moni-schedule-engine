@@ -1,13 +1,13 @@
 ﻿{
   "cronograma_unique_id": "cronograma_example",
-  "versao_cronograma_unique_id": "versao_cronograma_example",
+  "versao_cronograma_unique_id": "versao_cronograma_new",
   "mode": "recalculate",
   "dias_trabalho_semana": 5,
   "timezone": "America/Sao_Paulo",
   "requested_by": "bubble",
-  "reason": "activity changed example",
+  "reason": "work start delayed example",
   "numero": 2,
-  "previous_version_id": "schedule_version_previous",
+  "previous_version_id": "versao_cronograma_previous",
   "obra_json": [
     {
       "id": "obra_1",
@@ -43,8 +43,8 @@
   "atividade_obra_json": [],
   "events_json": [
     {
-      "type": "activity_duration_changed",
-      "atividadeId": "serv_1"
+      "type": "work_start_delayed",
+      "new_start_date": "2026-05-06"
     }
   ]
 }

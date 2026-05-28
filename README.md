@@ -86,7 +86,16 @@ O payload precisa incluir o `unique id` da `VersaoCronograma` em `versao_cronogr
 
 ## Recalcular cronograma
 
-`POST /api/v1/schedules/recalculate` usa a mesma lógica de geração nesta primeira versão. Quando `mode` for `recalculate`, cada item de `events_json` deve ter `type` como string não vazia.
+`POST /api/v1/schedules/recalculate` recalcula o cronograma completo e persiste os novos registros por bulk create, usando `versao_cronograma_unique_id` como a nova `VersaoCronograma`. O payload também deve enviar `previous_version_id` com a versão anterior; os dois ids precisam ser diferentes.
+
+O servidor só responde `ok: true` depois que os bulks de `cronogramalinha` e `atividadexobra` terminam com sucesso. No Bubble, apague os registros antigos apenas depois desse `ok: true`.
+
+Tipos aceitos em `events_json`:
+
+- `work_start_delayed`: aceita `new_start_date` e aplica essa data em `obra_json[0].dataInicio` antes de gerar o novo cronograma.
+- `activity_start_delayed`: registra o motivo do recálculo; envie o payload completo já ajustado.
+- `from_date_delayed`: registra o motivo do recálculo; envie o payload completo já ajustado.
+- `activity_inserted`: registra o motivo do recálculo; envie a nova atividade em `atividades_json` e as dependências atualizadas em `interdependenciasMasterIds`.
 
 ## CI
 

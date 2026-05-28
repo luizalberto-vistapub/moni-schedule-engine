@@ -88,23 +88,50 @@ describe("schedule controllers", () => {
     expect(response.body.cronograma).toBeUndefined();
   });
 
-  it("recalculates using the same engine path", async () => {
+  it("recalculates into a new Bubble schedule version", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
       .send(basePayload({
-        versao_cronograma_unique_id: "versao_1",
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
         mode: "",
-        events_json: [{ type: "noop" }],
+        events_json: [{ type: "work_start_delayed", new_start_date: "2026-05-06" }],
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
     expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
+    expect(JSON.parse(cronogramaLinhaBody.split("\n")[0]!)).toMatchObject({
+      versao_cronograma: "versao_2",
+      data_programada: "2026-05-06T12:00:00.000Z"
+    });
+  });
+
+  it("requires a different previous version for recalculation", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        events_json: [{ type: "work_start_delayed", new_start_date: "2026-05-06" }],
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.validations.errors).toContain("versao_cronograma_unique_id must be different from previous_version_id for recalculate");
   });
 
   it("validates recalculate events", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
       .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
         mode: "recalculate",
         events_json: [{ type: " " }],
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
@@ -121,6 +148,8 @@ describe("schedule controllers", () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
       .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
         mode: "recalculate",
         events_json: [{ type: 123 }],
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
@@ -130,6 +159,42 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+  });
+
+  it("validates unsupported recalculate event types", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        events_json: [{ type: "activity_duration_changed" }],
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
+    expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.validations.errors).toContain("Unsupported recalculate event type: activity_duration_changed");
+  });
+
+  it("requires a new start date for work start recalculation", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        events_json: [{ type: "work_start_delayed" }],
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
+    expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.validations.errors).toContain("work_start_delayed events must include new_start_date");
   });
 
   it("returns 400 for invalid payloads", async () => {
