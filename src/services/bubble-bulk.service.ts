@@ -7,6 +7,7 @@ const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
+const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
 
 interface BubbleBulkConfig {
   apiToken?: string;
@@ -244,7 +245,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       equipe: line.equipe || "",
       atividade: line.atividadeId,
       id_atividade_obra_externo: line.atividade_obra_id_externo,
-      interdependenciasMasterIds: line.interdependenciasMasterIds,
+      [DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD]: line.interdependenciasMasterIds,
       nomeAtividade: line.nome_atividade,
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",

@@ -292,7 +292,7 @@ describe("Bubble bulk persistence", () => {
       equipe: "",
       nomeProduto: "",
       ambiente: "",
-      interdependenciasMasterIds: line.interdependenciasMasterIds,
+      "interdependencias MASTER (Atividade x Obra)": line.interdependenciasMasterIds,
       "ambiente x item composicao": "",
       "ambiente x obra": "amb_1",
       icon: ""
@@ -358,9 +358,10 @@ describe("Bubble bulk persistence", () => {
     const records = buildAtividadeObraRecords(payload, result.lines);
     const dependentRecord = records.find((record) => record.atividade === "dependente");
 
-    expect(dependentRecord?.interdependenciasMasterIds).toEqual(
+    expect(dependentRecord?.["interdependencias MASTER (Atividade x Obra)"]).toEqual(
       result.lines.filter((line) => line.atividadeId === "base").map((line) => line.atividade_obra_id_externo)
     );
+    expect(dependentRecord).not.toHaveProperty("interdependenciasMasterIds");
   });
 
   it("maps legacy Atividade x Obra typename env to Bubble API typename", async () => {
