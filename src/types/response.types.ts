@@ -16,6 +16,7 @@ export interface ScheduleValidations {
 export interface ScheduleSuccessResponse {
   ok: true;
   serverVersionId: string;
+  previous_version_id: string | null;
   version: { id: string };
   metrics: ScheduleMetrics;
   validations: ScheduleValidations;

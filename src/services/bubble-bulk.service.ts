@@ -253,8 +253,9 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
   const currentObraId = obraId(payload);
   const currentObraNome = obraNome(payload.obra_json[0]) || "";
   const currentAmbientesByName = ambientesByName(payload);
+  const versionId = versaoCronogramaId(payload);
 
-  if (!currentObraId) return [];
+  if (!currentObraId || !versionId) return [];
 
   return lines.map((line) => {
     const ambiente = line.ambiente ? currentAmbientesByName.get(line.ambiente) : undefined;
@@ -276,6 +277,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       peso: line.peso,
       status: "Não iniciada",
       tipo: line.tipo,
+      versaoCronograma: versionId,
       ambiente: line.ambiente || "",
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
       "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",

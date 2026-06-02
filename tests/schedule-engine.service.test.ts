@@ -123,10 +123,11 @@ describe("schedule engine", () => {
       ]
     }));
     const result = runScheduleEngine(payload);
-    const response = buildScheduleResponse(result, new Date());
+    const response = buildScheduleResponse(result, new Date(), "versao_anterior");
 
     expect(response.ok).toBe(true);
     expect(response.serverVersionId).toMatch(/^schedule_version_/);
+    expect(response.previous_version_id).toBe("versao_anterior");
     expect(response.version.id).toBe(response.serverVersionId);
     expect(response.metrics.linesCount).toBe(result.lines.length);
     expect(response.metrics.servicesCount).toBe(result.lines.length);

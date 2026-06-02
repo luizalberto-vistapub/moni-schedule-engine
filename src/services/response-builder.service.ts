@@ -2,7 +2,7 @@ import type { ScheduleErrorResponse, ScheduleSuccessResponse } from "../types/re
 import type { EngineResult } from "../types/schedule.types.js";
 import { makeId } from "../utils/ids.js";
 
-export function buildScheduleResponse(result: EngineResult, startedAt: Date): ScheduleSuccessResponse {
+export function buildScheduleResponse(result: EngineResult, startedAt: Date, previousVersionId: string | null = null): ScheduleSuccessResponse {
   const finishedAt = new Date();
   const lines = result.lines;
   const serverVersionId = makeId("schedule_version");
@@ -10,6 +10,7 @@ export function buildScheduleResponse(result: EngineResult, startedAt: Date): Sc
   return {
     ok: true,
     serverVersionId,
+    previous_version_id: previousVersionId,
     version: { id: serverVersionId },
     metrics: {
       linesCount: lines.length,

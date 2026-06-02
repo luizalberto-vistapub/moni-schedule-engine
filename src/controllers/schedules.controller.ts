@@ -183,7 +183,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }, "schedule calculation started");
 
     const result = runScheduleEngine(payload);
-    const response = buildScheduleResponse(result, startedAt);
+    const response = buildScheduleResponse(result, startedAt, payload.previous_version_id || null);
 
     log?.info({
       requestId: req.id,

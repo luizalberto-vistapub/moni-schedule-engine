@@ -289,6 +289,7 @@ describe("Bubble bulk persistence", () => {
     expect(atividadeObraRecords[0]).toMatchObject({
       atividade: line.atividadeId,
       id_atividade_obra_externo: line.atividade_obra_id_externo,
+      versaoCronograma: "versao_1",
       equipe: "",
       nomeProduto: "",
       ambiente: "",
@@ -325,6 +326,7 @@ describe("Bubble bulk persistence", () => {
     expect(record).toMatchObject({
       atividade: "serv_1",
       id_atividade_obra_externo: result.lines[0]!.atividade_obra_id_externo,
+      versaoCronograma: "versao_1",
       "ambiente x item composicao": "amb_item_1",
       "ambiente x obra": ""
     });

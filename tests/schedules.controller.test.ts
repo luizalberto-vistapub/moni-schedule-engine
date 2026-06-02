@@ -101,11 +101,16 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
+    expect(response.body.previous_version_id).toBe("versao_1");
 
     const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
     expect(JSON.parse(cronogramaLinhaBody.split("\n")[0]!)).toMatchObject({
       versao_cronograma: "versao_2",
       data_programada: "2026-05-06T12:00:00.000Z"
+    });
+    const atividadeObraBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[1]![1]!.body);
+    expect(JSON.parse(atividadeObraBody.split("\n")[0]!)).toMatchObject({
+      versaoCronograma: "versao_2"
     });
   });
 
@@ -326,6 +331,7 @@ describe("schedule controllers", () => {
       peso: 2,
       status: "Não iniciada",
       tipo: "Servi\u00e7o",
+      versaoCronograma: "versao_1",
       ambiente: "Sala",
       icon: "//s3.amazonaws.com/sala.png"
     });
