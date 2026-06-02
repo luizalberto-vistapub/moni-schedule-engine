@@ -158,6 +158,24 @@ function laterDate(a: Date, b: Date): Date {
   return a > b ? a : b;
 }
 
+function purchaseStageOrder(activity: NormalizedActivity): number {
+  const stageOrder: Record<string, number> = {
+    AVISO_ORCAMENTO: 1,
+    LIMITE_ORCAMENTO: 2,
+    LIMITE_COMPRA: 3,
+    RECEBIMENTO: 4
+  };
+  return activity.etapaCompra ? stageOrder[activity.etapaCompra] || 99 : 99;
+}
+
+function compareAnchoredActivityOrder(a: NormalizedActivity, b: NormalizedActivity): number {
+  return a.ordem - b.ordem || a.id.localeCompare(b.id);
+}
+
+function comparePurchaseChainOrder(a: NormalizedActivity, b: NormalizedActivity): number {
+  return purchaseStageOrder(a) - purchaseStageOrder(b) || compareAnchoredActivityOrder(a, b);
+}
+
 function placeService(ctx: PlacementContext, service: NormalizedActivity, earliestStart: Date): void {
   const dependencyEnd = latestDependencyEndDate(ctx, service);
   let cursor = dependencyEnd ? laterDate(earliestStart, addBusinessDays(dependencyEnd, 1, ctx.payload.dias_trabalho_semana)) : earliestStart;
@@ -215,8 +233,8 @@ function placeServices(ctx: PlacementContext, services: NormalizedActivity[]): v
 }
 
 function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedActivity[], servicesById: Map<string, NormalizedActivity>): void {
-  const purchases = activities.filter((activity) => activity.tipo === "Compra" && activity.etapaCompra).sort((a, b) => a.ordem - b.ordem);
-  const projects = activities.filter((activity) => activity.tipo === "Projeto").sort((a, b) => a.ordem - b.ordem);
+  const purchases = activities.filter((activity) => activity.tipo === "Compra" && activity.etapaCompra).sort(comparePurchaseChainOrder);
+  const projects = activities.filter((activity) => activity.tipo === "Projeto").sort(compareAnchoredActivityOrder);
   const anchorCounters = new Map<string, number>();
   const purchaseLinesByAnchor = new Map<string, ScheduleLine[]>();
 
@@ -231,22 +249,33 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     return compositeId ? ctx.firstServiceByCompositeId.get(compositeId) || null : null;
   };
 
+  const purchasesByAnchor = new Map<string, { activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
   for (const activity of purchases) {
     const anchor = resolveAnchor(activity);
     const anchorId = anchor?.id;
     if (!anchorId) continue;
+    purchasesByAnchor.set(anchorId, [...(purchasesByAnchor.get(anchorId) || []), { activity, anchor }]);
+  }
+
+  for (const [anchorId, purchaseEntries] of purchasesByAnchor) {
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
-    let product = productForActivity(ctx, activity);
-    if (!product) product = productForActivity(ctx, anchor);
-    const counterKey = `${anchorId}:${activity.tipo}`;
-    const currentCounter = anchorCounters.get(counterKey) || 0;
-    const defaultOffset = currentCounter + 1;
-    const offset = Number(activity.offsetDias ?? defaultOffset);
-    const date = previousBusinessDay(addBusinessDays(anchorStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
-    const line = buildLine(ctx, product, activity, date, 1, anchor);
-    ctx.lines.push(line);
-    purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
-    anchorCounters.set(counterKey, currentCounter + 1);
+    let referenceDate = anchorStart;
+    const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
+
+    for (const { activity, anchor } of orderedEntries.reverse()) {
+      let product = productForActivity(ctx, activity);
+      if (!product) product = productForActivity(ctx, anchor);
+      const counterKey = `${anchorId}:${activity.tipo}`;
+      const currentCounter = anchorCounters.get(counterKey) || 0;
+      const defaultOffset = currentCounter + 1;
+      const offset = Number(activity.offsetDias ?? defaultOffset);
+      const date = previousBusinessDay(addBusinessDays(referenceDate, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
+      const line = buildLine(ctx, product, activity, date, 1, anchor);
+      ctx.lines.push(line);
+      purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
+      anchorCounters.set(counterKey, currentCounter + 1);
+      referenceDate = date;
+    }
   }
 
   for (const activity of projects) {

@@ -333,6 +333,71 @@ describe("schedule engine", () => {
     expect(service?.data_programada).toBe("2026-05-01");
   });
 
+  it("encadeia antecedentes das etapas de compra antes do servico", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 5,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-06-01" }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 10, duracao: 1 },
+        {
+          id: "aviso",
+          nome: "Aviso de orçamento",
+          tipo: "Compra",
+          ordem: 1,
+          atividadeServicoAncoraId: "serv_1",
+          etapaCompra: "Aviso de orçamento",
+          diasAntecedencia: 1
+        },
+        {
+          id: "limite_orcamento",
+          nome: "Limite de orçamento",
+          tipo: "Compra",
+          ordem: 2,
+          atividadeServicoAncoraId: "serv_1",
+          etapaCompra: "Limite de orçamento",
+          diasAntecedencia: 1
+        },
+        {
+          id: "limite_compra",
+          nome: "Limite de compra",
+          tipo: "Compra",
+          ordem: 3,
+          atividadeServicoAncoraId: "serv_1",
+          etapaCompra: "Limite de compra",
+          diasAntecedencia: 1
+        },
+        {
+          id: "recebimento",
+          nome: "Recebimento",
+          tipo: "Compra",
+          ordem: 4,
+          atividadeServicoAncoraId: "serv_1",
+          etapaCompra: "Recebimento",
+          diasAntecedencia: 1
+        },
+        {
+          id: "projeto_1",
+          nome: "Projeto",
+          tipo: "Projeto",
+          ordem: 1,
+          atividadeServicoAncoraId: "serv_1",
+          diasAntecedencia: 1
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
+      ["projeto_1", "2026-05-25"],
+      ["aviso", "2026-05-26"],
+      ["limite_orcamento", "2026-05-27"],
+      ["limite_compra", "2026-05-28"],
+      ["recebimento", "2026-05-29"],
+      ["serv_1", "2026-06-01"]
+    ]);
+  });
+
   it("formata codigo D-0 no dia anterior ao D+1", () => {
     const payload = normalizePayload(basePayload({
       dias_trabalho_semana: 6,
