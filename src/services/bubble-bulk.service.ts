@@ -23,6 +23,11 @@ interface PersistScheduleOptions {
   log?: Logger;
 }
 
+interface PersistedBulkRecord {
+  record: Record<string, unknown>;
+  bubbleId: string | null;
+}
+
 interface BubbleFieldDiagnostic {
   field: string;
   receivedValue: unknown;
@@ -188,6 +193,24 @@ function assertBulkBodySucceeded(typeName: string, responseText: string): void {
   }
 }
 
+function parseBulkCreatedIds(responseText: string, expectedCount: number): (string | null)[] {
+  const lines = responseText.split(/\r?\n/).filter((item) => item.trim());
+  if (!lines.length) return Array.from({ length: expectedCount }, () => null);
+
+  const ids: (string | null)[] = [];
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      ids.push(stringValue(parsed.id));
+    } catch {
+      return Array.from({ length: expectedCount }, () => null);
+    }
+  }
+
+  while (ids.length < expectedCount) ids.push(null);
+  return ids.slice(0, expectedCount);
+}
+
 function isMissingAmbienteXObraReference(responseText: string): boolean {
   return responseText.includes("ambiente x obra") && responseText.includes("MISSING_DATA");
 }
@@ -245,7 +268,6 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       equipe: line.equipe || "",
       atividade: line.atividadeId,
       id_atividade_obra_externo: line.atividade_obra_id_externo,
-      [DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD]: line.interdependenciasMasterIds,
       nomeAtividade: line.nome_atividade,
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",
@@ -262,7 +284,35 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
   });
 }
 
-async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
+function buildAtividadeObraDependencyPatches(lines: ScheduleLine[], persistedRecords: PersistedBulkRecord[]): { id: string; fields: Record<string, unknown> }[] {
+  const bubbleIdByExternalId = new Map<string, string>();
+  for (const persisted of persistedRecords) {
+    const externalId = stringValue(persisted.record.id_atividade_obra_externo);
+    if (externalId && persisted.bubbleId) bubbleIdByExternalId.set(externalId, persisted.bubbleId);
+  }
+
+  return lines
+    .filter((line) => line.interdependenciasMasterIds.length)
+    .map((line) => {
+      const ownBubbleId = bubbleIdByExternalId.get(line.atividade_obra_id_externo);
+      const dependencyBubbleIds = line.interdependenciasMasterIds.map((externalId) => bubbleIdByExternalId.get(externalId));
+      const missingIds = dependencyBubbleIds.some((id) => !id);
+      if (!ownBubbleId || missingIds) {
+        throw new BubbleBulkRequestError(`Could not resolve Bubble atividade x obra dependency ids for ${line.atividade_obra_id_externo}`);
+      }
+
+      return {
+        id: ownBubbleId,
+        fields: {
+          [DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD]: dependencyBubbleIds.filter((id): id is string => Boolean(id))
+        }
+      };
+    });
+}
+
+async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
+  const persistedRecords: PersistedBulkRecord[] = [];
+
   for (const [batchIndex, batch] of chunks(records, config.batchSize).entries()) {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
 
@@ -311,6 +361,8 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
         const retryResponseText = await retryResponse.text();
         if (retryResponse.ok) {
           assertBulkBodySucceeded(typeName, retryResponseText);
+          const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
+          persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
           options.log?.info({
             requestId: options.requestId,
             typeName,
@@ -334,6 +386,8 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
       throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
     }
     assertBulkBodySucceeded(typeName, responseText);
+    const createdIds = parseBulkCreatedIds(responseText, batch.length);
+    persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
 
     options.log?.info({
       requestId: options.requestId,
@@ -342,6 +396,50 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
       batchIndex,
       recordsCount: batch.length
     }, "bubble bulk batch persisted");
+  }
+
+  return persistedRecords;
+}
+
+async function patchAtividadeObraDependencies(patches: { id: string; fields: Record<string, unknown> }[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
+  for (const [index, patch] of patches.entries()) {
+    const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}/${encodeURIComponent(patch.id)}`;
+
+    options.log?.info({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      patchIndex: index
+    }, "atividade obra dependency patch started");
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(patch.fields)
+    });
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      options.log?.error({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        patchIndex: index,
+        statusCode: response.status,
+        responseText
+      }, "atividade obra dependency patch failed");
+      throw new BubbleBulkRequestError(`Bubble atividade obra dependency patch failed with ${response.status}: ${responseText}`);
+    }
+
+    options.log?.info({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      patchIndex: index
+    }, "atividade obra dependency patch persisted");
   }
 }
 
@@ -395,5 +493,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   }
 
   await postBulk(config.cronogramaLinhaType, cronogramaLinhaRecords, config, options);
-  await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
+  const persistedAtividadeObraRecords = await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
+  const dependencyPatches = buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords);
+  await patchAtividadeObraDependencies(dependencyPatches, config, options);
 }

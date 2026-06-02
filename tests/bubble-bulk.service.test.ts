@@ -292,11 +292,11 @@ describe("Bubble bulk persistence", () => {
       equipe: "",
       nomeProduto: "",
       ambiente: "",
-      "interdependencias MASTER (Atividade x Obra)": line.interdependenciasMasterIds,
       "ambiente x item composicao": "",
       "ambiente x obra": "amb_1",
       icon: ""
     });
+    expect(atividadeObraRecords[0]).not.toHaveProperty("interdependencias MASTER (Atividade x Obra)");
 
     const atividadeObraRecordsWithoutAmbienteId = buildAtividadeObraRecords(payload, [{ ...lineWithoutOptionalValues, ambienteId: null }]);
     expect(atividadeObraRecordsWithoutAmbienteId[0]["ambiente x obra"]).toBe("");
@@ -344,8 +344,27 @@ describe("Bubble bulk persistence", () => {
     expect(records[0]).not.toHaveProperty("copyduracao_boolean");
   });
 
-  it("sends atividade obra dependency external ids in bulk records", () => {
+  it("patches atividade obra dependency relations after resolving created Bubble ids", async () => {
+    process.env.BUBBLE_BULK_BATCH_SIZE = "500";
+    let postCallIndex = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; text: () => Promise<string> }> => {
+      const method = init?.method || "POST";
+      if (method === "PATCH") {
+        return { ok: true, status: 204, text: async () => "" };
+      }
+
+      postCallIndex += 1;
+      const body = String(init?.body || "");
+      const rows = body.split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map((_row, index) => JSON.stringify({ status: "success", id: `bubble_${postCallIndex}_${index + 1}` })).join("\n")
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
       cronograma_unique_id: "cronograma_1",
       obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
       atividades_json: [
@@ -355,13 +374,15 @@ describe("Bubble bulk persistence", () => {
     }));
     const result = runScheduleEngine(payload);
 
-    const records = buildAtividadeObraRecords(payload, result.lines);
-    const dependentRecord = records.find((record) => record.atividade === "dependente");
+    await persistScheduleBulks(payload, result.lines);
 
-    expect(dependentRecord?.["interdependencias MASTER (Atividade x Obra)"]).toEqual(
-      result.lines.filter((line) => line.atividadeId === "base").map((line) => line.atividade_obra_id_externo)
-    );
-    expect(dependentRecord).not.toHaveProperty("interdependenciasMasterIds");
+    const patchCall = fetchMock.mock.calls.find((call) => call[1]?.method === "PATCH");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(patchCall?.[0])).toContain("/api/1.1/obj/atividadexobra/bubble_2_3");
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
+      "interdependencias MASTER (Atividade x Obra)": ["bubble_2_1", "bubble_2_2"]
+    });
   });
 
   it("maps legacy Atividade x Obra typename env to Bubble API typename", async () => {
