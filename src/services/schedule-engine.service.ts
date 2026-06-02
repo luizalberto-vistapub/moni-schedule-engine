@@ -159,6 +159,11 @@ function laterDate(a: Date, b: Date): Date {
   return a > b ? a : b;
 }
 
+function forcedActivityStart(activity: NormalizedActivity): Date | null {
+  const value = activity.__recalculateStartDate;
+  return typeof value === "string" && value ? parseDateOnly(value) : null;
+}
+
 function purchaseStageOrder(activity: NormalizedActivity): number {
   const stageOrder: Record<string, number> = {
     AVISO_ORCAMENTO: 1,
@@ -186,6 +191,8 @@ function purchaseChainKey(anchorId: string, activity: NormalizedActivity): strin
 function placeService(ctx: PlacementContext, service: NormalizedActivity, earliestStart: Date): void {
   const dependencyEnd = latestDependencyEndDate(ctx, service);
   let cursor = dependencyEnd ? laterDate(earliestStart, addBusinessDays(dependencyEnd, 1, ctx.payload.dias_trabalho_semana)) : earliestStart;
+  const forcedStart = forcedActivityStart(service);
+  if (forcedStart) cursor = laterDate(cursor, forcedStart);
   const product = productForActivity(ctx, service);
   const totalClones = cloneCountFor(service, product);
   let firstDate: Date | null = null;
@@ -278,7 +285,8 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
       const currentCounter = anchorCounters.get(counterKey) || 0;
       const defaultOffset = currentCounter + 1;
       const offset = Number(activity.offsetDias ?? defaultOffset);
-      const date = previousBusinessDay(addBusinessDays(referenceDate, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
+      const forcedStart = forcedActivityStart(activity);
+      const date = forcedStart || previousBusinessDay(addBusinessDays(referenceDate, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
       const line = buildLine(ctx, product, activity, date, 1, anchor);
       ctx.lines.push(line);
       purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
@@ -303,7 +311,8 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const defaultOffset = currentCounter + 2;
     const offset = Number(activity.offsetDias ?? defaultOffset);
     const referenceStart = referenceDate ? parseDateOnly(referenceDate) : anchorStart;
-    const date = addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana);
+    const forcedStart = forcedActivityStart(activity);
+    const date = forcedStart || addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana);
     ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
   }

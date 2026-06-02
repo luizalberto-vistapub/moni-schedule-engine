@@ -150,19 +150,35 @@ function recalculatedStartDate(event: Record<string, unknown>, payload: Schedule
   return formatDateOnly(addBusinessDays(parseDateOnly(dateOnly), eventDays(event), payload.dias_trabalho_semana || 5));
 }
 
+function activityStartEventActivityId(event: Record<string, unknown>): string {
+  const activityId = stringValue(field(event, "atividade_id", "activity_id", "atividade"));
+  if (activityId) return activityId;
+  return stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"))
+    .replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "");
+}
+
 function validateRecalculateEventFields(mode: ScheduleMode, events: Record<string, unknown>[]): void {
   if (mode !== "recalculate") return;
   const missingWorkStartDateIndex = events.findIndex((event) => {
     const type = eventType(event);
-    return (type === "work_start_delayed" || type === "from_date_delayed") && !eventDate(event);
+    return (type === "work_start_delayed" || type === "from_date_delayed" || type === "activity_start_delayed") && !eventDate(event);
   });
-  if (missingWorkStartDateIndex === -1) return;
+  if (missingWorkStartDateIndex !== -1) {
+    throw new ZodError([{
+      code: "custom",
+      path: ["events_json", missingWorkStartDateIndex, "new_start_date"],
+      message: `${eventType(events[missingWorkStartDateIndex]!)} events must include new_start_date`
+    }]);
+  }
 
-  throw new ZodError([{
-    code: "custom",
-    path: ["events_json", missingWorkStartDateIndex, "new_start_date"],
-    message: "work_start_delayed events must include new_start_date"
-  }]);
+  const missingActivityIdIndex = events.findIndex((event) => eventType(event) === "activity_start_delayed" && !activityStartEventActivityId(event));
+  if (missingActivityIdIndex !== -1) {
+    throw new ZodError([{
+      code: "custom",
+      path: ["events_json", missingActivityIdIndex, "atividade_id"],
+      message: "activity_start_delayed events must include atividade_id"
+    }]);
+  }
 }
 
 function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
@@ -172,13 +188,31 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
     const type = eventType(event);
     return type === "work_start_delayed" || type === "from_date_delayed";
   });
-  if (!workStartEvent) return payload;
+  const activityStartEvents = payload.events_json.filter((event) => eventType(event) === "activity_start_delayed");
+
+  const activityStartDateById = new Map(
+    activityStartEvents
+      .map((event) => {
+        return [activityStartEventActivityId(event), eventDateOnly(eventDate(event))] as const;
+      })
+      .filter(([activityId, date]) => activityId && date)
+  );
+  const atividades_json = activityStartDateById.size
+    ? payload.atividades_json.map((activity) => {
+      const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+      const recalculatedStartDate = activityStartDateById.get(activityId);
+      return recalculatedStartDate ? { ...activity, __recalculateStartDate: recalculatedStartDate } : activity;
+    })
+    : payload.atividades_json;
+
+  if (!workStartEvent) return { ...payload, atividades_json };
 
   const newStartDate = recalculatedStartDate(workStartEvent, payload);
-  if (!newStartDate || !payload.obra_json[0]) return payload;
+  if (!newStartDate || !payload.obra_json[0]) return { ...payload, atividades_json };
 
   return {
     ...payload,
+    atividades_json,
     obra_json: [
       {
         ...payload.obra_json[0],

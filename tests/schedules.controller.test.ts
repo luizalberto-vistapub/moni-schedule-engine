@@ -136,6 +136,37 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("applies activity start delayed recalculation by activity id", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "",
+        dias_trabalho_semana: 6,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-08-01T03:00:00.000Z" }],
+        events_json: [{
+          type: "activity_start_delayed",
+          id_atividade_obra_externo: "compra_1_2026-08-01_1",
+          atividade_id: "compra_1",
+          new_start_date: "Aug 11, 2026 12:00 am"
+        }],
+        atividades_json: [
+          { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "compra_1", nome: "Limite de compra", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "Limite de compra" }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
+    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
+      data_programada: "2026-08-11T12:00:00.000Z"
+    });
+  });
+
   it("requires a different previous version for recalculation", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
