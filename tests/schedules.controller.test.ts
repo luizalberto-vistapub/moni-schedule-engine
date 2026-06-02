@@ -124,16 +124,26 @@ describe("schedule controllers", () => {
         dias_trabalho_semana: 6,
         obra_json: [{ id: "obra_1", dataInicio: "2026-08-11T03:00:00.000Z" }],
         events_json: [{ type: "from_date_delayed", new_start_date: "Aug 11, 2026 12:00 am", days: 2 }],
-        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+        atividades_json: [
+          { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1 },
+          { id: "serv_3", nome: "Servico 3", tipo: "Servico", ordem: 3, duracao: 1 },
+          { id: "serv_4", nome: "Servico 4", tipo: "Servico", ordem: 4, duracao: 1 }
+        ]
       }));
 
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
 
     const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    expect(JSON.parse(cronogramaLinhaBody.split("\n")[0]!)).toMatchObject({
-      data_programada: "2026-08-13T12:00:00.000Z"
-    });
+    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.data_programada)).toEqual([
+      "2026-08-13T12:00:00.000Z",
+      "2026-08-14T12:00:00.000Z",
+      "2026-08-15T12:00:00.000Z",
+      "2026-08-17T12:00:00.000Z"
+    ]);
+    expect(records.some((record) => record.data_programada.startsWith("2026-08-11") || record.data_programada.startsWith("2026-08-12"))).toBe(false);
   });
 
   it("applies activity start delayed recalculation by activity id", async () => {
