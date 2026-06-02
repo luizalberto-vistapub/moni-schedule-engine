@@ -398,6 +398,43 @@ describe("schedule engine", () => {
     ]);
   });
 
+  it("encadeia compras por item de composicao sem misturar produtos do mesmo servico", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 6,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-07-01T03:00:00.000Z" }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "item_compra_1", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_1", "nome produto simples": "PS DNL 1" },
+        { "unique id": "item_compra_3", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_3", "nome produto simples": "PS DNL 3" },
+        { "unique id": "item_servico", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_mo", "nome produto simples": "PS DNL 4 (MO)" }
+      ],
+      atividades_json: [
+        { id: "aviso_1", nome: "Aviso PS1", tipo: "Compra", produto: "prod_1", ordem: 1, atividadeServicoAncoraId: "item_compra_1", etapaCompra: "Aviso de orçamento", diasAntecedencia: 25 },
+        { id: "limite_orcamento_1", nome: "Limite orcamento PS1", tipo: "Compra", produto: "prod_1", ordem: 1, atividadeServicoAncoraId: "item_compra_1", etapaCompra: "Limite de orçamento", diasAntecedencia: 25 },
+        { id: "limite_compra_1", nome: "Limite compra PS1", tipo: "Compra", produto: "prod_1", ordem: 1, atividadeServicoAncoraId: "item_compra_1", etapaCompra: "Limite de compra", diasAntecedencia: 25 },
+        { id: "recebimento_1", nome: "Recebimento PS1", tipo: "Compra", produto: "prod_1", ordem: 1, atividadeServicoAncoraId: "item_compra_1", etapaCompra: "Recebimento", diasAntecedencia: 25 },
+        { id: "aviso_3", nome: "Aviso PS3", tipo: "Compra", produto: "prod_3", ordem: 1, atividadeServicoAncoraId: "item_compra_3", etapaCompra: "Aviso de orçamento", diasAntecedencia: 30 },
+        { id: "limite_orcamento_3", nome: "Limite orcamento PS3", tipo: "Compra", produto: "prod_3", ordem: 1, atividadeServicoAncoraId: "item_compra_3", etapaCompra: "Limite de orçamento", diasAntecedencia: 30 },
+        { id: "limite_compra_3", nome: "Limite compra PS3", tipo: "Compra", produto: "prod_3", ordem: 1, atividadeServicoAncoraId: "item_compra_3", etapaCompra: "Limite de compra", diasAntecedencia: 30 },
+        { id: "recebimento_3", nome: "Recebimento PS3", tipo: "Compra", produto: "prod_3", ordem: 1, atividadeServicoAncoraId: "item_compra_3", etapaCompra: "Recebimento", diasAntecedencia: 30 },
+        { id: "servico_1", nome: "ATV DNL MO 1", tipo: "Servico", produto: "prod_mo", ordem: 8, duracao: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const datesByActivity = new Map(result.lines.map((line) => [line.atividadeId, line.data_programada]));
+
+    expect(datesByActivity.get("recebimento_1")).toBe("2026-06-02");
+    expect(datesByActivity.get("limite_compra_1")).toBe("2026-05-04");
+    expect(datesByActivity.get("limite_orcamento_1")).toBe("2026-04-04");
+    expect(datesByActivity.get("aviso_1")).toBe("2026-03-06");
+    expect(datesByActivity.get("recebimento_3")).toBe("2026-05-27");
+    expect(datesByActivity.get("limite_compra_3")).toBe("2026-04-22");
+    expect(datesByActivity.get("limite_orcamento_3")).toBe("2026-03-18");
+    expect(datesByActivity.get("aviso_3")).toBe("2026-02-11");
+    expect(datesByActivity.get("servico_1")).toBe("2026-07-01");
+  });
+
   it("formata codigo D-0 no dia anterior ao D+1", () => {
     const payload = normalizePayload(basePayload({
       dias_trabalho_semana: 6,

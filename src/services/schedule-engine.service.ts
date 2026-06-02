@@ -176,6 +176,12 @@ function comparePurchaseChainOrder(a: NormalizedActivity, b: NormalizedActivity)
   return purchaseStageOrder(a) - purchaseStageOrder(b) || compareAnchoredActivityOrder(a, b);
 }
 
+function purchaseChainKey(anchorId: string, activity: NormalizedActivity): string {
+  const activityAnchorId = activity.atividadeServicoAncoraId || "";
+  const purchaseItemId = activityAnchorId && activityAnchorId !== anchorId ? activityAnchorId : getActivityProductId(activity);
+  return `${anchorId}:${purchaseItemId || "__default__"}`;
+}
+
 function placeService(ctx: PlacementContext, service: NormalizedActivity, earliestStart: Date): void {
   const dependencyEnd = latestDependencyEndDate(ctx, service);
   let cursor = dependencyEnd ? laterDate(earliestStart, addBusinessDays(dependencyEnd, 1, ctx.payload.dias_trabalho_semana)) : earliestStart;
@@ -249,15 +255,17 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     return compositeId ? ctx.firstServiceByCompositeId.get(compositeId) || null : null;
   };
 
-  const purchasesByAnchor = new Map<string, { activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
+  const purchasesByChain = new Map<string, { anchorId: string; activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
   for (const activity of purchases) {
     const anchor = resolveAnchor(activity);
     const anchorId = anchor?.id;
     if (!anchorId) continue;
-    purchasesByAnchor.set(anchorId, [...(purchasesByAnchor.get(anchorId) || []), { activity, anchor }]);
+    const chainKey = purchaseChainKey(anchorId, activity);
+    purchasesByChain.set(chainKey, [...(purchasesByChain.get(chainKey) || []), { anchorId, activity, anchor }]);
   }
 
-  for (const [anchorId, purchaseEntries] of purchasesByAnchor) {
+  for (const purchaseEntries of purchasesByChain.values()) {
+    const anchorId = purchaseEntries[0].anchorId;
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
     let referenceDate = anchorStart;
     const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
