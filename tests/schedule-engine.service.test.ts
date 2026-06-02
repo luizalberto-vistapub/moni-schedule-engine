@@ -196,6 +196,9 @@ describe("schedule engine", () => {
       ["base", "2026-05-06"],
       ["dependente", "2026-05-07"]
     ]);
+    expect(result.lines.find((line) => line.atividadeId === "dependente")?.interdependenciasMasterIds).toEqual(
+      result.lines.filter((line) => line.atividadeId === "base").map((line) => line.atividade_obra_id_externo)
+    );
   });
 
   it("inicia uma ordem somente apos a ordem anterior terminar", () => {

@@ -51,7 +51,8 @@ describe("Bubble bulk persistence", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/cronogramalinha/bulk");
     expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
-    expect(String(fetchMock.mock.calls[0]![1]?.body)).not.toContain("[");
+    expect(() => JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).not.toThrow();
+    expect(Array.isArray(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body)))).toBe(false);
   });
 
   it("uses Bubble API version from the request body", async () => {
@@ -291,6 +292,7 @@ describe("Bubble bulk persistence", () => {
       equipe: "",
       nomeProduto: "",
       ambiente: "",
+      interdependenciasMasterIds: line.interdependenciasMasterIds,
       "ambiente x item composicao": "",
       "ambiente x obra": "amb_1",
       icon: ""
@@ -340,6 +342,25 @@ describe("Bubble bulk persistence", () => {
     expect(records.map((record) => record.copyDuracao)).toEqual([false, true]);
     expect(records[0]).not.toHaveProperty("copyduracao");
     expect(records[0]).not.toHaveProperty("copyduracao_boolean");
+  });
+
+  it("sends atividade obra dependency external ids in bulk records", () => {
+    const payload = normalizePayload(basePayload({
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      atividades_json: [
+        { id: "base", nome: "Base", tipo: "Servico", ordem: 1, duracao: 2 },
+        { id: "dependente", nome: "Dependente", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["base"] }
+      ]
+    }));
+    const result = runScheduleEngine(payload);
+
+    const records = buildAtividadeObraRecords(payload, result.lines);
+    const dependentRecord = records.find((record) => record.atividade === "dependente");
+
+    expect(dependentRecord?.interdependenciasMasterIds).toEqual(
+      result.lines.filter((line) => line.atividadeId === "base").map((line) => line.atividade_obra_id_externo)
+    );
   });
 
   it("maps legacy Atividade x Obra typename env to Bubble API typename", async () => {

@@ -244,6 +244,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       equipe: line.equipe || "",
       atividade: line.atividadeId,
       id_atividade_obra_externo: line.atividade_obra_id_externo,
+      interdependenciasMasterIds: line.interdependenciasMasterIds,
       nomeAtividade: line.nome_atividade,
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",

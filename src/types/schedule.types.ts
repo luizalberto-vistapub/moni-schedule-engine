@@ -24,6 +24,7 @@ export interface ScheduleLine {
   ordem: number;
   clone_index: number;
   anchor_service_name: string | null;
+  interdependenciasMasterIds: string[];
   raw: Record<string, unknown>;
 }
 

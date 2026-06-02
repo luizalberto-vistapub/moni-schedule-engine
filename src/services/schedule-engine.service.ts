@@ -116,6 +116,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     ordem: activity.ordem,
     clone_index: cloneIndex,
     anchor_service_name: anchor?.nome || null,
+    interdependenciasMasterIds: [],
     raw: activity.raw
   };
 }
@@ -308,6 +309,19 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
   }
 }
 
+function populateAtividadeObraDependencies(ctx: PlacementContext): void {
+  const lineIdsByActivity = new Map<string, string[]>();
+  for (const line of ctx.lines) {
+    lineIdsByActivity.set(line.atividadeId, [...(lineIdsByActivity.get(line.atividadeId) || []), line.atividade_obra_id_externo]);
+  }
+
+  const activityDependenciesById = new Map(ctx.payload.atividades_json.map((activity) => [activity.id, activity.interdependenciasMasterIds]));
+  for (const line of ctx.lines) {
+    const dependencyActivityIds = activityDependenciesById.get(line.atividadeId) || [];
+    line.interdependenciasMasterIds = dependencyActivityIds.flatMap((dependencyId) => lineIdsByActivity.get(dependencyId) || []);
+  }
+}
+
 function compareServiceOrder(a: NormalizedActivity, b: NormalizedActivity): number {
   return (
     a.ordem - b.ordem
@@ -358,6 +372,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
 
   placeServices(ctx, services);
   placeAnchoredActivities(ctx, anchored, servicesById);
+  populateAtividadeObraDependencies(ctx);
   ctx.lines.sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
 
   return { lines: ctx.lines, validations: { warnings: [], errors: [] } };
