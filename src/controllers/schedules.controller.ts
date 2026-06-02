@@ -2,10 +2,12 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError } from "zod";
 import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
+import { addBusinessDays } from "../services/business-days.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
 import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/response-builder.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode, SchedulePayload } from "../types/payload.types.js";
+import { formatDateOnly, parseDateOnly } from "../utils/dates.js";
 
 const RECALCULATE_EVENT_TYPES = new Set([
   "work_start_delayed",
@@ -126,9 +128,34 @@ function eventDate(event: Record<string, unknown>): string {
   return stringValue(field(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "to"));
 }
 
+function eventDays(event: Record<string, unknown>): number {
+  const value = field(event, "days", "dias", "duration_days", "durationDays");
+  const days = typeof value === "number" ? value : Number(stringValue(value));
+  return Number.isFinite(days) ? Math.max(0, Math.trunc(days)) : 0;
+}
+
+function eventDateOnly(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function recalculatedStartDate(event: Record<string, unknown>, payload: SchedulePayload): string {
+  const dateOnly = eventDateOnly(eventDate(event));
+  if (eventType(event) !== "from_date_delayed") return dateOnly;
+  return formatDateOnly(addBusinessDays(parseDateOnly(dateOnly), eventDays(event), payload.dias_trabalho_semana || 5));
+}
+
 function validateRecalculateEventFields(mode: ScheduleMode, events: Record<string, unknown>[]): void {
   if (mode !== "recalculate") return;
-  const missingWorkStartDateIndex = events.findIndex((event) => eventType(event) === "work_start_delayed" && !eventDate(event));
+  const missingWorkStartDateIndex = events.findIndex((event) => {
+    const type = eventType(event);
+    return (type === "work_start_delayed" || type === "from_date_delayed") && !eventDate(event);
+  });
   if (missingWorkStartDateIndex === -1) return;
 
   throw new ZodError([{
@@ -141,10 +168,13 @@ function validateRecalculateEventFields(mode: ScheduleMode, events: Record<strin
 function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
   if (payload.mode !== "recalculate" || !payload.events_json.length) return payload;
 
-  const workStartEvent = payload.events_json.find((event) => eventType(event) === "work_start_delayed");
+  const workStartEvent = payload.events_json.find((event) => {
+    const type = eventType(event);
+    return type === "work_start_delayed" || type === "from_date_delayed";
+  });
   if (!workStartEvent) return payload;
 
-  const newStartDate = eventDate(workStartEvent);
+  const newStartDate = recalculatedStartDate(workStartEvent, payload);
   if (!newStartDate || !payload.obra_json[0]) return payload;
 
   return {
