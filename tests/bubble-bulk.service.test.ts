@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, persistScheduleBulks } from "../src/services/bubble-bulk.service.js";
+import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, buildEventoCronogramaRecords, persistScheduleBulks } from "../src/services/bubble-bulk.service.js";
 import { normalizePayload } from "../src/services/normalize-payload.service.js";
 import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 import { basePayload } from "./test-helpers.js";
@@ -21,6 +21,7 @@ describe("Bubble bulk persistence", () => {
     delete process.env.BUBBLE_BULK_BATCH_SIZE;
     delete process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE;
     delete process.env.BUBBLE_ATIVIDADE_OBRA_TYPE;
+    delete process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE;
   });
 
   function payloadWithOneLine(overrides: Record<string, unknown> = {}) {
@@ -86,6 +87,7 @@ describe("Bubble bulk persistence", () => {
   it("allows overriding Bubble Data API type names", async () => {
     process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE = "custom_cronograma_linha";
     process.env.BUBBLE_ATIVIDADE_OBRA_TYPE = "custom_atividade_obra";
+    process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE = "custom_evento_cronograma";
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
       ok: true,
       text: async () => ""
@@ -97,6 +99,69 @@ describe("Bubble bulk persistence", () => {
 
     expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_cronograma_linha/bulk");
     expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_atividade_obra/bulk");
+  });
+
+  it("builds active EventoCronograma records from old and new events", () => {
+    const { payload } = payloadWithOneLine({
+      events_old: [{
+        tipo: "activity_start_delayed",
+        atividade: "atividade_1",
+        id_atividade_obra_externo: "atividade_1_2026-05-04_1",
+        data: "2026-05-08"
+      }],
+      events_json: [{
+        type: "activity_start_delayed",
+        atividade_id: "atividade_2",
+        id_atividade_obra_externo: "atividade_2_2026-05-04_1",
+        new_start_date: "2026-05-11"
+      }]
+    });
+
+    expect(buildEventoCronogramaRecords(payload)).toEqual([
+      {
+        atividade: "atividade_1",
+        "atividade x obra": "",
+        cronograma: "cronograma_1",
+        data: "2026-05-08T12:00:00.000Z",
+        dias: 0,
+        id_atividade_obra_externo: "atividade_1_2026-05-04_1",
+        tipo: "activity_start_delayed",
+        versaoCronograma: "versao_1"
+      },
+      {
+        atividade: "atividade_2",
+        "atividade x obra": "",
+        cronograma: "cronograma_1",
+        data: "2026-05-11T12:00:00.000Z",
+        dias: 0,
+        id_atividade_obra_externo: "atividade_2_2026-05-04_1",
+        tipo: "activity_start_delayed",
+        versaoCronograma: "versao_1"
+      }
+    ]);
+  });
+
+  it("posts EventoCronograma bulk when active events exist", async () => {
+    process.env.BUBBLE_BULK_BATCH_SIZE = "500";
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      text: async () => ""
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine({
+      events_json: [{ type: "work_start_delayed", new_start_date: "2026-05-08" }]
+    });
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/eventocronograma/bulk");
+    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toMatchObject({
+      cronograma: "cronograma_1",
+      data: "2026-05-08T12:00:00.000Z",
+      tipo: "work_start_delayed",
+      versaoCronograma: "versao_1"
+    });
   });
 
   it("throws when Bubble returns a row-level status error", async () => {

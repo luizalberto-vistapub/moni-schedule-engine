@@ -18,6 +18,7 @@ export const payloadSchema = z.object({
   obra_ambiente_item_composicao_json: recordArray,
   atividades_json: z.array(z.record(z.unknown())).default([]),
   atividade_obra_json: recordArray,
+  events_old: recordArray,
   events_json: recordArray
 }).passthrough() as unknown as z.ZodType<SchedulePayload>;
 

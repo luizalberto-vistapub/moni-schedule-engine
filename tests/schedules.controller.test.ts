@@ -177,6 +177,52 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("keeps previous activity start delays from events_old during recalculation", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_3",
+        previous_version_id: "versao_2",
+        mode: "",
+        dias_trabalho_semana: 6,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-08-01T03:00:00.000Z" }],
+        events_old: [{
+          tipo: "activity_start_delayed",
+          atividade: "compra_1",
+          id_atividade_obra_externo: "compra_1_2026-08-01_1",
+          data: "2026-08-11"
+        }],
+        events_json: [{
+          type: "activity_start_delayed",
+          atividade_id: "compra_2",
+          id_atividade_obra_externo: "compra_2_2026-08-01_1",
+          new_start_date: "2026-08-12"
+        }],
+        atividades_json: [
+          { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "compra_1", nome: "Limite de compra 1", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "Limite de compra" },
+          { id: "compra_2", nome: "Limite de compra 2", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "Limite de compra" }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
+    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
+      data_programada: "2026-08-11T12:00:00.000Z"
+    });
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_2_"))).toMatchObject({
+      data_programada: "2026-08-12T12:00:00.000Z"
+    });
+
+    const eventoCronogramaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[2]![1]!.body);
+    const eventRecords = eventoCronogramaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventRecords.map((record) => record.atividade)).toEqual(["compra_1", "compra_2"]);
+    expect(eventRecords.every((record) => record.versaoCronograma === "versao_3")).toBe(true);
+  });
+
   it("requires a different previous version for recalculation", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

@@ -30,6 +30,7 @@ BUBBLE_API_BASE_URL=https://moni-29694.bubbleapps.io
 BUBBLE_BULK_BATCH_SIZE=500
 BUBBLE_CRONOGRAMA_LINHA_TYPE=cronogramalinha
 BUBBLE_ATIVIDADE_OBRA_TYPE=atividadexobra
+BUBBLE_EVENTO_CRONOGRAMA_TYPE=eventocronograma
 ```
 
 Sem `BUBBLE_API_TOKEN`, o servidor retorna erro de configuração e não responde `201`, porque `201 Created` só deve acontecer depois da persistência no Bubble.
@@ -74,6 +75,7 @@ curl -X POST http://localhost:3000/api/v1/schedules/generate \
       { "id": "serv_1", "nome": "Instalar piso", "tipo": "Servico", "ordem": 1, "duracao": 2, "duracaoVariavel": true, "quantidadeBase": 10, "peso": 5, "equipe": "Equipe A" }
     ],
     "atividade_obra_json": [],
+    "events_old": [],
     "events_json": []
   }'
 ```
@@ -88,7 +90,14 @@ O payload precisa incluir o `unique id` da `VersaoCronograma` em `versao_cronogr
 
 `POST /api/v1/schedules/recalculate` recalcula o cronograma completo e persiste os novos registros por bulk create, usando `versao_cronograma_unique_id` como a nova `VersaoCronograma`. O payload também deve enviar `previous_version_id` com a versão anterior; os dois ids precisam ser diferentes.
 
-O servidor só responde `ok: true` depois que os bulks de `cronogramalinha` e `atividadexobra` terminam com sucesso. No Bubble, apague os registros antigos apenas depois desse `ok: true`.
+O servidor só responde `ok: true` depois que os bulks de `cronogramalinha`, `atividadexobra` e, quando houver eventos ativos, `eventocronograma` terminam com sucesso. No Bubble, apague os registros antigos apenas depois desse `ok: true`.
+
+Para recálculos sucessivos, envie:
+
+- `events_old`: eventos ativos herdados da `previous_version_id`, normalmente consultados em `EventoCronograma`.
+- `events_json`: eventos novos da chamada atual.
+
+O servidor aplica `events_old + events_json` no recálculo e persiste o conjunto ativo de eventos em `eventocronograma` apontando para a nova `versaoCronograma`. Assim uma segunda mudança não remove uma mudança manual anterior.
 
 Tipos aceitos em `events_json`:
 

@@ -107,6 +107,7 @@ export interface SchedulePayload {
   obra_ambiente_item_composicao_json?: ObraAmbienteItemComposicaoPayload[];
   atividades_json: ActivityPayload[];
   atividade_obra_json: Record<string, unknown>[];
+  events_old: Record<string, unknown>[];
   events_json: Record<string, unknown>[];
 }
 

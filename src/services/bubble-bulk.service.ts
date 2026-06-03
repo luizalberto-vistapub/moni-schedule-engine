@@ -7,6 +7,7 @@ const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
+const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
 
 interface BubbleBulkConfig {
@@ -16,6 +17,7 @@ interface BubbleBulkConfig {
   batchSize: number;
   cronogramaLinhaType: string;
   atividadeObraType: string;
+  eventoCronogramaType: string;
 }
 
 interface PersistScheduleOptions {
@@ -70,7 +72,8 @@ function readConfig(): BubbleBulkConfig {
     version: process.env.BUBBLE_API_VERSION || DEFAULT_BUBBLE_API_VERSION,
     batchSize: Number.isFinite(rawBatchSize) && rawBatchSize > 0 ? Math.floor(rawBatchSize) : DEFAULT_BATCH_SIZE,
     cronogramaLinhaType: process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE || DEFAULT_CRONOGRAMA_LINHA_TYPE,
-    atividadeObraType: normalizeAtividadeObraTypeName(process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE)
+    atividadeObraType: normalizeAtividadeObraTypeName(process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE),
+    eventoCronogramaType: process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE || DEFAULT_EVENTO_CRONOGRAMA_TYPE
   };
 }
 
@@ -161,6 +164,41 @@ function toBubbleDate(value: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T12:00:00.000Z`;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+function eventType(event: Record<string, unknown>): string | null {
+  return stringValue(recordValue(event, "type", "tipo"));
+}
+
+function eventDate(event: Record<string, unknown>): string | null {
+  return stringValue(recordValue(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "data", "from", "to"));
+}
+
+function eventDays(event: Record<string, unknown>): number | null {
+  const value = recordValue(event, "days", "dias", "duration_days", "durationDays");
+  const days = typeof value === "number" ? value : Number(stringValue(value));
+  return Number.isFinite(days) ? Math.trunc(days) : null;
+}
+
+function eventActivityId(event: Record<string, unknown>): string | null {
+  const activityId = stringValue(recordValue(event, "atividade_id", "activity_id", "atividade"));
+  if (activityId) return activityId;
+  return stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"))?.replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "") || null;
+}
+
+function activeEventKey(event: Record<string, unknown>, index: number): string {
+  const type = eventType(event) || `event_${index}`;
+  if (type === "activity_start_delayed") return `${type}:${eventActivityId(event) || stringValue(recordValue(event, "id_atividade_obra_externo")) || index}`;
+  if (type === "work_start_delayed" || type === "from_date_delayed") return type;
+  return `${type}:${stringValue(recordValue(event, "_id", "id", "unique id")) || index}`;
+}
+
+function activeScheduleEvents(payload: NormalizedSchedulePayload): Record<string, unknown>[] {
+  const activeEvents = new Map<string, Record<string, unknown>>();
+  [...payload.events_old, ...payload.events_json].forEach((event, index) => {
+    activeEvents.set(activeEventKey(event, index), event);
+  });
+  return [...activeEvents.values()];
 }
 
 function ndjson(records: Record<string, unknown>[]): string {
@@ -283,6 +321,30 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || ""
     };
+  });
+}
+
+export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload): Record<string, unknown>[] {
+  const versionId = versaoCronogramaId(payload);
+  if (!versionId) return [];
+
+  return activeScheduleEvents(payload).flatMap((event) => {
+    const type = eventType(event);
+    if (!type) return [];
+
+    const date = eventDate(event);
+    const record: Record<string, unknown> = {
+      atividade: eventActivityId(event) || "",
+      "atividade x obra": stringValue(recordValue(event, "atividade x obra", "atividade_obra", "atividade_obra_id")) || "",
+      cronograma: payload.cronograma_unique_id,
+      data: date ? toBubbleDate(date) : "",
+      dias: eventDays(event) ?? 0,
+      id_atividade_obra_externo: stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")) || "",
+      tipo: type,
+      versaoCronograma: versionId
+    };
+
+    return [record];
   });
 }
 
@@ -456,6 +518,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
 
   const cronogramaLinhaRecords = buildCronogramaLinhaRecords(payload, lines);
   const atividadeObraRecords = buildAtividadeObraRecords(payload, lines);
+  const eventoCronogramaRecords = buildEventoCronogramaRecords(payload);
 
   if (!cronogramaLinhaRecords.length || !atividadeObraRecords.length || !requestedBubbleApiVersion) {
     const invalidFields = [
@@ -496,6 +559,9 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
 
   await postBulk(config.cronogramaLinhaType, cronogramaLinhaRecords, config, options);
   const persistedAtividadeObraRecords = await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
+  if (eventoCronogramaRecords.length) {
+    await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);
+  }
   const dependencyPatches = buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords);
   await patchAtividadeObraDependencies(dependencyPatches, config, options);
 }

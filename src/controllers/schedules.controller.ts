@@ -45,7 +45,7 @@ function modeFromRequest(req: ObservedRequest, fallback: ScheduleMode): Schedule
 }
 
 function eventType(event: Record<string, unknown>): string {
-  return typeof event.type === "string" ? event.type.trim() : "";
+  return stringValue(field(event, "type", "tipo"));
 }
 
 function stringValue(value: unknown): string {
@@ -97,19 +97,19 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
   if (issues.length) throw new ZodError(issues);
 }
 
-function validateRecalculateEvents(mode: ScheduleMode, events: Record<string, unknown>[]): void {
+function validateRecalculateEvents(mode: ScheduleMode, events: Record<string, unknown>[], pathRoot = "events_json"): void {
   if (mode !== "recalculate") return;
   const invalidEventIndex = events.findIndex((event) => !eventType(event));
   if (invalidEventIndex === -1) return;
 
   throw new ZodError([{
     code: "custom",
-    path: ["events_json", invalidEventIndex, "type"],
-    message: "events_json items must include a non-empty type when mode is recalculate"
+    path: [pathRoot, invalidEventIndex, "type"],
+    message: `${pathRoot} items must include a non-empty type when mode is recalculate`
   }]);
 }
 
-function validateRecalculateEventTypes(mode: ScheduleMode, events: Record<string, unknown>[]): void {
+function validateRecalculateEventTypes(mode: ScheduleMode, events: Record<string, unknown>[], pathRoot = "events_json"): void {
   if (mode !== "recalculate") return;
   const unsupportedEventIndex = events.findIndex((event) => {
     const type = eventType(event);
@@ -119,13 +119,13 @@ function validateRecalculateEventTypes(mode: ScheduleMode, events: Record<string
 
   throw new ZodError([{
     code: "custom",
-    path: ["events_json", unsupportedEventIndex, "type"],
+    path: [pathRoot, unsupportedEventIndex, "type"],
     message: `Unsupported recalculate event type: ${eventType(events[unsupportedEventIndex]!)}`
   }]);
 }
 
 function eventDate(event: Record<string, unknown>): string {
-  return stringValue(field(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "from", "to"));
+  return stringValue(field(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "data", "from", "to"));
 }
 
 function eventDays(event: Record<string, unknown>): number {
@@ -157,7 +157,7 @@ function activityStartEventActivityId(event: Record<string, unknown>): string {
     .replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "");
 }
 
-function validateRecalculateEventFields(mode: ScheduleMode, events: Record<string, unknown>[]): void {
+function validateRecalculateEventFields(mode: ScheduleMode, events: Record<string, unknown>[], pathRoot = "events_json"): void {
   if (mode !== "recalculate") return;
   const missingWorkStartDateIndex = events.findIndex((event) => {
     const type = eventType(event);
@@ -166,7 +166,7 @@ function validateRecalculateEventFields(mode: ScheduleMode, events: Record<strin
   if (missingWorkStartDateIndex !== -1) {
     throw new ZodError([{
       code: "custom",
-      path: ["events_json", missingWorkStartDateIndex, "new_start_date"],
+      path: [pathRoot, missingWorkStartDateIndex, "new_start_date"],
       message: `${eventType(events[missingWorkStartDateIndex]!)} events must include new_start_date`
     }]);
   }
@@ -175,20 +175,30 @@ function validateRecalculateEventFields(mode: ScheduleMode, events: Record<strin
   if (missingActivityIdIndex !== -1) {
     throw new ZodError([{
       code: "custom",
-      path: ["events_json", missingActivityIdIndex, "atividade_id"],
+      path: [pathRoot, missingActivityIdIndex, "atividade_id"],
       message: "activity_start_delayed events must include atividade_id"
     }]);
   }
 }
 
-function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
-  if (payload.mode !== "recalculate" || !payload.events_json.length) return payload;
+function activeRecalculateEvents(payload: SchedulePayload): Record<string, unknown>[] {
+  return [...payload.events_old, ...payload.events_json];
+}
 
-  const workStartEvent = payload.events_json.find((event) => {
-    const type = eventType(event);
-    return type === "work_start_delayed" || type === "from_date_delayed";
-  });
-  const activityStartEvents = payload.events_json.filter((event) => eventType(event) === "activity_start_delayed");
+function lastWorkStartEvent(events: Record<string, unknown>[]): Record<string, unknown> | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const type = eventType(events[index]!);
+    if (type === "work_start_delayed" || type === "from_date_delayed") return events[index];
+  }
+  return undefined;
+}
+
+function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
+  const events = activeRecalculateEvents(payload);
+  if (payload.mode !== "recalculate" || !events.length) return payload;
+
+  const workStartEvent = lastWorkStartEvent(events);
+  const activityStartEvents = events.filter((event) => eventType(event) === "activity_start_delayed");
 
   const activityStartDateById = new Map(
     activityStartEvents
@@ -233,8 +243,11 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     const parsedPayload = payloadSchema.parse(req.body);
     const requestMode = modeFromRequest(req, mode);
     validateRecalculateEvents(requestMode, parsedPayload.events_json);
+    validateRecalculateEvents(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateEventTypes(requestMode, parsedPayload.events_json);
+    validateRecalculateEventTypes(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateEventFields(requestMode, parsedPayload.events_json);
+    validateRecalculateEventFields(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateContract(requestMode, parsedPayload);
     const payload = normalizePayload(applyRecalculateEvents({ ...parsedPayload, mode: requestMode }));
 
@@ -243,7 +256,8 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
       activitiesCount: payload.atividades_json.length,
-      eventsCount: payload.events_json.length
+      eventsCount: payload.events_json.length,
+      oldEventsCount: payload.events_old.length
     }, "schedule calculation started");
 
     const result = runScheduleEngine(payload);

@@ -16,6 +16,7 @@ export function basePayload(overrides: Partial<SchedulePayload> = {}): ScheduleP
     obra_ambiente_produto_json: [{ id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Piso", quantidade: 12 }],
     atividades_json: [],
     atividade_obra_json: [],
+    events_old: [],
     events_json: [],
     ...overrides
   };
