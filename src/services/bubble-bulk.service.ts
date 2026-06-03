@@ -361,7 +361,6 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
     const date = eventDate(event);
     const record: Record<string, unknown> = {
       atividade: eventActivityId(event) || "",
-      "atividade x obra": stringValue(recordValue(event, "atividade x obra", "atividade_obra", "atividade_obra_id")) || "",
       cronograma: payload.cronograma_unique_id,
       data: date ? toBubbleDate(date) : "",
       dias: eventDays(event) ?? 0,

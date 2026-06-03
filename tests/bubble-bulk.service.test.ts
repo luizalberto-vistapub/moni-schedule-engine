@@ -120,7 +120,6 @@ describe("Bubble bulk persistence", () => {
     expect(buildEventoCronogramaRecords(payload)).toEqual([
       {
         atividade: "atividade_1",
-        "atividade x obra": "",
         cronograma: "cronograma_1",
         data: "2026-05-08T12:00:00.000Z",
         dias: 0,
@@ -131,7 +130,6 @@ describe("Bubble bulk persistence", () => {
       },
       {
         atividade: "atividade_2",
-        "atividade x obra": "",
         cronograma: "cronograma_1",
         data: "2026-05-11T12:00:00.000Z",
         dias: 0,
