@@ -45,7 +45,20 @@ function modeFromRequest(req: ObservedRequest, fallback: ScheduleMode): Schedule
 }
 
 function eventType(event: Record<string, unknown>): string {
-  return stringValue(field(event, "type", "tipo"));
+  return normalizeEventType(stringValue(field(event, "type", "tipo")));
+}
+
+function normalizeEventType(type: string): string {
+  const types: Record<string, string> = {
+    "Adiar início da obra": "work_start_delayed",
+    "Adiar inicio da obra": "work_start_delayed",
+    "Adiar início da atividade": "activity_start_delayed",
+    "Adiar inicio da atividade": "activity_start_delayed",
+    "Paralisar a obra": "from_date_delayed",
+    "Inserida nova atividade": "activity_inserted"
+  };
+
+  return types[type] || type;
 }
 
 function stringValue(value: unknown): string {

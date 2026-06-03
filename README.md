@@ -99,6 +99,13 @@ Para recálculos sucessivos, envie:
 
 O servidor aplica `events_old + events_json` no recálculo e persiste o conjunto ativo de eventos em `eventocronograma` apontando para a nova `versaoCronograma`. Assim uma segunda mudança não remove uma mudança manual anterior.
 
+No payload, os eventos novos podem usar os códigos internos abaixo. Eventos herdados de `EventoCronograma` também podem chegar com o `tipo` em português, porque o campo no Bubble é um option set. No bulk de `eventocronograma`, o servidor sempre grava o `tipo` com o valor em português aceito pelo Bubble:
+
+- `work_start_delayed` -> `Adiar início da obra`
+- `activity_start_delayed` -> `Adiar início da atividade`
+- `from_date_delayed` -> `Paralisar a obra`
+- `activity_inserted` -> `Inserida nova atividade`
+
 Tipos aceitos em `events_json`:
 
 - `work_start_delayed`: aceita `new_start_date` e aplica essa data em `obra_json[0].dataInicio` antes de gerar o novo cronograma.

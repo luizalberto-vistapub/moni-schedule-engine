@@ -104,7 +104,7 @@ describe("Bubble bulk persistence", () => {
   it("builds active EventoCronograma records from old and new events", () => {
     const { payload } = payloadWithOneLine({
       events_old: [{
-        tipo: "activity_start_delayed",
+        tipo: "Adiar início da atividade",
         atividade: "atividade_1",
         id_atividade_obra_externo: "atividade_1_2026-05-04_1",
         data: "2026-05-08"
@@ -125,7 +125,7 @@ describe("Bubble bulk persistence", () => {
         data: "2026-05-08T12:00:00.000Z",
         dias: 0,
         id_atividade_obra_externo: "atividade_1_2026-05-04_1",
-        tipo: "activity_start_delayed",
+        tipo: "Adiar início da atividade",
         obra: "obra_1",
         versaoCronograma: "versao_1"
       },
@@ -136,7 +136,7 @@ describe("Bubble bulk persistence", () => {
         data: "2026-05-11T12:00:00.000Z",
         dias: 0,
         id_atividade_obra_externo: "atividade_2_2026-05-04_1",
-        tipo: "activity_start_delayed",
+        tipo: "Adiar início da atividade",
         obra: "obra_1",
         versaoCronograma: "versao_1"
       }
@@ -161,10 +161,28 @@ describe("Bubble bulk persistence", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toMatchObject({
       cronograma: "cronograma_1",
       data: "2026-05-08T12:00:00.000Z",
-      tipo: "work_start_delayed",
+      tipo: "Adiar início da obra",
       obra: "obra_1",
       versaoCronograma: "versao_1"
     });
+  });
+
+  it("maps EventoCronograma event types to Bubble option set display values", () => {
+    const { payload } = payloadWithOneLine({
+      events_json: [
+        { type: "work_start_delayed", new_start_date: "2026-05-08" },
+        { type: "activity_start_delayed", atividade_id: "atividade_1", new_start_date: "2026-05-09" },
+        { type: "from_date_delayed", from: "2026-05-10", days: 2 },
+        { type: "activity_inserted", atividade_id: "atividade_2" }
+      ]
+    });
+
+    expect(buildEventoCronogramaRecords(payload).map((record) => record.tipo)).toEqual([
+      "Adiar início da obra",
+      "Adiar início da atividade",
+      "Paralisar a obra",
+      "Inserida nova atividade"
+    ]);
   });
 
   it("throws when Bubble returns a row-level status error", async () => {

@@ -187,7 +187,7 @@ describe("schedule controllers", () => {
         dias_trabalho_semana: 6,
         obra_json: [{ id: "obra_1", dataInicio: "2026-08-01T03:00:00.000Z" }],
         events_old: [{
-          tipo: "activity_start_delayed",
+          tipo: "Adiar início da atividade",
           atividade: "compra_1",
           id_atividade_obra_externo: "compra_1_2026-08-01_1",
           data: "2026-08-11"

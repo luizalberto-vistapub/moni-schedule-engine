@@ -167,7 +167,32 @@ function toBubbleDate(value: string): string {
 }
 
 function eventType(event: Record<string, unknown>): string | null {
-  return stringValue(recordValue(event, "type", "tipo"));
+  const type = stringValue(recordValue(event, "type", "tipo"));
+  return type ? normalizeEventType(type) : null;
+}
+
+function normalizeEventType(type: string): string {
+  const types: Record<string, string> = {
+    "Adiar início da obra": "work_start_delayed",
+    "Adiar inicio da obra": "work_start_delayed",
+    "Adiar início da atividade": "activity_start_delayed",
+    "Adiar inicio da atividade": "activity_start_delayed",
+    "Paralisar a obra": "from_date_delayed",
+    "Inserida nova atividade": "activity_inserted"
+  };
+
+  return types[type] || type;
+}
+
+function bubbleScheduleEventType(type: string): string {
+  const types: Record<string, string> = {
+    work_start_delayed: "Adiar início da obra",
+    activity_start_delayed: "Adiar início da atividade",
+    from_date_delayed: "Paralisar a obra",
+    activity_inserted: "Inserida nova atividade"
+  };
+
+  return types[type] || type;
 }
 
 function eventDate(event: Record<string, unknown>): string | null {
@@ -341,7 +366,7 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
       data: date ? toBubbleDate(date) : "",
       dias: eventDays(event) ?? 0,
       id_atividade_obra_externo: stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")) || "",
-      tipo: type,
+      tipo: bubbleScheduleEventType(type),
       obra: currentObraId,
       versaoCronograma: versionId
     };
