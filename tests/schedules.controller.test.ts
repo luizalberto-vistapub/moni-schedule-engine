@@ -221,6 +221,7 @@ describe("schedule controllers", () => {
     const eventRecords = eventoCronogramaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(eventRecords.map((record) => record.atividade)).toEqual(["compra_1", "compra_2"]);
     expect(eventRecords.every((record) => record.versaoCronograma === "versao_3")).toBe(true);
+    expect(eventRecords.every((record) => record.obra === "obra_1")).toBe(true);
   });
 
   it("requires a different previous version for recalculation", async () => {

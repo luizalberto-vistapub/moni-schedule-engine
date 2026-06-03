@@ -326,7 +326,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
 
 export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload): Record<string, unknown>[] {
   const versionId = versaoCronogramaId(payload);
-  if (!versionId) return [];
+  const currentObraId = obraId(payload);
+  if (!versionId || !currentObraId) return [];
 
   return activeScheduleEvents(payload).flatMap((event) => {
     const type = eventType(event);
@@ -341,6 +342,7 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
       dias: eventDays(event) ?? 0,
       id_atividade_obra_externo: stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")) || "",
       tipo: type,
+      obra: currentObraId,
       versaoCronograma: versionId
     };
 

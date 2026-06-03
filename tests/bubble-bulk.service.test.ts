@@ -126,6 +126,7 @@ describe("Bubble bulk persistence", () => {
         dias: 0,
         id_atividade_obra_externo: "atividade_1_2026-05-04_1",
         tipo: "activity_start_delayed",
+        obra: "obra_1",
         versaoCronograma: "versao_1"
       },
       {
@@ -136,6 +137,7 @@ describe("Bubble bulk persistence", () => {
         dias: 0,
         id_atividade_obra_externo: "atividade_2_2026-05-04_1",
         tipo: "activity_start_delayed",
+        obra: "obra_1",
         versaoCronograma: "versao_1"
       }
     ]);
@@ -160,6 +162,7 @@ describe("Bubble bulk persistence", () => {
       cronograma: "cronograma_1",
       data: "2026-05-08T12:00:00.000Z",
       tipo: "work_start_delayed",
+      obra: "obra_1",
       versaoCronograma: "versao_1"
     });
   });
