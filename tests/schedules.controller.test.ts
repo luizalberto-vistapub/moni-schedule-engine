@@ -123,7 +123,7 @@ describe("schedule controllers", () => {
         mode: "",
         dias_trabalho_semana: 6,
         obra_json: [{ id: "obra_1", dataInicio: "2026-08-11T03:00:00.000Z" }],
-        events_json: [{ type: "from_date_delayed", new_start_date: "Aug 11, 2026 12:00 am", days: 2 }],
+        events_json: [{ type: "from_date_delayed", from: "Aug 11, 2026 12:00 am", days: 2 }],
         atividades_json: [
           { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
           { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1 },

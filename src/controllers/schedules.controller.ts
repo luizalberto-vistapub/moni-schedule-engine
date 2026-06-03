@@ -125,7 +125,7 @@ function validateRecalculateEventTypes(mode: ScheduleMode, events: Record<string
 }
 
 function eventDate(event: Record<string, unknown>): string {
-  return stringValue(field(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "to"));
+  return stringValue(field(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "from", "to"));
 }
 
 function eventDays(event: Record<string, unknown>): number {
