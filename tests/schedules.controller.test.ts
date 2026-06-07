@@ -146,6 +146,63 @@ describe("schedule controllers", () => {
     expect(records.some((record) => record.data_programada.startsWith("2026-08-11") || record.data_programada.startsWith("2026-08-12"))).toBe(false);
   });
 
+  it("preserves previous atividade obra dates before from date paralysis", async () => {
+    let fetchCallIndex = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const currentCall = fetchCallIndex;
+      fetchCallIndex += 1;
+      return {
+        ok: true,
+        text: async () => currentCall === 1 ? "{\"id\":\"ao_1\"}\n{\"id\":\"ao_2\"}\n{\"id\":\"ao_3\"}" : ""
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "",
+        dias_trabalho_semana: 6,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-08-10T03:00:00.000Z" }],
+        atividade_obra_json: [
+          { atividade: "serv_1", indice_clone: 1, dataInicioPrevista: "2026-08-10T12:00:00.000Z" },
+          { atividade: "serv_2", indice_clone: 1, dataInicioPrevista: "2026-08-11T12:00:00.000Z" },
+          { atividade: "serv_3", indice_clone: 1, dataInicioPrevista: "2026-08-12T12:00:00.000Z" }
+        ],
+        events_json: [{ type: "from_date_delayed", from: "2026-08-11", days: 2 }],
+        atividades_json: [
+          { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["serv_1"] },
+          { id: "serv_3", nome: "Servico 3", tipo: "Servico", ordem: 3, duracao: 1, interdependenciasMasterIds: ["serv_2"] }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
+    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.data_programada)).toEqual([
+      "2026-08-10T12:00:00.000Z",
+      "2026-08-13T12:00:00.000Z",
+      "2026-08-14T12:00:00.000Z"
+    ]);
+    expect(records.find((record) => record.nome_atividade === "Servico 1")).toMatchObject({
+      id_atividade_obra_externo: "serv_1_2026-08-10_1",
+      data_programada: "2026-08-10T12:00:00.000Z"
+    });
+
+    const atividadeObraBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[1]![1]!.body);
+    const atividadeObraRecords = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(atividadeObraRecords.find((record) => record.atividade === "serv_2")).toMatchObject({
+      id_atividade_obra_externo: "serv_2_2026-08-13_1"
+    });
+    expect(atividadeObraRecords.find((record) => record.atividade === "serv_3")).toMatchObject({
+      id_atividade_obra_externo: "serv_3_2026-08-14_1"
+    });
+  });
+
   it("applies activity start delayed recalculation by activity id", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

@@ -110,7 +110,7 @@ Tipos aceitos em `events_json`:
 
 - `work_start_delayed`: aceita `new_start_date` e aplica essa data em `obra_json[0].dataInicio` antes de gerar o novo cronograma.
 - `activity_start_delayed`: registra o motivo do recálculo; envie o payload completo já ajustado.
-- `from_date_delayed`: registra o motivo do recálculo; envie o payload completo já ajustado.
+- `from_date_delayed`: paralisa a obra a partir de uma data; o servidor usa `atividade_obra_json` como snapshot anterior para preservar atividades com data anterior à paralisação e desloca por `days` dias úteis apenas as linhas na data da paralisação ou depois dela.
 - `activity_inserted`: registra o motivo do recálculo; envie a nova atividade em `atividades_json` e as dependências atualizadas em `interdependenciasMasterIds`.
 
 ## CI

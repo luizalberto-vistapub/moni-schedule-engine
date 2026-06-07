@@ -7,7 +7,9 @@ import { normalizePayload, payloadSchema } from "../services/normalize-payload.s
 import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/response-builder.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode, SchedulePayload } from "../types/payload.types.js";
-import { formatDateOnly, parseDateOnly } from "../utils/dates.js";
+import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
+import { stableLineId } from "../utils/ids.js";
+import { differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 
 const RECALCULATE_EVENT_TYPES = new Set([
   "work_start_delayed",
@@ -198,10 +200,10 @@ function activeRecalculateEvents(payload: SchedulePayload): Record<string, unkno
   return [...payload.events_old, ...payload.events_json];
 }
 
-function lastWorkStartEvent(events: Record<string, unknown>[]): Record<string, unknown> | undefined {
+function lastEventOfType(events: Record<string, unknown>[], ...types: string[]): Record<string, unknown> | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const type = eventType(events[index]!);
-    if (type === "work_start_delayed" || type === "from_date_delayed") return events[index];
+    if (types.includes(type)) return events[index];
   }
   return undefined;
 }
@@ -210,7 +212,8 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
   const events = activeRecalculateEvents(payload);
   if (payload.mode !== "recalculate" || !events.length) return payload;
 
-  const workStartEvent = lastWorkStartEvent(events);
+  const scheduleStartEvent = lastEventOfType(events, "work_start_delayed", "from_date_delayed");
+  const workStartEvent = scheduleStartEvent && eventType(scheduleStartEvent) === "work_start_delayed" ? scheduleStartEvent : undefined;
   const activityStartEvents = events.filter((event) => eventType(event) === "activity_start_delayed");
 
   const activityStartDateById = new Map(
@@ -248,6 +251,122 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
   };
 }
 
+function recordDateOnly(record: Record<string, unknown>): string {
+  const date = stringValue(field(record, "dataInicioPrevista", "dataFimPrevista", "data_programada", "data", "date"));
+  return date ? eventDateOnly(date) : "";
+}
+
+function externalActivityParts(externalId: string): { activityId: string; cloneIndex: number } | null {
+  const match = externalId.match(/^(.*)_\d{4}-\d{2}-\d{2}_(\d+)$/);
+  if (!match) return null;
+  return {
+    activityId: match[1] || "",
+    cloneIndex: Number(match[2])
+  };
+}
+
+function activityRecordId(record: Record<string, unknown>): string {
+  const direct = stringValue(field(record, "atividade", "atividade_id", "activity_id", "atividadeId"));
+  if (direct) return direct;
+  const external = stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  return externalActivityParts(external)?.activityId || "";
+}
+
+function activityRecordCloneIndex(record: Record<string, unknown>): number {
+  const raw = field(record, "indice_clone", "clone_index", "cloneIndex");
+  const explicit = typeof raw === "number" ? raw : Number(stringValue(raw));
+  if (Number.isFinite(explicit) && explicit > 0) return Math.trunc(explicit);
+  const external = stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  return externalActivityParts(external)?.cloneIndex || 1;
+}
+
+function activityLineKey(activityId: string, cloneIndex: number): string {
+  return `${activityId}:${cloneIndex}`;
+}
+
+function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string): Map<string, string> {
+  const datesByActivity = new Map<string, string>();
+
+  for (const record of payload.atividade_obra_json) {
+    const date = recordDateOnly(record);
+    if (!date || date >= fromDate) continue;
+    const activityId = activityRecordId(record);
+    if (!activityId) continue;
+    datesByActivity.set(activityLineKey(activityId, activityRecordCloneIndex(record)), date);
+  }
+
+  return datesByActivity;
+}
+
+function obraStartDate(payload: SchedulePayload): Date | null {
+  const obra = payload.obra_json[0];
+  const date = stringValue(field(obra, "dataInicio", "data_inicio", "startDate"));
+  return date ? parseDateOnly(eventDateOnly(date)) : null;
+}
+
+function formatCodigoD(daysFromStart: number): string {
+  if (daysFromStart > 0) return `D+${daysFromStart}`;
+  if (daysFromStart === 0) return "D-0";
+  return `D${daysFromStart}`;
+}
+
+function withLineDate(line: ScheduleLine, date: string, payload: SchedulePayload): ScheduleLine {
+  const parsedDate = parseDateOnly(date);
+  const startDate = obraStartDate(payload);
+  return {
+    ...line,
+    atividade_obra_id_externo: stableLineId(line.atividadeId, date, line.clone_index),
+    data_programada: date,
+    codigo_d: startDate ? formatCodigoD(differenceInCalendarDays(startDate, parsedDate) + 1) : line.codigo_d,
+    dia_semana: weekdayName(parsedDate)
+  };
+}
+
+function refreshLineDependencies(payload: SchedulePayload, lines: ScheduleLine[]): ScheduleLine[] {
+  const lineIdsByActivity = new Map<string, string[]>();
+  for (const line of lines) {
+    lineIdsByActivity.set(line.atividadeId, [...(lineIdsByActivity.get(line.atividadeId) || []), line.atividade_obra_id_externo]);
+  }
+
+  const dependenciesByActivity = new Map(
+    payload.atividades_json.map((activity) => {
+      const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+      const dependencyIds = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [];
+      return [activityId, dependencyIds] as const;
+    })
+  );
+
+  return lines.map((line) => ({
+    ...line,
+    interdependenciasMasterIds: (dependenciesByActivity.get(line.atividadeId) || [])
+      .flatMap((dependencyId) => lineIdsByActivity.get(dependencyId) || [])
+  }));
+}
+
+function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const events = activeRecalculateEvents(payload);
+  if (payload.mode !== "recalculate" || !events.length) return result;
+
+  const scheduleStartEvent = lastEventOfType(events, "work_start_delayed", "from_date_delayed");
+  if (!scheduleStartEvent || eventType(scheduleStartEvent) !== "from_date_delayed") return result;
+
+  const fromDate = eventDateOnly(eventDate(scheduleStartEvent));
+  if (!fromDate) return result;
+
+  const previousDates = previousActivityDatesBefore(payload, fromDate);
+  const days = eventDays(scheduleStartEvent);
+  const lines = result.lines
+    .map((line) => {
+      const previousDate = previousDates.get(activityLineKey(line.atividadeId, line.clone_index));
+      if (previousDate) return withLineDate(line, previousDate, payload);
+      if (line.data_programada < fromDate || days === 0) return line;
+      return withLineDate(line, formatDateOnly(addBusinessDays(parseDateOnly(line.data_programada), days, payload.dias_trabalho_semana || 5)), payload);
+    })
+    .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
+
+  return { ...result, lines: refreshLineDependencies(payload, lines) };
+}
+
 async function handleSchedule(req: ObservedRequest, res: Response, mode: ScheduleMode) {
   const log = requestLog(req);
   const startedAt = new Date();
@@ -273,7 +392,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       oldEventsCount: payload.events_old.length
     }, "schedule calculation started");
 
-    const result = runScheduleEngine(payload);
+    const result = applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload));
     const response = buildScheduleResponse(result, startedAt, payload.previous_version_id || null);
 
     log?.info({
