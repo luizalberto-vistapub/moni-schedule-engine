@@ -166,6 +166,14 @@ function toBubbleDate(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
 }
 
+function atividadeObraNomeAtividade(line: ScheduleLine): string {
+  const activityName = line.nome_atividade.trim();
+  const productName = (line.produto || "").trim();
+  if (line.tipo !== "Projeto" || !productName || activityName.includes(productName)) return line.nome_atividade;
+  const separator = /[-:]\s*$/.test(activityName) ? " " : " - ";
+  return `${activityName}${separator}${productName}`;
+}
+
 function eventType(event: Record<string, unknown>): string | null {
   const type = stringValue(recordValue(event, "type", "tipo"));
   return type ? normalizeEventType(type) : null;
@@ -333,7 +341,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       equipe: line.equipe || "",
       atividade: line.atividadeId,
       id_atividade_obra_externo: line.atividade_obra_id_externo,
-      nomeAtividade: line.nome_atividade,
+      nomeAtividade: atividadeObraNomeAtividade(line),
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",
       obra: currentObraId,

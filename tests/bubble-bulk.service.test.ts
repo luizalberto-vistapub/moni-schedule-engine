@@ -458,6 +458,44 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("includes the contextual product in Projeto Atividade x Obra names", () => {
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      obra_ambiente_produto_json: [
+        { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto simples Vivi 1 - Serviço", quantidade: 1 }
+      ],
+      atividades_json: [
+        {
+          id: "serv_1",
+          nome: "Servico 1",
+          tipo: "Servico",
+          produto: "prod_1",
+          ordem: 1,
+          duracao: 1,
+          atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "pj 2p1 - 03/06", diasAntecedencia: 2 }]
+        },
+        { id: "proj_1", nome: "pj 2p1 - 03/06 - ", tipo: "Projeto", ordem: 1, duracao: 1, produto: "", atividadeServicoAncoraId: "" }
+      ]
+    }));
+    const result = runScheduleEngine(payload);
+    const projectLine = result.lines.find((line) => line.tipo === "Projeto")!;
+
+    const [record] = buildAtividadeObraRecords(payload, [projectLine]);
+    const [cronogramaRecord] = buildCronogramaLinhaRecords(payload, [projectLine]);
+
+    expect(record).toMatchObject({
+      nomeAtividade: "pj 2p1 - 03/06 - Produto simples Vivi 1 - Serviço",
+      nomeProduto: "Produto simples Vivi 1 - Serviço",
+      tipo: "Projeto"
+    });
+    expect(cronogramaRecord).toMatchObject({
+      nome_atividade: "pj 2p1 - 03/06 - ",
+      produto: "Produto simples Vivi 1 - Serviço"
+    });
+  });
+
   it("marks Atividade x Obra cloned duration after the first clone", () => {
     const { payload, lines } = payloadWithOneLine();
     const [line] = lines;
