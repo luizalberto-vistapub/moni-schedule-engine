@@ -135,6 +135,22 @@ function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActi
     });
 }
 
+function mergeDirectProjectWithReference(directProject: NormalizedActivity, linkedProject: NormalizedActivity): NormalizedActivity {
+  return {
+    ...directProject,
+    ordem: linkedProject.ordem,
+    offsetDias: linkedProject.offsetDias ?? directProject.offsetDias,
+    atividadeServicoAncoraId: linkedProject.atividadeServicoAncoraId,
+    produto: directProject.produto || linkedProject.produto,
+    produtoId: directProject.produtoId || linkedProject.produtoId,
+    raw: {
+      ...directProject.raw,
+      atividadeProjetoLink: linkedProject.raw,
+      sourceActivityId: linkedProject.atividadeServicoAncoraId
+    }
+  };
+}
+
 function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload): ObraAmbienteProdutoPayload {
   const id = optionalString(product.id) || optionalString(product.unique_id) || optionalString(product["unique id"]);
   const ambienteId = optionalString(product.ambienteId)
@@ -163,19 +179,27 @@ export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePa
     ? payload.obra_ambiente_produto_json
     : compositionProducts.map(normalizeCompositionProduct);
   const activities = payload.atividades_json.map(normalizeActivity);
-  const activityIds = new Set(activities.map((activity) => activity.id));
+  const directActivitiesById = new Map(activities.map((activity) => [activity.id, activity]));
+  const linkedProjectKeys = new Set<string>();
+  const linkedProjectIds = new Set<string>();
   const projectActivities = activities
     .flatMap(normalizeActivityProjects)
-    .filter((activity) => {
-      if (activityIds.has(activity.id)) return false;
-      activityIds.add(activity.id);
-      return true;
+    .flatMap((linkedProject) => {
+      const directActivity = directActivitiesById.get(linkedProject.id);
+      if (directActivity && directActivity.tipo !== "Projeto") return [];
+      const project = directActivity ? mergeDirectProjectWithReference(directActivity, linkedProject) : linkedProject;
+      const key = `${project.id}:${project.atividadeServicoAncoraId}`;
+      if (linkedProjectKeys.has(key)) return [];
+      linkedProjectKeys.add(key);
+      linkedProjectIds.add(project.id);
+      return [project];
     });
+  const baseActivities = activities.filter((activity) => activity.tipo !== "Projeto" || !linkedProjectIds.has(activity.id));
 
   return {
     ...payload,
     obra_ambiente_produto_json: obraAmbienteProdutos,
     obra_ambiente_item_composicao_json: compositionProducts,
-    atividades_json: [...activities, ...projectActivities]
+    atividades_json: [...baseActivities, ...projectActivities]
   };
 }

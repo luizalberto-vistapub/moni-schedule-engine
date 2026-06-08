@@ -964,4 +964,84 @@ describe("schedule engine", () => {
       atividadeServicoAncoraId: "serv_1"
     });
   });
+
+  it("links direct project activities through atividadeProjeto references", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [
+        { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto 1", quantidade: 1 },
+        { id: "oap_2", ambienteId: "amb_1", produtoId: "prod_2", produtoNome: "Produto 2", quantidade: 1 }
+      ],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", produto: "prod_1", ordem: 1, duracao: 1 },
+        {
+          id: "serv_2",
+          nome: "Servico 2",
+          tipo: "Servico",
+          produto: "prod_2",
+          ordem: 2,
+          duracao: 1,
+          atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "Projeto" }]
+        },
+        { id: "proj_1", nome: "Projeto direto", tipo: "Projeto", ordem: 1, duracao: 1, diasAntecedencia: 2, produto: "", atividadeServicoAncoraId: "" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const projectLine = result.lines.find((line) => line.tipo === "Projeto");
+
+    expect(projectLine).toMatchObject({
+      atividadeId: "proj_1",
+      nome_atividade: "Projeto direto",
+      atividadeServicoAncoraId: "serv_2",
+      produtoId: "prod_2",
+      produto: "Produto 2",
+      anchor_service_name: "Servico 2"
+    });
+  });
+
+  it("creates contextual project lines when one project is referenced by multiple services", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [
+        { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto 1", quantidade: 1 },
+        { id: "oap_2", ambienteId: "amb_1", produtoId: "prod_2", produtoNome: "Produto 2", quantidade: 1 }
+      ],
+      atividades_json: [
+        {
+          id: "serv_1",
+          nome: "Servico 1",
+          tipo: "Servico",
+          produto: "prod_1",
+          ordem: 1,
+          duracao: 1,
+          atividadeProjeto: [
+            { idAtividadeProjeto: "proj_shared", nomeAtividadeProjeto: "Projeto compartilhado", diasAntecedencia: 1 },
+            { idAtividadeProjeto: "proj_shared", nomeAtividadeProjeto: "Projeto compartilhado duplicado", diasAntecedencia: 1 }
+          ]
+        },
+        {
+          id: "serv_2",
+          nome: "Servico 2",
+          tipo: "Servico",
+          produto: "prod_2",
+          ordem: 2,
+          duracao: 1,
+          atividadeProjeto: [{ idAtividadeProjeto: "proj_shared", nomeAtividadeProjeto: "Projeto compartilhado", diasAntecedencia: 2 }]
+        },
+        { id: "proj_shared", nome: "Projeto direto compartilhado", tipo: "Projeto", ordem: 1, duracao: 1, produto: "", atividadeServicoAncoraId: "" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const projectLines = result.lines.filter((line) => line.tipo === "Projeto");
+
+    expect(projectLines).toHaveLength(2);
+    expect(projectLines.map((line) => ({
+      atividadeId: line.atividadeId,
+      anchor: line.atividadeServicoAncoraId,
+      product: line.produtoId
+    }))).toEqual([
+      { atividadeId: "proj_shared", anchor: "serv_1", product: "prod_1" },
+      { atividadeId: "proj_shared", anchor: "serv_2", product: "prod_2" }
+    ]);
+  });
 });
