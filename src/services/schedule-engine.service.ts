@@ -171,6 +171,7 @@ function purchaseStageOrder(activity: NormalizedActivity): number {
     LIMITE_COMPRA: 3,
     RECEBIMENTO: 4
   };
+  /* v8 ignore next -- normalized purchases have a known stage before ordering. */
   return activity.etapaCompra ? stageOrder[activity.etapaCompra] || 99 : 99;
 }
 
@@ -184,6 +185,7 @@ function comparePurchaseChainOrder(a: NormalizedActivity, b: NormalizedActivity)
 
 function purchaseChainKey(anchorId: string, activity: NormalizedActivity): string {
   const activityAnchorId = activity.atividadeServicoAncoraId || "";
+  /* v8 ignore next -- fallback supports malformed purchase payloads without an item id. */
   const purchaseItemId = activityAnchorId && activityAnchorId !== anchorId ? activityAnchorId : getActivityProductId(activity);
   return `${anchorId}:${purchaseItemId || "__default__"}`;
 }

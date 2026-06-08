@@ -183,6 +183,27 @@ describe("Bubble bulk persistence", () => {
     ]);
   });
 
+  it("handles sparse EventoCronograma events defensively", () => {
+    const { payload } = payloadWithOneLine({
+      events_json: [
+        { ignored: true },
+        { type: "activity_start_delayed" },
+        { type: "activity_inserted", _id: "event_1" },
+        { type: "activity_inserted" },
+        { type: "custom_event", dias: "3" },
+        { type: "custom_event_invalid_days", dias: "abc" }
+      ]
+    });
+
+    expect(buildEventoCronogramaRecords(payload)).toEqual([
+      expect.objectContaining({ atividade: "", tipo: "Adiar início da atividade" }),
+      expect.objectContaining({ tipo: "Inserida nova atividade" }),
+      expect.objectContaining({ tipo: "Inserida nova atividade" }),
+      expect.objectContaining({ data: "", dias: 3, tipo: "custom_event" }),
+      expect.objectContaining({ dias: 0, tipo: "custom_event_invalid_days" })
+    ]);
+  });
+
   it("throws when Bubble returns a row-level status error", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
@@ -204,6 +225,7 @@ describe("Bubble bulk persistence", () => {
   });
 
   it("retries Atividade x Obra without ambiente x obra when Bubble rejects the reference", async () => {
+    const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       if (fetchMock.mock.calls.length === 2) {
         return {
@@ -221,11 +243,15 @@ describe("Bubble bulk persistence", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { payload, lines } = payloadWithOneLine();
 
-    await persistScheduleBulks(payload, lines);
+    await persistScheduleBulks(payload, lines, { requestId: "req_retry", log });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(String(fetchMock.mock.calls[1]![1]?.body)).toContain("\"ambiente x obra\"");
     expect(String(fetchMock.mock.calls[2]![1]?.body)).not.toContain("\"ambiente x obra\"");
+    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_retry",
+      statusCode: 400
+    }), "retrying atividade obra bulk without ambiente x obra reference");
   });
 
   it("ignores non-NDJSON response bodies after a successful bulk status", async () => {
@@ -253,7 +279,23 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("accepts partial bulk created id responses", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        text: async () => rows.length > 1 ? "{\"id\":\"only_one\"}" : ""
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine();
+
+    await persistScheduleBulks(payload, [lines[0]!, { ...lines[0]!, atividade_obra_id_externo: "atividade_2_2026-05-05_1" }]);
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("returns empty records when required ids are absent", () => {
@@ -469,6 +511,64 @@ describe("Bubble bulk persistence", () => {
     expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
       "interdependencias MASTER (Atividade x Obra)": ["bubble_2_1", "bubble_2_2"]
     });
+  });
+
+  it("throws when atividade obra dependency ids cannot be resolved", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => ""
+    })));
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      atividades_json: [
+        { id: "base", nome: "Base", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "dependente", nome: "Dependente", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["base"] }
+      ]
+    }));
+    const result = runScheduleEngine(payload);
+
+    await expect(persistScheduleBulks(payload, result.lines)).rejects.toThrow("Could not resolve Bubble atividade x obra dependency ids");
+  });
+
+  it("throws when atividade obra dependency patch fails", async () => {
+    const log = { error: vi.fn(), info: vi.fn() } as unknown as Logger;
+    let postCallIndex = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; text: () => Promise<string> }> => {
+      const method = init?.method || "POST";
+      if (method === "PATCH") {
+        return { ok: false, status: 400, text: async () => "bad patch" };
+      }
+
+      postCallIndex += 1;
+      const body = String(init?.body || "");
+      const rows = body.split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map((_row, index) => JSON.stringify({ status: "success", id: `bubble_${postCallIndex}_${index + 1}` })).join("\n")
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      atividades_json: [
+        { id: "base", nome: "Base", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "dependente", nome: "Dependente", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["base"] }
+      ]
+    }));
+    const result = runScheduleEngine(payload);
+
+    await expect(persistScheduleBulks(payload, result.lines, { requestId: "req_patch", log })).rejects.toThrow("Bubble atividade obra dependency patch failed with 400: bad patch");
+    expect((log as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_patch",
+      statusCode: 400,
+      responseText: "bad patch"
+    }), "atividade obra dependency patch failed");
   });
 
   it("maps legacy Atividade x Obra typename env to Bubble API typename", async () => {

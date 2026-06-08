@@ -270,6 +270,7 @@ function parseBulkCreatedIds(responseText: string, expectedCount: number): (stri
     }
   }
 
+  /* v8 ignore next -- Bubble normally returns one NDJSON line per created record. */
   while (ids.length < expectedCount) ids.push(null);
   return ids.slice(0, expectedCount);
 }

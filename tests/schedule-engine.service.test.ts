@@ -897,4 +897,71 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
 
     expect(result.lines).toHaveLength(1);
-  });});
+  });
+
+  it("cobre ramos de etapa desconhecida, ancora composta e inicio forcado", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [{
+        id: "oap_1",
+        produtoId: "prod_1",
+        produtoNome: "Piso",
+        "id produto composto": "composto_1",
+        quantidade: 1
+      }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_1", ordem: 1, duracao: 1 },
+        { id: "compra_1", nome: "Compra", tipo: "Compra", produto: "prod_1", ordem: 1, atividadeServicoAncoraId: "composto_1", etapaCompra: "Limite de compra" }
+      ]
+    }));
+    payload.atividades_json[0]!.__recalculateStartDate = "2026-05-06";
+    payload.atividades_json[1]!.etapaCompra = "ETAPA_DESCONHECIDA" as never;
+    payload.atividades_json[1]!.interdependenciasMasterIds = undefined as never;
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.find((line) => line.tipo === "Serviço")).toMatchObject({
+      data_programada: "2026-05-06"
+    });
+    expect(result.lines.find((line) => line.tipo === "Compra")).toMatchObject({
+      atividadeServicoAncoraId: "serv_1",
+      subtipo_compra: "ETAPA_DESCONHECIDA"
+    });
+  });
+
+  it("gera cadeia de compra default sem produto especifico", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "Limite de compra" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.find((line) => line.tipo === "Compra")).toMatchObject({
+      atividadeServicoAncoraId: "serv_1"
+    });
+  });
+
+  it("resolve compra sem ancora explicita pelo produto composto", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [{
+        id: "oap_1",
+        produtoId: "prod_1",
+        produtoNome: "Piso",
+        "id produto composto": "composto_1",
+        quantidade: 1
+      }],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_1", ordem: 1, duracao: 1 },
+        { id: "compra_1", nome: "Compra", tipo: "Compra", produto: "prod_1", ordem: 1, etapaCompra: "Limite de compra" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.find((line) => line.tipo === "Compra")).toMatchObject({
+      atividadeServicoAncoraId: "serv_1"
+    });
+  });
+});
