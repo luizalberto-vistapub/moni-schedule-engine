@@ -652,6 +652,75 @@ describe("schedule engine", () => {
     expect(result.lines[1].data_programada < result.lines[2].data_programada).toBe(true);
   });
 
+  it("ancora item de composicao no servico mais cedo do produto composto", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 5,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-06-01" }],
+      obra_ambiente_json: [{ "unique id": "amb_item_1", "nome ambiente": "Ambiente Cap" }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        {
+          "unique id": "item_compra_1",
+          "id ambiente item composicao": "amb_item_1",
+          "id produto composto": "composto_1",
+          "nome produto composto": "Produto Composto",
+          "id produto simples": "prod_compra",
+          "nome produto simples": "Produto de compra"
+        },
+        {
+          "unique id": "item_servico_1",
+          "id ambiente item composicao": "amb_item_1",
+          "id produto composto": "composto_1",
+          "nome produto composto": "Produto Composto",
+          "id produto simples": "prod_servico",
+          "nome produto simples": "Mao de obra"
+        }
+      ],
+      atividades_json: [
+        {
+          id: "aaa_servico_dependente",
+          nome: "Assentar",
+          tipo: "Servico",
+          produto: "prod_servico",
+          ordem: 1,
+          duracao: 1,
+          interdependenciasMasterIds: ["zzz_servico_base"]
+        },
+        {
+          id: "zzz_servico_base",
+          nome: "Preparar base",
+          tipo: "Servico",
+          produto: "prod_servico",
+          ordem: 1,
+          duracao: 1
+        },
+        {
+          id: "recebimento",
+          nome: "Recebimento",
+          tipo: "Compra",
+          produto: "prod_compra",
+          ordem: 1,
+          etapaCompra: "Recebimento",
+          diasAntecedencia: 1,
+          atividadeServicoAncoraId: "item_compra_1"
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const purchase = result.lines.find((line) => line.atividadeId === "recebimento");
+
+    expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
+      ["recebimento", "2026-05-29"],
+      ["zzz_servico_base", "2026-06-01"],
+      ["aaa_servico_dependente", "2026-06-02"]
+    ]);
+    expect(purchase).toMatchObject({
+      atividadeServicoAncoraId: "zzz_servico_base",
+      anchor_service_name: "Preparar base"
+    });
+  });
+
   it("gera projeto a partir de atividadeProjeto da mao de obra", () => {
     const payload = normalizePayload(basePayload({
       obra_ambiente_json: [{ "unique id": "amb_item_1", "nome ambiente": "Ambiente Cap" }],
