@@ -551,11 +551,10 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkConfigError("BUBBLE_API_TOKEN is required to persist schedule bulks");
   }
 
-  const cronogramaLinhaRecords = buildCronogramaLinhaRecords(payload, lines);
   const atividadeObraRecords = buildAtividadeObraRecords(payload, lines);
   const eventoCronogramaRecords = buildEventoCronogramaRecords(payload);
 
-  if (!cronogramaLinhaRecords.length || !atividadeObraRecords.length || !requestedBubbleApiVersion) {
+  if (!atividadeObraRecords.length || !requestedBubbleApiVersion) {
     const invalidFields = [
       requiredFieldDiagnostic(
         "bubble_api_version",
@@ -592,7 +591,6 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
-  await postBulk(config.cronogramaLinhaType, cronogramaLinhaRecords, config, options);
   const persistedAtividadeObraRecords = await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);

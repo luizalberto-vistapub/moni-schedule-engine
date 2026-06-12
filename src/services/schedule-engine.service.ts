@@ -1,5 +1,6 @@
 import type { NormalizedActivity, NormalizedSchedulePayload, ObraAmbientePayload, ObraAmbienteProdutoPayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
+import { addDays } from "../utils/dates.js";
 import { addBusinessDays, nextBusinessDay, previousBusinessDay } from "./business-days.service.js";
 import { differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 import { stableLineId } from "../utils/ids.js";
@@ -264,7 +265,10 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
 
     if (activity.atividadeServicoAncoraId) {
       const explicitService = servicesById.get(activity.atividadeServicoAncoraId);
-      if (explicitService) return explicitService;
+      if (explicitService) {
+        const explicitCompositeId = getCompositeProductId(productForActivity(ctx, explicitService));
+        return explicitCompositeId ? earliestServiceForComposite(explicitCompositeId) || explicitService : explicitService;
+      }
       const serviceByComposite = earliestServiceForComposite(activity.atividadeServicoAncoraId);
       if (serviceByComposite) return serviceByComposite;
     }
@@ -284,7 +288,6 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
   for (const purchaseEntries of purchasesByChain.values()) {
     const anchorId = purchaseEntries[0].anchorId;
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
-    let referenceDate = anchorStart;
     const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
 
     for (const { activity, anchor } of orderedEntries.reverse()) {
@@ -295,12 +298,11 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
       const defaultOffset = currentCounter + 1;
       const offset = Number(activity.offsetDias ?? defaultOffset);
       const forcedStart = forcedActivityStart(activity);
-      const date = forcedStart || previousBusinessDay(addBusinessDays(referenceDate, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
+      const date = forcedStart || addDays(anchorStart, -offset);
       const line = buildLine(ctx, product, activity, date, 1, anchor);
       ctx.lines.push(line);
       purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
       anchorCounters.set(counterKey, currentCounter + 1);
-      referenceDate = date;
     }
   }
 
@@ -311,17 +313,12 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
     let product = productForActivity(ctx, activity);
     if (!product) product = productForActivity(ctx, anchor);
-    const purchasesForAnchor = purchaseLinesByAnchor.get(anchorId) || [];
-    const avisoOrcamento = purchasesForAnchor.find((line) => line.subtipo_compra === "AVISO_ORCAMENTO");
-    const earliestPurchase = [...purchasesForAnchor].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
-    const referenceDate = avisoOrcamento?.data_programada || earliestPurchase?.data_programada;
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
     const defaultOffset = currentCounter + 2;
     const offset = Number(activity.offsetDias ?? defaultOffset);
-    const referenceStart = referenceDate ? parseDateOnly(referenceDate) : anchorStart;
     const forcedStart = forcedActivityStart(activity);
-    const date = forcedStart || addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana);
+    const date = forcedStart || addDays(anchorStart, -offset);
     ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
   }

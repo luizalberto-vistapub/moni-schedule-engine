@@ -20,6 +20,13 @@ describe("schedule controllers", () => {
     delete process.env.BUBBLE_API_TOKEN;
   });
 
+  function persistedBulkBody(typeName: string): string {
+    const calls = (fetch as unknown as { mock: { calls: Array<Array<{ body?: string } | string>> } }).mock.calls;
+    const call = calls.find(([url]) => String(url).includes(`/obj/${typeName}/bulk`));
+    expect(call).toBeTruthy();
+    return String((call![1] as { body?: string }).body);
+  }
+
   it("returns health status", async () => {
     const response = await request(app).get("/health");
 
@@ -100,9 +107,9 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    expect(JSON.parse(cronogramaLinhaBody.split("\n")[0]!)).toMatchObject({
-      data_programada: "2026-05-04T12:00:00.000Z"
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    expect(JSON.parse(atividadeObraBody.split("\n")[0]!)).toMatchObject({
+      dataInicioPrevista: "2026-05-04T12:00:00.000Z"
     });
   });
 
@@ -121,14 +128,10 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(true);
     expect(response.body.previous_version_id).toBe("versao_1");
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    expect(JSON.parse(cronogramaLinhaBody.split("\n")[0]!)).toMatchObject({
-      versao_cronograma: "versao_2",
-      data_programada: "2026-05-06T12:00:00.000Z"
-    });
-    const atividadeObraBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[1]![1]!.body);
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
     expect(JSON.parse(atividadeObraBody.split("\n")[0]!)).toMatchObject({
-      versaoCronograma: "versao_2"
+      versaoCronograma: "versao_2",
+      dataInicioPrevista: "2026-05-06T12:00:00.000Z"
     });
   });
 
@@ -153,15 +156,15 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.map((record) => record.data_programada)).toEqual([
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.dataInicioPrevista)).toEqual([
       "2026-08-13T12:00:00.000Z",
       "2026-08-14T12:00:00.000Z",
       "2026-08-15T12:00:00.000Z",
       "2026-08-17T12:00:00.000Z"
     ]);
-    expect(records.some((record) => record.data_programada.startsWith("2026-08-11") || record.data_programada.startsWith("2026-08-12"))).toBe(false);
+    expect(records.some((record) => record.dataInicioPrevista.startsWith("2026-08-11") || record.dataInicioPrevista.startsWith("2026-08-12"))).toBe(false);
   });
 
   it("preserves previous atividade obra dates before from date paralysis", async () => {
@@ -171,7 +174,7 @@ describe("schedule controllers", () => {
       fetchCallIndex += 1;
       return {
         ok: true,
-        text: async () => currentCall === 1 ? "{\"id\":\"ao_1\"}\n{\"id\":\"ao_2\"}\n{\"id\":\"ao_3\"}" : ""
+        text: async () => currentCall === 0 ? "{\"id\":\"ao_1\"}\n{\"id\":\"ao_2\"}\n{\"id\":\"ao_3\"}" : ""
       };
     }));
 
@@ -199,24 +202,22 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.map((record) => record.data_programada)).toEqual([
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.dataInicioPrevista)).toEqual([
       "2026-08-10T12:00:00.000Z",
       "2026-08-13T12:00:00.000Z",
       "2026-08-14T12:00:00.000Z"
     ]);
-    expect(records.find((record) => record.nome_atividade === "Servico 1")).toMatchObject({
+    expect(records.find((record) => record.nomeAtividade === "Servico 1")).toMatchObject({
       id_atividade_obra_externo: "serv_1_2026-08-10_1",
-      data_programada: "2026-08-10T12:00:00.000Z"
+      dataInicioPrevista: "2026-08-10T12:00:00.000Z"
     });
 
-    const atividadeObraBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[1]![1]!.body);
-    const atividadeObraRecords = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(atividadeObraRecords.find((record) => record.atividade === "serv_2")).toMatchObject({
+    expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({
       id_atividade_obra_externo: "serv_2_2026-08-13_1"
     });
-    expect(atividadeObraRecords.find((record) => record.atividade === "serv_3")).toMatchObject({
+    expect(records.find((record) => record.atividade === "serv_3")).toMatchObject({
       id_atividade_obra_externo: "serv_3_2026-08-14_1"
     });
   });
@@ -239,9 +240,9 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.map((record) => record.data_programada)).toEqual([
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.dataInicioPrevista)).toEqual([
       "2026-08-10T12:00:00.000Z",
       "2026-08-11T12:00:00.000Z"
     ]);
@@ -265,9 +266,9 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.map((record) => record.data_programada)).toEqual([
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.dataInicioPrevista)).toEqual([
       "2026-08-10T12:00:00.000Z",
       "2026-08-13T12:00:00.000Z"
     ]);
@@ -291,9 +292,9 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.map((record) => record.data_programada)).toEqual([
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.map((record) => record.dataInicioPrevista)).toEqual([
       "2026-08-10T12:00:00.000Z",
       "2026-08-11T12:00:00.000Z"
     ]);
@@ -338,8 +339,8 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.map((record) => record.id_atividade_obra_externo)).toEqual([
       "serv_1_2026-08-10_1",
       "serv_1_2026-08-10_2"
@@ -371,18 +372,16 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records).toEqual([
       expect.objectContaining({
         id_atividade_obra_externo: "serv_2_2026-08-08_1",
-        codigo_dia: "D-1",
-        data_programada: "2026-08-08T12:00:00.000Z"
+        dataInicioPrevista: "2026-08-08T12:00:00.000Z"
       }),
       expect.objectContaining({
         id_atividade_obra_externo: "serv_1_2026-08-09_1",
-        codigo_dia: "D-0",
-        data_programada: "2026-08-09T12:00:00.000Z"
+        dataInicioPrevista: "2026-08-09T12:00:00.000Z"
       })
     ]);
   });
@@ -411,10 +410,10 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
-      data_programada: "2026-08-11T12:00:00.000Z"
+      dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
   });
 
@@ -440,10 +439,10 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
-      data_programada: "2026-08-11T12:00:00.000Z"
+      dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
   });
 
@@ -493,16 +492,16 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(201);
     expect(response.body.ok).toBe(true);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
-      data_programada: "2026-08-11T12:00:00.000Z"
+      dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
     expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_2_"))).toMatchObject({
-      data_programada: "2026-08-12T12:00:00.000Z"
+      dataInicioPrevista: "2026-08-12T12:00:00.000Z"
     });
 
-    const eventoCronogramaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[2]![1]!.body);
+    const eventoCronogramaBody = persistedBulkBody("eventocronograma");
     const eventRecords = eventoCronogramaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(eventRecords.map((record) => record.atividade)).toEqual(["compra_1", "compra_2"]);
     expect(eventRecords.every((record) => record.versaoCronograma === "versao_3")).toBe(true);
@@ -531,10 +530,10 @@ describe("schedule controllers", () => {
 
     expect(response.status).toBe(201);
 
-    const cronogramaLinhaBody = String((fetch as unknown as { mock: { calls: Array<Array<{ body: string }>> } }).mock.calls[0]![1]!.body);
-    const records = cronogramaLinhaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.find((record) => record.atividade === "compra_1" || record.nome_atividade === "Limite de compra")).toMatchObject({
-      data_programada: "2026-08-11T12:00:00.000Z"
+      dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
   });
 

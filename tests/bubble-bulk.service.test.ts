@@ -39,7 +39,7 @@ describe("Bubble bulk persistence", () => {
     return { payload, lines: result.lines };
   }
 
-  it("posts both Bubble bulk payloads as NDJSON", async () => {
+  it("posts Atividade x Obra bulk payload as NDJSON while cronogramaLinha is paused", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
       ok: true,
       text: async () => "{\"status\":\"success\"}\n"
@@ -49,9 +49,8 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/cronogramalinha/bulk");
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
     expect(() => JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).not.toThrow();
     expect(Array.isArray(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body)))).toBe(false);
   });
@@ -66,8 +65,7 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/cronogramalinha/bulk");
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
   });
 
   it("adds Bubble version prefix when request body sends only the branch id", async () => {
@@ -80,8 +78,7 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/cronogramalinha/bulk");
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-739n8/api/1.1/obj/atividadexobra/bulk");
   });
 
   it("allows overriding Bubble Data API type names", async () => {
@@ -97,8 +94,7 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_cronograma_linha/bulk");
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_atividade_obra/bulk");
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/custom_atividade_obra/bulk");
   });
 
   it("builds active EventoCronograma records from old and new events", () => {
@@ -154,9 +150,9 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[2]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/eventocronograma/bulk");
-    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toMatchObject({
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/eventocronograma/bulk");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))).toMatchObject({
       cronograma: "cronograma_1",
       data: "2026-05-08T12:00:00.000Z",
       tipo: "Adiar início da obra",
@@ -227,7 +223,7 @@ describe("Bubble bulk persistence", () => {
   it("retries Atividade x Obra without ambiente x obra when Bubble rejects the reference", async () => {
     const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
-      if (fetchMock.mock.calls.length === 2) {
+      if (fetchMock.mock.calls.length === 1) {
         return {
           ok: false,
           status: 400,
@@ -245,9 +241,9 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines, { requestId: "req_retry", log });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(String(fetchMock.mock.calls[1]![1]?.body)).toContain("\"ambiente x obra\"");
-    expect(String(fetchMock.mock.calls[2]![1]?.body)).not.toContain("\"ambiente x obra\"");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]![1]?.body)).toContain("\"ambiente x obra\"");
+    expect(String(fetchMock.mock.calls[1]![1]?.body)).not.toContain("\"ambiente x obra\"");
     expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
       requestId: "req_retry",
       statusCode: 400
@@ -279,7 +275,7 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("accepts partial bulk created id responses", async () => {
@@ -544,10 +540,10 @@ describe("Bubble bulk persistence", () => {
 
     const patchCall = fetchMock.mock.calls.find((call) => call[1]?.method === "PATCH");
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(String(patchCall?.[0])).toContain("/api/1.1/obj/atividadexobra/bubble_2_3");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(patchCall?.[0])).toContain("/api/1.1/obj/atividadexobra/bubble_1_3");
     expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
-      "interdependencias MASTER (Atividade x Obra)": ["bubble_2_1", "bubble_2_2"]
+      "interdependencias MASTER (Atividade x Obra)": ["bubble_1_1", "bubble_1_2"]
     });
   });
 
@@ -620,7 +616,7 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(fetchMock.mock.calls[1]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
   });
 
   it("reports missing obra id when version id is present", async () => {

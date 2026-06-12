@@ -332,7 +332,7 @@ describe("schedule engine", () => {
     const purchase = result.lines.find((line) => line.atividadeId === "compra_aviso");
     const service = result.lines.find((line) => line.atividadeId === "serv_1");
 
-    expect(project?.data_programada).toBe("2026-04-22");
+    expect(project?.data_programada).toBe("2026-04-27");
     expect(purchase?.data_programada).toBe("2026-04-27");
     expect(service?.data_programada).toBe("2026-05-01");
   });
@@ -393,11 +393,11 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
 
     expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
-      ["projeto_1", "2026-05-25"],
-      ["aviso", "2026-05-26"],
-      ["limite_orcamento", "2026-05-27"],
-      ["limite_compra", "2026-05-28"],
-      ["recebimento", "2026-05-29"],
+      ["aviso", "2026-05-31"],
+      ["projeto_1", "2026-05-31"],
+      ["limite_orcamento", "2026-05-31"],
+      ["limite_compra", "2026-05-31"],
+      ["recebimento", "2026-05-31"],
       ["serv_1", "2026-06-01"]
     ]);
   });
@@ -428,14 +428,14 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
     const datesByActivity = new Map(result.lines.map((line) => [line.atividadeId, line.data_programada]));
 
-    expect(datesByActivity.get("recebimento_1")).toBe("2026-06-02");
-    expect(datesByActivity.get("limite_compra_1")).toBe("2026-05-04");
-    expect(datesByActivity.get("limite_orcamento_1")).toBe("2026-04-04");
-    expect(datesByActivity.get("aviso_1")).toBe("2026-03-06");
-    expect(datesByActivity.get("recebimento_3")).toBe("2026-05-27");
-    expect(datesByActivity.get("limite_compra_3")).toBe("2026-04-22");
-    expect(datesByActivity.get("limite_orcamento_3")).toBe("2026-03-18");
-    expect(datesByActivity.get("aviso_3")).toBe("2026-02-11");
+    expect(datesByActivity.get("recebimento_1")).toBe("2026-06-06");
+    expect(datesByActivity.get("limite_compra_1")).toBe("2026-06-06");
+    expect(datesByActivity.get("limite_orcamento_1")).toBe("2026-06-06");
+    expect(datesByActivity.get("aviso_1")).toBe("2026-06-06");
+    expect(datesByActivity.get("recebimento_3")).toBe("2026-06-01");
+    expect(datesByActivity.get("limite_compra_3")).toBe("2026-06-01");
+    expect(datesByActivity.get("limite_orcamento_3")).toBe("2026-06-01");
+    expect(datesByActivity.get("aviso_3")).toBe("2026-06-01");
     expect(datesByActivity.get("servico_1")).toBe("2026-07-01");
   });
 
@@ -476,7 +476,7 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
 
     expect(result.lines.map((line) => line.atividadeId)).toEqual(["projeto_1", "serv_1"]);
-    expect(result.lines[0].data_programada).toBe("2026-04-30");
+    expect(result.lines[0].data_programada).toBe("2026-05-02");
     expect(result.lines[1].data_programada).toBe("2026-05-04");
   });
 
@@ -711,7 +711,7 @@ describe("schedule engine", () => {
     const purchase = result.lines.find((line) => line.atividadeId === "recebimento");
 
     expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
-      ["recebimento", "2026-05-29"],
+      ["recebimento", "2026-05-31"],
       ["zzz_servico_base", "2026-06-01"],
       ["aaa_servico_dependente", "2026-06-02"]
     ]);
@@ -768,8 +768,8 @@ describe("schedule engine", () => {
       atividadeServicoAncoraId: "servico_1",
       produtoId: "prod_servico"
     });
-    expect(project!.data_programada).toBe("2026-04-23");
-    expect(purchase!.data_programada).toBe("2026-04-30");
+    expect(project!.data_programada).toBe("2026-04-29");
+    expect(purchase!.data_programada).toBe("2026-05-02");
     expect(service!.data_programada).toBe("2026-05-04");
     expect(project!.data_programada < purchase!.data_programada).toBe(true);
     expect(purchase!.data_programada < service!.data_programada).toBe(true);
