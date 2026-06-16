@@ -472,6 +472,7 @@ describe("Bubble bulk persistence", () => {
           duracao: 1,
           atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "pj 2p1 - 03/06", diasAntecedencia: 2 }]
         },
+        { id: "compra_1", nome: "Compra", tipo: "Compra", produto: "prod_1", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "serv_1" },
         { id: "proj_1", nome: "pj 2p1 - 03/06 - ", tipo: "Projeto", ordem: 1, duracao: 1, produto: "", atividadeServicoAncoraId: "" }
       ]
     }));

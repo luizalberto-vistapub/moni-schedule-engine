@@ -313,12 +313,14 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
     let product = productForActivity(ctx, activity);
     if (!product) product = productForActivity(ctx, anchor);
+    const earliestPurchase = [...(purchaseLinesByAnchor.get(anchorId) || [])].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
     const defaultOffset = currentCounter + 2;
     const offset = Number(activity.offsetDias ?? defaultOffset);
     const forcedStart = forcedActivityStart(activity);
-    const date = forcedStart || addDays(anchorStart, -offset);
+    const referenceStart = earliestPurchase ? parseDateOnly(earliestPurchase.data_programada) : anchorStart;
+    const date = forcedStart || addDays(referenceStart, -offset);
     ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
   }

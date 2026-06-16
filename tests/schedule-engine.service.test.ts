@@ -332,7 +332,7 @@ describe("schedule engine", () => {
     const purchase = result.lines.find((line) => line.atividadeId === "compra_aviso");
     const service = result.lines.find((line) => line.atividadeId === "serv_1");
 
-    expect(project?.data_programada).toBe("2026-04-27");
+    expect(project?.data_programada).toBe("2026-04-23");
     expect(purchase?.data_programada).toBe("2026-04-27");
     expect(service?.data_programada).toBe("2026-05-01");
   });
@@ -393,8 +393,8 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
 
     expect(result.lines.map((line) => [line.atividadeId, line.data_programada])).toEqual([
+      ["projeto_1", "2026-05-30"],
       ["aviso", "2026-05-31"],
-      ["projeto_1", "2026-05-31"],
       ["limite_orcamento", "2026-05-31"],
       ["limite_compra", "2026-05-31"],
       ["recebimento", "2026-05-31"],
@@ -768,7 +768,7 @@ describe("schedule engine", () => {
       atividadeServicoAncoraId: "servico_1",
       produtoId: "prod_servico"
     });
-    expect(project!.data_programada).toBe("2026-04-29");
+    expect(project!.data_programada).toBe("2026-04-27");
     expect(purchase!.data_programada).toBe("2026-05-02");
     expect(service!.data_programada).toBe("2026-05-04");
     expect(project!.data_programada < purchase!.data_programada).toBe(true);
@@ -1051,6 +1051,7 @@ describe("schedule engine", () => {
           duracao: 1,
           atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "Projeto" }]
         },
+        { id: "compra_2", nome: "Compra 2", tipo: "Compra", produto: "prod_2", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "serv_2" },
         { id: "proj_1", nome: "Projeto direto", tipo: "Projeto", ordem: 1, duracao: 1, diasAntecedencia: 2, produto: "", atividadeServicoAncoraId: "" }
       ]
     }));
@@ -1096,6 +1097,8 @@ describe("schedule engine", () => {
           duracao: 1,
           atividadeProjeto: [{ idAtividadeProjeto: "proj_shared", nomeAtividadeProjeto: "Projeto compartilhado", diasAntecedencia: 2 }]
         },
+        { id: "compra_1", nome: "Compra 1", tipo: "Compra", produto: "prod_1", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "serv_1" },
+        { id: "compra_2", nome: "Compra 2", tipo: "Compra", produto: "prod_2", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "serv_2" },
         { id: "proj_shared", nome: "Projeto direto compartilhado", tipo: "Projeto", ordem: 1, duracao: 1, produto: "", atividadeServicoAncoraId: "" }
       ]
     }));
