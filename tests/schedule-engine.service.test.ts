@@ -154,6 +154,45 @@ describe("schedule engine", () => {
     expect(payload.atividades_json[1].etapaCompra).toBe("RECEBIMENTO");
   });
 
+  it("normaliza ancora somente para compras", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "servico", nome: "Servico", tipo: "Servico", atividadeServicoAncoraId: "não" },
+        { id: "projeto", nome: "Projeto", tipo: "Projeto", atividadeServicoAncoraId: "não" },
+        { id: "compra", nome: "Compra", tipo: "Compra", atividadeServicoAncoraId: "prod_compra", etapaCompra: "Recebimento" }
+      ]
+    }));
+
+    expect(payload.atividades_json.map((activity) => activity.atividadeServicoAncoraId)).toEqual([
+      null,
+      null,
+      "prod_compra"
+    ]);
+  });
+
+  it("ancora compra pelo produto simples no primeiro servico do produto composto", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "item_compra", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_compra", "nome produto simples": "Compra" },
+        { "unique id": "item_servico_tarde", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_servico_tarde", "nome produto simples": "Servico tarde" },
+        { "unique id": "item_servico_cedo", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_servico_cedo", "nome produto simples": "Servico cedo" }
+      ],
+      atividades_json: [
+        { id: "servico_tarde", nome: "Servico tarde", tipo: "Servico", produto: "prod_servico_tarde", ordem: 2, duracao: 1 },
+        { id: "servico_cedo", nome: "Servico cedo", tipo: "Servico", produto: "prod_servico_cedo", ordem: 1, duracao: 1 },
+        { id: "compra", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "prod_compra" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const compra = result.lines.find((line) => line.atividadeId === "compra");
+
+    expect(compra).toMatchObject({
+      atividadeServicoAncoraId: "servico_cedo",
+      data_programada: "2026-05-03"
+    });
+  });
   it("rejeita tipo de atividade invalido", () => {
     expect(() => normalizePayload(basePayload({
       atividades_json: [{ id: "x", nome: "X", tipo: "Outra" as never }]
@@ -268,9 +307,9 @@ describe("schedule engine", () => {
   it("posiciona projeto antes de compra e ambos antes do servico ancora", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 10, duracao: 1 },
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 10, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto" }] },
         { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 1, atividadeServicoAncoraId: "serv_1", etapaCompra: "limite de compra" },
-        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" },
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "" },
         { id: "solta_1", nome: "Compra solta", tipo: "Compra", ordem: 3 },
         { id: "compra_sem_ancora", nome: "Compra sem ancora existente", tipo: "Compra", ordem: 4, atividadeServicoAncoraId: "missing" },
         { id: "sem_ancora", nome: "Projeto sem ancora existente", tipo: "Projeto", ordem: 5, atividadeServicoAncoraId: "missing" }
@@ -306,7 +345,7 @@ describe("schedule engine", () => {
       dias_trabalho_semana: 6,
       obra_json: [{ id: "obra_1", dataInicio: "2026-05-01T03:00:00.000Z" }],
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto", diasAntecedencia: 4 }] },
         {
           id: "compra_aviso",
           nome: "Aviso",
@@ -342,7 +381,7 @@ describe("schedule engine", () => {
       dias_trabalho_semana: 5,
       obra_json: [{ id: "obra_1", dataInicio: "2026-06-01" }],
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 10, duracao: 1 },
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 10, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto", diasAntecedencia: 1 }] },
         {
           id: "aviso",
           nome: "Aviso de orçamento",
@@ -467,8 +506,8 @@ describe("schedule engine", () => {
   it("posiciona projeto relativo ao servico quando nao ha compra ancora", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
-        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 1, atividadeServicoAncoraId: "serv_1", diasAntecedencia: 2 },
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto", diasAntecedencia: 2 }] },
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 1, atividadeServicoAncoraId: "", diasAntecedencia: 2 },
         { id: "projeto_sem_ancora", nome: "Projeto solto", tipo: "Projeto", ordem: 2 }
       ]
     }));
@@ -816,9 +855,9 @@ describe("schedule engine", () => {
   it("usa produto do servico ancora quando compra ou projeto nao informam produto", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, produto: "prod_1" },
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, produto: "prod_1", atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto" }] },
         { id: "compra_1", nome: "Recebimento", tipo: "Compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "serv_1" },
-        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" }
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "" }
       ]
     }));
 
@@ -834,9 +873,9 @@ describe("schedule engine", () => {
     const payload = normalizePayload(basePayload({
       obra_ambiente_produto_json: [],
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto" }] },
         { id: "compra_1", nome: "Recebimento", tipo: "Compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "serv_1" },
-        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" }
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "" }
       ]
     }));
 

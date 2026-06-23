@@ -269,6 +269,12 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
         const explicitCompositeId = getCompositeProductId(productForActivity(ctx, explicitService));
         return explicitCompositeId ? earliestServiceForComposite(explicitCompositeId) || explicitService : explicitService;
       }
+      const anchorProduct = ctx.productsByProductId.get(activity.atividadeServicoAncoraId);
+      const anchorCompositeId = getCompositeProductId(anchorProduct || null);
+      if (anchorCompositeId) {
+        const serviceByAnchorProduct = earliestServiceForComposite(anchorCompositeId);
+        if (serviceByAnchorProduct) return serviceByAnchorProduct;
+      }
       const serviceByComposite = earliestServiceForComposite(activity.atividadeServicoAncoraId);
       if (serviceByComposite) return serviceByComposite;
     }

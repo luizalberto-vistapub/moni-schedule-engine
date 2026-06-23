@@ -71,8 +71,8 @@ describe("schedule controllers", () => {
       .send(basePayload({
         versao_cronograma_unique_id: "versao_1",
         atividades_json: [
-          { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 },
-          { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "serv_1" },
+          { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "Projeto" }] },
+          { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "" },
           { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 3, atividadeServicoAncoraId: "serv_1", etapaCompra: "limite de compra" }
         ]
       }));

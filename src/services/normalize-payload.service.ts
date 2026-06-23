@@ -83,6 +83,7 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
 function normalizeActivity(activity: ActivityPayload, index: number): NormalizedActivity {
   const id = asString(field(activity, "id", "unique_id", "unique id"), `atividade_${index + 1}`);
   const nome = asString(activity.nome || activity.name, id);
+  const tipo = normalizeActivityType(activity.tipo);
   const rawOffset = activity.offsetDias ?? field(activity, "diasAntecedencia");
   const rawEquipe = activity.equipe || field(activity, "tipo equipe");
 
@@ -90,7 +91,7 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     ...activity,
     id,
     nome,
-    tipo: normalizeActivityType(activity.tipo),
+    tipo,
     ordem: Number(activity.ordem ?? index + 1),
     duracao: Math.max(1, Math.ceil(Number(activity.duracao ?? 1))),
     duracaoVariavel: Boolean(activity.duracaoVariavel),
@@ -98,7 +99,7 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     etapaCompra: normalizePurchaseStage(activity.etapaCompra),
     peso: Number(activity.peso ?? 1),
     equipe: typeof rawEquipe === "string" && rawEquipe ? rawEquipe : null,
-    atividadeServicoAncoraId: activity.atividadeServicoAncoraId || null,
+    atividadeServicoAncoraId: tipo === "Compra" ? activity.atividadeServicoAncoraId || null : null,
     interdependenciasMasterIds: Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [],
     offsetDias: rawOffset === undefined || rawOffset === null || rawOffset === "" ? undefined : Number(rawOffset),
     raw: { ...activity }
