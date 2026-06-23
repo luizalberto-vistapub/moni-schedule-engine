@@ -767,6 +767,7 @@ describe("schedule controllers", () => {
       nomeAtividade: "Assentar piso",
       nomeObra: "Obra Vila Mariana",
       nomeProduto: "Piso",
+      "Produto (raiz)": "prod_1",
       obra: "obra_1",
       ordemRaiz: 1,
       peso: 2,

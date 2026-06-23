@@ -344,6 +344,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       nomeAtividade: atividadeObraNomeAtividade(line),
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",
+      "Produto (raiz)": line.produtoId || "",
       obra: currentObraId,
       ordemRaiz: line.ordem,
       peso: line.peso,

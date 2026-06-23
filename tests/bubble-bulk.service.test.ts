@@ -414,6 +414,7 @@ describe("Bubble bulk persistence", () => {
       versaoCronograma: "versao_1",
       equipe: "",
       nomeProduto: "",
+      "Produto (raiz)": line.produtoId,
       ambiente: "",
       "ambiente x item composicao": "",
       "ambiente x obra": "amb_1",
@@ -485,6 +486,7 @@ describe("Bubble bulk persistence", () => {
     expect(record).toMatchObject({
       nomeAtividade: "pj 2p1 - 03/06 - Produto simples Vivi 1 - Serviço",
       nomeProduto: "Produto simples Vivi 1 - Serviço",
+      "Produto (raiz)": "prod_1",
       tipo: "Projeto"
     });
     expect(cronogramaRecord).toMatchObject({
