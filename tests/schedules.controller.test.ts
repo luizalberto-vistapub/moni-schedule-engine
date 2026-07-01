@@ -483,12 +483,12 @@ describe("schedule controllers", () => {
           }
         ],
         atividade_obra_json: [
-          { atividade: "comp_aviso", indice_clone: 1, dataInicioPrevista: "2026-07-10T12:00:00.000Z" },
-          { atividade: "comp_lim_orc", indice_clone: 1, dataInicioPrevista: "2026-07-15T12:00:00.000Z" },
-          { atividade: "comp_lim_compra", indice_clone: 1, dataInicioPrevista: "2026-07-20T12:00:00.000Z" },
-          { atividade: "comp_receb", indice_clone: 1, dataInicioPrevista: "2026-07-25T12:00:00.000Z" },
-          { atividade: "serv_ps1", indice_clone: 1, dataInicioPrevista: "2026-08-01T12:00:00.000Z" },
-          { atividade: "serv_dep", indice_clone: 1, dataInicioPrevista: "2026-08-05T12:00:00.000Z" }
+          { id_atividade_obra_externo: "comp_aviso_2026-07-10_1" },
+          { id_atividade_obra_externo: "comp_lim_orc_2026-07-15_1" },
+          { id_atividade_obra_externo: "comp_lim_compra_2026-07-20_1" },
+          { id_atividade_obra_externo: "comp_receb_2026-07-25_1" },
+          { id_atividade_obra_externo: "serv_ps1_2026-08-01_1" },
+          { id_atividade_obra_externo: "serv_dep_2026-08-05_1" }
         ],
         events_json: [{
           type: "activity_start_delayed",

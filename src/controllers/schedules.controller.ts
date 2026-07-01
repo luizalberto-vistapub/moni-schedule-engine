@@ -297,7 +297,8 @@ function previousActivityDates(payload: SchedulePayload): Map<string, string> {
   const datesByActivity = new Map<string, string>();
 
   for (const record of payload.atividade_obra_json) {
-    const date = recordDateOnly(record);
+    const external = stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+    const date = recordDateOnly(record) || externalActivityDate(external);
     if (!date) continue;
     const activityId = activityRecordId(record);
     if (!activityId) continue;
