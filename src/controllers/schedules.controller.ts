@@ -14,6 +14,8 @@ import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekd
 const RECALCULATE_EVENT_TYPES = new Set([
   "work_start_delayed",
   "activity_start_delayed",
+  "activity_date_changed_cascade",
+  "activity_date_changed_only",
   "from_date_delayed",
   "activity_inserted"
 ]);
@@ -57,6 +59,10 @@ function normalizeEventType(type: string): string {
     "Adiar inicio da obra": "work_start_delayed",
     "Adiar início da atividade": "activity_start_delayed",
     "Adiar inicio da atividade": "activity_start_delayed",
+    "Alterar data da atividade com dependentes": "activity_date_changed_cascade",
+    "Alterar data da atividade e dependentes": "activity_date_changed_cascade",
+    "Alterar somente data da atividade": "activity_date_changed_only",
+    "Alterar data somente desta atividade": "activity_date_changed_only",
     "Paralisar a obra": "from_date_delayed",
     "Inserida nova atividade": "activity_inserted"
   };
@@ -172,11 +178,15 @@ function activityStartEventActivityId(event: Record<string, unknown>): string {
     .replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "");
 }
 
+function isActivityDateChangeEvent(type: string): boolean {
+  return type === "activity_start_delayed" || type === "activity_date_changed_cascade" || type === "activity_date_changed_only";
+}
+
 function validateRecalculateEventFields(mode: ScheduleMode, events: Record<string, unknown>[], pathRoot = "events_json"): void {
   if (mode !== "recalculate") return;
   const missingWorkStartDateIndex = events.findIndex((event) => {
     const type = eventType(event);
-    return (type === "work_start_delayed" || type === "from_date_delayed" || type === "activity_start_delayed") && !eventDate(event);
+    return (type === "work_start_delayed" || type === "from_date_delayed" || isActivityDateChangeEvent(type)) && !eventDate(event);
   });
   if (missingWorkStartDateIndex !== -1) {
     throw new ZodError([{
@@ -186,12 +196,12 @@ function validateRecalculateEventFields(mode: ScheduleMode, events: Record<strin
     }]);
   }
 
-  const missingActivityIdIndex = events.findIndex((event) => eventType(event) === "activity_start_delayed" && !activityStartEventActivityId(event));
+  const missingActivityIdIndex = events.findIndex((event) => isActivityDateChangeEvent(eventType(event)) && !activityStartEventActivityId(event));
   if (missingActivityIdIndex !== -1) {
     throw new ZodError([{
       code: "custom",
       path: [pathRoot, missingActivityIdIndex, "atividade_id"],
-      message: "activity_start_delayed events must include atividade_id"
+      message: `${eventType(events[missingActivityIdIndex]!)} events must include atividade_id`
     }]);
   }
 }
@@ -291,6 +301,10 @@ function activityRecordCloneIndex(record: Record<string, unknown>): number {
 
 function activityLineKey(activityId: string, cloneIndex: number): string {
   return `${activityId}:${cloneIndex}`;
+}
+
+function eventActivityLineKey(event: Record<string, unknown>): string {
+  return activityLineKey(activityStartEventActivityId(event), activityRecordCloneIndex(event));
 }
 
 function previousActivityDates(payload: SchedulePayload): Map<string, string> {
@@ -434,6 +448,84 @@ function serviceDependencyClosure(payload: SchedulePayload, rootServiceId: strin
   return dependents;
 }
 
+function activityDependencyClosure(payload: SchedulePayload, rootActivityId: string): Set<string> {
+  const dependents = new Set<string>([rootActivityId]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const activity of payload.atividades_json) {
+      const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+      if (!activityId || dependents.has(activityId)) continue;
+      const dependencies = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [];
+      if (!dependencies.some((dependencyId) => dependents.has(String(dependencyId)))) continue;
+      dependents.add(activityId);
+      changed = true;
+    }
+  }
+
+  return dependents;
+}
+
+function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
+  if (payload.mode !== "recalculate") return result;
+
+  const events = activeRecalculateEvents(payload).filter((event) => {
+    const type = eventType(event);
+    return type === "activity_date_changed_cascade" || type === "activity_date_changed_only";
+  });
+  if (!events.length) return result;
+
+  const previousDates = previousActivityDates(payload);
+  let lines = result.lines;
+
+  for (const event of events) {
+    const type = eventType(event);
+    const activityId = activityStartEventActivityId(event);
+    const targetKey = eventActivityLineKey(event);
+    const newDate = recalculatedStartDate(event);
+    if (!activityId || !newDate) continue;
+
+    const targetLine = lines.find((line) => activityLineKey(line.atividadeId, line.clone_index) === targetKey)
+      || lines.find((line) => line.atividadeId === activityId);
+    if (!targetLine) continue;
+
+    const originalTargetDate = previousDates.get(activityLineKey(targetLine.atividadeId, targetLine.clone_index))
+      || externalActivityDate(stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")))
+      || targetLine.data_programada;
+    if (!originalTargetDate) continue;
+
+    const deltaDays = differenceInCalendarDays(parseDateOnly(originalTargetDate), parseDateOnly(newDate));
+    const affectedActivityIds = type === "activity_date_changed_cascade"
+      ? activityDependencyClosure(payload, targetLine.atividadeId)
+      : new Set<string>([targetLine.atividadeId]);
+    if (type === "activity_date_changed_cascade" && targetLine.tipo === "Compra" && targetLine.atividadeServicoAncoraId) {
+      for (const serviceId of serviceDependencyClosure(payload, targetLine.atividadeServicoAncoraId)) {
+        affectedActivityIds.add(serviceId);
+      }
+    }
+
+    lines = lines.map((line) => {
+      const lineKey = activityLineKey(line.atividadeId, line.clone_index);
+      if (type === "activity_date_changed_only") {
+        return lineKey === targetKey ? withLineDate(line, newDate, payload) : line;
+      }
+
+      if (line.atividadeId === targetLine.atividadeId && line.clone_index < targetLine.clone_index) return line;
+      if (!affectedActivityIds.has(line.atividadeId)) return line;
+
+      const lineOriginalDate = originalLineDate(line, previousDates);
+      if (!lineOriginalDate) return line;
+      return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
+    });
+  }
+
+  lines = lines
+    .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
+
+  return { ...result, lines: refreshLineDependencies(payload, lines) };
+}
+
 function applyPurchaseChainRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
   const cutoffDate = payloadEventDate(payload);
   if (payload.mode !== "recalculate" || !cutoffDate) return result;
@@ -532,7 +624,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       oldEventsCount: payload.events_old.length
     }, "schedule calculation started");
 
-    const result = applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload)));
+    const result = applyActivityDateChangeRecalculation(payload, applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload))));
     const response = buildScheduleResponse(result, startedAt, payload.previous_version_id || null);
 
     log?.info({

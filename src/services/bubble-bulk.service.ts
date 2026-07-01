@@ -185,6 +185,10 @@ function normalizeEventType(type: string): string {
     "Adiar inicio da obra": "work_start_delayed",
     "Adiar início da atividade": "activity_start_delayed",
     "Adiar inicio da atividade": "activity_start_delayed",
+    "Alterar data da atividade com dependentes": "activity_date_changed_cascade",
+    "Alterar data da atividade e dependentes": "activity_date_changed_cascade",
+    "Alterar somente data da atividade": "activity_date_changed_only",
+    "Alterar data somente desta atividade": "activity_date_changed_only",
     "Paralisar a obra": "from_date_delayed",
     "Inserida nova atividade": "activity_inserted"
   };
@@ -196,6 +200,8 @@ function bubbleScheduleEventType(type: string): string {
   const types: Record<string, string> = {
     work_start_delayed: "Adiar início da obra",
     activity_start_delayed: "Adiar início da atividade",
+    activity_date_changed_cascade: "Alterar data da atividade com dependentes",
+    activity_date_changed_only: "Alterar somente data da atividade",
     from_date_delayed: "Paralisar a obra",
     activity_inserted: "Inserida nova atividade"
   };
@@ -226,6 +232,7 @@ function eventActivityId(event: Record<string, unknown>): string | null {
 
 function activeEventKey(event: Record<string, unknown>, index: number): string {
   const type = eventType(event) || `event_${index}`;
+  if (type === "activity_date_changed_cascade" || type === "activity_date_changed_only") return `${type}:${stringValue(recordValue(event, "id_atividade_obra_externo")) || eventActivityId(event) || index}`;
   if (type === "activity_start_delayed") return `${type}:${eventActivityId(event) || stringValue(recordValue(event, "id_atividade_obra_externo")) || index}`;
   if (type === "work_start_delayed" || type === "from_date_delayed") return type;
   return `${type}:${stringValue(recordValue(event, "_id", "id", "unique id")) || index}`;

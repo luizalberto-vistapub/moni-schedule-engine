@@ -222,6 +222,176 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("changes only the selected atividade obra date without dependents", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      const rows = String((init as { body?: string })?.body || "").split("\n").filter(Boolean);
+      return {
+        ok: true,
+        text: async () => rows.map((_, index) => JSON.stringify({ id: `bulk_${index + 1}` })).join("\n")
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+        atividade_obra_json: [
+          { atividade: "serv_1", indice_clone: 1, dataInicioPrevista: "2026-05-04" },
+          { atividade: "serv_2", indice_clone: 1, dataInicioPrevista: "2026-05-05" },
+          { atividade: "serv_3", indice_clone: 1, dataInicioPrevista: "2026-05-06" }
+        ],
+        events_json: [{
+          type: "activity_date_changed_only",
+          id_atividade_obra_externo: "serv_2_2026-05-05_1",
+          new_start_date: "2026-05-10"
+        }],
+        atividades_json: [
+          { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["serv_1"] },
+          { id: "serv_3", nome: "Servico 3", tipo: "Servico", ordem: 3, duracao: 1, interdependenciasMasterIds: ["serv_2"] }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.find((record) => record.atividade === "serv_1")).toMatchObject({ dataInicioPrevista: "2026-05-04T12:00:00.000Z" });
+    expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({ dataInicioPrevista: "2026-05-10T12:00:00.000Z" });
+    expect(records.find((record) => record.atividade === "serv_3")).toMatchObject({ dataInicioPrevista: "2026-05-06T12:00:00.000Z" });
+
+    const eventRecords = persistedBulkBody("eventocronograma").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventRecords.find((record) => record.tipo === "Alterar somente data da atividade")).toMatchObject({
+      atividade: "serv_2",
+      data: "2026-05-10T12:00:00.000Z"
+    });
+  });
+
+  it("changes selected atividade obra date and dependent activities without event date cutoff", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      const rows = String((init as { body?: string })?.body || "").split("\n").filter(Boolean);
+      return {
+        ok: true,
+        text: async () => rows.map((_, index) => JSON.stringify({ id: `bulk_${index + 1}` })).join("\n")
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        event_date: "2026-05-20",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+        atividade_obra_json: [
+          { atividade: "serv_1", indice_clone: 1, dataInicioPrevista: "2026-05-04" },
+          { atividade: "serv_2", indice_clone: 1, dataInicioPrevista: "2026-05-05" },
+          { atividade: "serv_2", indice_clone: 2, dataInicioPrevista: "2026-05-06" },
+          { atividade: "serv_3", indice_clone: 1, dataInicioPrevista: "2026-05-07" },
+          { atividade: "serv_4", indice_clone: 1, dataInicioPrevista: "2026-05-08" }
+        ],
+        events_json: [{
+          type: "Alterar data da atividade com dependentes",
+          id_atividade_obra_externo: "serv_2_2026-05-06_2",
+          new_start_date: "2026-05-10"
+        }],
+        atividades_json: [
+          { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 2, interdependenciasMasterIds: ["serv_1"] },
+          { id: "serv_3", nome: "Servico 3", tipo: "Servico", ordem: 3, duracao: 1, interdependenciasMasterIds: ["serv_2"] },
+          { id: "serv_4", nome: "Servico 4", tipo: "Servico", ordem: 4, duracao: 1 }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const datesByExternalId = new Map(records.map((record) => [record.id_atividade_obra_externo, record.dataInicioPrevista]));
+    expect(datesByExternalId.get("serv_1_2026-05-04_1")).toBe("2026-05-04T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2_2026-05-05_1")).toBe("2026-05-05T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2_2026-05-10_2")).toBe("2026-05-10T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_3_2026-05-11_1")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_4_2026-05-08_1")).toBe("2026-05-08T12:00:00.000Z");
+  });
+
+  it("changes selected purchase date and cascades to its anchor service dependents without event date cutoff", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      const rows = String((init as { body?: string })?.body || "").split("\n").filter(Boolean);
+      return {
+        ok: true,
+        text: async () => rows.map((_, index) => JSON.stringify({ id: `bulk_${index + 1}` })).join("\n")
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        event_date: "2026-05-20",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+        obra_ambiente_produto_json: [
+          {
+            id: "oap_service",
+            ambienteId: "amb_1",
+            produtoId: "prod_service",
+            produtoNome: "Produto servico",
+            "id produto composto": "composto_1",
+            quantidade: 1
+          },
+          {
+            id: "oap_purchase",
+            ambienteId: "amb_1",
+            produtoId: "prod_purchase",
+            produtoNome: "Produto compra",
+            "id produto composto": "composto_1",
+            quantidade: 1
+          },
+          {
+            id: "oap_independent",
+            ambienteId: "amb_1",
+            produtoId: "prod_independent",
+            produtoNome: "Produto independente",
+            "id produto composto": "composto_2",
+            quantidade: 1
+          }
+        ],
+        atividade_obra_json: [
+          { atividade: "compra_1", indice_clone: 1, dataInicioPrevista: "2026-05-01" },
+          { atividade: "serv_anchor", indice_clone: 1, dataInicioPrevista: "2026-05-04" },
+          { atividade: "serv_dep", indice_clone: 1, dataInicioPrevista: "2026-05-05" },
+          { atividade: "serv_independent", indice_clone: 1, dataInicioPrevista: "2026-05-06" }
+        ],
+        events_json: [{
+          type: "activity_date_changed_cascade",
+          id_atividade_obra_externo: "compra_1_2026-05-01_1",
+          new_start_date: "2026-05-03"
+        }],
+        atividades_json: [
+          { id: "serv_anchor", nome: "Servico ancora", tipo: "Servico", ordem: 1, duracao: 1, produto: "prod_service" },
+          { id: "serv_dep", nome: "Servico dependente", tipo: "Servico", ordem: 2, duracao: 1, produto: "prod_service", interdependenciasMasterIds: ["serv_anchor"] },
+          { id: "serv_independent", nome: "Servico independente", tipo: "Servico", ordem: 3, duracao: 1, produto: "prod_independent" },
+          { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 4, produto: "prod_purchase", etapaCompra: "Limite de compra", atividadeServicoAncoraId: "prod_purchase" }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const datesByActivity = new Map(records.map((record) => [record.atividade, record.dataInicioPrevista]));
+    expect(datesByActivity.get("compra_1")).toBe("2026-05-03T12:00:00.000Z");
+    expect(datesByActivity.get("serv_anchor")).toBe("2026-05-06T12:00:00.000Z");
+    expect(datesByActivity.get("serv_dep")).toBe("2026-05-07T12:00:00.000Z");
+    expect(datesByActivity.get("serv_independent")).toBe("2026-05-06T12:00:00.000Z");
+  });
+
   it("keeps generated dates when from date paralysis has zero days", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
