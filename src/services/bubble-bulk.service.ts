@@ -207,6 +207,11 @@ function eventDate(event: Record<string, unknown>): string | null {
   return stringValue(recordValue(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "data", "from", "to"));
 }
 
+function requestDate(payload: NormalizedSchedulePayload, event: Record<string, unknown>): string | null {
+  return stringValue(recordValue(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao"))
+    || stringValue(recordValue(event, "request_date", "requisicao_data", "event_date", "data_requisicao"));
+}
+
 function eventDays(event: Record<string, unknown>): number | null {
   const value = recordValue(event, "days", "dias", "duration_days", "durationDays");
   const days = typeof value === "number" ? value : Number(stringValue(value));
@@ -369,6 +374,7 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
     if (!type) return [];
 
     const date = eventDate(event);
+    const eventRequestDate = requestDate(payload, event);
     const record: Record<string, unknown> = {
       atividade: eventActivityId(event) || "",
       cronograma: payload.cronograma_unique_id,
@@ -377,6 +383,7 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
       id_atividade_obra_externo: stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")) || "",
       tipo: bubbleScheduleEventType(type),
       obra: currentObraId,
+      requisicao_data: eventRequestDate ? toBubbleDate(eventRequestDate) : "",
       versaoCronograma: versionId
     };
 
@@ -599,3 +606,4 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   const dependencyPatches = buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords);
   await patchAtividadeObraDependencies(dependencyPatches, config, options);
 }
+

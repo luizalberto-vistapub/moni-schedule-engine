@@ -9,7 +9,7 @@ import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
 import { stableLineId } from "../utils/ids.js";
-import { differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
+import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 
 const RECALCULATE_EVENT_TYPES = new Set([
   "work_start_delayed",
@@ -200,6 +200,10 @@ function activeRecalculateEvents(payload: SchedulePayload): Record<string, unkno
   return [...payload.events_old, ...payload.events_json];
 }
 
+function payloadEventDate(payload: SchedulePayload): string {
+  return eventDateOnly(stringValue(field(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao")));
+}
+
 function lastEventOfType(events: Record<string, unknown>[], ...types: string[]): Record<string, unknown> | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const type = eventType(events[index]!);
@@ -264,6 +268,11 @@ function externalActivityParts(externalId: string): { activityId: string; cloneI
   };
 }
 
+function externalActivityDate(externalId: string): string {
+  const match = externalId.match(/^.*_(\d{4}-\d{2}-\d{2})_\d+$/);
+  return match?.[1] || "";
+}
+
 function activityRecordId(record: Record<string, unknown>): string {
   const direct = stringValue(field(record, "atividade", "atividade_id", "activity_id", "atividadeId"));
   if (direct) return direct;
@@ -282,6 +291,20 @@ function activityRecordCloneIndex(record: Record<string, unknown>): number {
 
 function activityLineKey(activityId: string, cloneIndex: number): string {
   return `${activityId}:${cloneIndex}`;
+}
+
+function previousActivityDates(payload: SchedulePayload): Map<string, string> {
+  const datesByActivity = new Map<string, string>();
+
+  for (const record of payload.atividade_obra_json) {
+    const date = recordDateOnly(record);
+    if (!date) continue;
+    const activityId = activityRecordId(record);
+    if (!activityId) continue;
+    datesByActivity.set(activityLineKey(activityId, activityRecordCloneIndex(record)), date);
+  }
+
+  return datesByActivity;
 }
 
 function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string): Map<string, string> {
@@ -374,6 +397,115 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
   return { ...result, lines: refreshLineDependencies(payload, lines) };
 }
 
+function purchaseStageRank(stage: string | null): number {
+  const ranks: Record<string, number> = {
+    AVISO_ORCAMENTO: 1,
+    LIMITE_ORCAMENTO: 2,
+    LIMITE_COMPRA: 3,
+    RECEBIMENTO: 4
+  };
+  return stage ? ranks[stage] || 99 : 99;
+}
+
+function originalLineDate(line: ScheduleLine, previousDates: Map<string, string>): string {
+  return previousDates.get(activityLineKey(line.atividadeId, line.clone_index))
+    || externalActivityDate(line.atividade_obra_id_externo)
+    || line.data_programada;
+}
+
+function serviceDependencyClosure(payload: SchedulePayload, rootServiceId: string): Set<string> {
+  const dependents = new Set<string>([rootServiceId]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const activity of payload.atividades_json) {
+      const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+      if (!activityId || dependents.has(activityId)) continue;
+      if (stringValue(activity.tipo) !== "Serviço" && stringValue(activity.tipo) !== "Servico") continue;
+      const dependencies = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [];
+      if (!dependencies.some((dependencyId) => dependents.has(String(dependencyId)))) continue;
+      dependents.add(activityId);
+      changed = true;
+    }
+  }
+
+  return dependents;
+}
+
+function applyPurchaseChainRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const cutoffDate = payloadEventDate(payload);
+  if (payload.mode !== "recalculate" || !cutoffDate) return result;
+
+  const events = activeRecalculateEvents(payload).filter((event) => eventType(event) === "activity_start_delayed");
+  if (!events.length) return result;
+
+  const previousDates = previousActivityDates(payload);
+  let lines = result.lines;
+
+  for (const event of events) {
+    const activityId = activityStartEventActivityId(event);
+    const newDate = recalculatedStartDate(event);
+    if (!activityId || !newDate) continue;
+
+    const changedLine = lines.find((line) => line.atividadeId === activityId && line.tipo === "Compra");
+    if (!changedLine?.produtoId || !changedLine.atividadeServicoAncoraId) continue;
+
+    const originalChangedDate = previousDates.get(activityLineKey(activityId, changedLine.clone_index))
+      || externalActivityDate(stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")))
+      || changedLine.data_programada;
+    if (!originalChangedDate) continue;
+
+    const deltaDays = differenceInCalendarDays(parseDateOnly(originalChangedDate), parseDateOnly(newDate));
+    if (deltaDays === 0) continue;
+
+    const anchorServiceId = changedLine.atividadeServicoAncoraId;
+    const affectedServiceIds = serviceDependencyClosure(payload, anchorServiceId);
+    const purchaseChain = lines.filter((line) => (
+      line.tipo === "Compra"
+      && line.produtoId === changedLine.produtoId
+      && line.atividadeServicoAncoraId === anchorServiceId
+    ));
+    const shiftedPurchaseIds = new Set(
+      purchaseChain
+        .filter((line) => originalLineDate(line, previousDates) >= cutoffDate)
+        .map((line) => line.atividadeId)
+    );
+
+    lines = lines.map((line) => {
+      const lineOriginalDate = originalLineDate(line, previousDates);
+      if (!lineOriginalDate) return line;
+
+      if (line.tipo === "Compra" && line.produtoId === changedLine.produtoId && line.atividadeServicoAncoraId === anchorServiceId) {
+        if (lineOriginalDate < cutoffDate) return withLineDate(line, lineOriginalDate, payload);
+        return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
+      }
+
+      if (line.tipo === "Serviço" && affectedServiceIds.has(line.atividadeId) && lineOriginalDate >= cutoffDate) {
+        return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
+      }
+
+      return line;
+    });
+
+    const shiftedPurchaseLines = lines
+      .filter((line) => shiftedPurchaseIds.has(line.atividadeId))
+      .sort((a, b) => purchaseStageRank(a.subtipo_compra) - purchaseStageRank(b.subtipo_compra));
+    for (let index = 1; index < shiftedPurchaseLines.length; index += 1) {
+      const previous = shiftedPurchaseLines[index - 1]!;
+      const current = shiftedPurchaseLines[index]!;
+      if (current.data_programada > previous.data_programada) continue;
+      const nextDate = formatDateOnly(addDays(parseDateOnly(previous.data_programada), 1));
+      lines = lines.map((line) => line === current ? withLineDate(line, nextDate, payload) : line);
+    }
+  }
+
+  lines = lines
+    .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
+
+  return { ...result, lines: refreshLineDependencies(payload, lines) };
+}
+
 async function handleSchedule(req: ObservedRequest, res: Response, mode: ScheduleMode) {
   const log = requestLog(req);
   const startedAt = new Date();
@@ -399,7 +531,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       oldEventsCount: payload.events_old.length
     }, "schedule calculation started");
 
-    const result = applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload));
+    const result = applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload)));
     const response = buildScheduleResponse(result, startedAt, payload.previous_version_id || null);
 
     log?.info({

@@ -101,6 +101,10 @@ export interface SchedulePayload {
   reason?: string | null;
   numero?: number | null;
   previous_version_id?: string | null;
+  event_date?: string | null;
+  request_date?: string | null;
+  requisicao_data?: string | null;
+  data_requisicao?: string | null;
   obra_json: ObraPayload[];
   obra_ambiente_json: ObraAmbientePayload[];
   obra_ambiente_produto_json: ObraAmbienteProdutoPayload[];
@@ -114,3 +118,4 @@ export interface SchedulePayload {
 export interface NormalizedSchedulePayload extends Omit<SchedulePayload, "atividades_json"> {
   atividades_json: NormalizedActivity[];
 }
+

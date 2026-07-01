@@ -12,6 +12,10 @@ export const payloadSchema = z.object({
   reason: z.string().nullable().optional(),
   numero: z.number().nullable().optional(),
   previous_version_id: z.string().nullable().optional(),
+  event_date: z.string().nullable().optional(),
+  request_date: z.string().nullable().optional(),
+  requisicao_data: z.string().nullable().optional(),
+  data_requisicao: z.string().nullable().optional(),
   obra_json: z.array(z.record(z.unknown())).min(1),
   obra_ambiente_json: recordArray,
   obra_ambiente_produto_json: recordArray,
@@ -204,3 +208,4 @@ export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePa
     atividades_json: [...baseActivities, ...projectActivities]
   };
 }
+

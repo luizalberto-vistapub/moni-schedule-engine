@@ -446,6 +446,81 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("recalculates future purchase chain lines and dependent services from the request event date", async () => {
+    let fetchCallIndex = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const currentCall = fetchCallIndex;
+      fetchCallIndex += 1;
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        text: async () => currentCall === 0 ? rows.map((_, index) => `{"id":"ao_${index + 1}"}`).join("\n") : ""
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "",
+        dias_trabalho_semana: 6,
+        event_date: "2026-07-12",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-08-01T03:00:00.000Z" }],
+        obra_ambiente_produto_json: [],
+        obra_ambiente_item_composicao_json: [
+          {
+            "unique id": "item_compra",
+            "id produto composto": "composto_ps1",
+            "id produto simples": "ps1_compra",
+            "nome produto simples": "PS1 compra"
+          },
+          {
+            "unique id": "item_servico",
+            "id produto composto": "composto_ps1",
+            "id produto simples": "ps1_servico",
+            "nome produto simples": "PS1 serviço"
+          }
+        ],
+        atividade_obra_json: [
+          { atividade: "comp_aviso", indice_clone: 1, dataInicioPrevista: "2026-07-10T12:00:00.000Z" },
+          { atividade: "comp_lim_orc", indice_clone: 1, dataInicioPrevista: "2026-07-15T12:00:00.000Z" },
+          { atividade: "comp_lim_compra", indice_clone: 1, dataInicioPrevista: "2026-07-20T12:00:00.000Z" },
+          { atividade: "comp_receb", indice_clone: 1, dataInicioPrevista: "2026-07-25T12:00:00.000Z" },
+          { atividade: "serv_ps1", indice_clone: 1, dataInicioPrevista: "2026-08-01T12:00:00.000Z" },
+          { atividade: "serv_dep", indice_clone: 1, dataInicioPrevista: "2026-08-05T12:00:00.000Z" }
+        ],
+        events_json: [{
+          type: "activity_start_delayed",
+          atividade_id: "comp_lim_orc",
+          id_atividade_obra_externo: "comp_lim_orc_2026-07-15_1",
+          new_start_date: "2026-07-17"
+        }],
+        atividades_json: [
+          { id: "comp_aviso", nome: "Aviso de orçamento PS1", tipo: "Compra", produto: "ps1_compra", ordem: 1, atividadeServicoAncoraId: "ps1_compra", etapaCompra: "Aviso de orçamento", diasAntecedencia: 22 },
+          { id: "comp_lim_orc", nome: "Limite de orçamento PS1", tipo: "Compra", produto: "ps1_compra", ordem: 1, atividadeServicoAncoraId: "ps1_compra", etapaCompra: "Limite de orçamento", diasAntecedencia: 17 },
+          { id: "comp_lim_compra", nome: "Limite de compra PS1", tipo: "Compra", produto: "ps1_compra", ordem: 1, atividadeServicoAncoraId: "ps1_compra", etapaCompra: "Limite de compra", diasAntecedencia: 12 },
+          { id: "comp_receb", nome: "Recebimento PS1", tipo: "Compra", produto: "ps1_compra", ordem: 1, atividadeServicoAncoraId: "ps1_compra", etapaCompra: "Recebimento", diasAntecedencia: 7 },
+          { id: "serv_ps1", nome: "Atividade de Serviço PS1", tipo: "Servico", produto: "ps1_servico", ordem: 1, duracao: 1 },
+          { id: "serv_dep", nome: "Serviço dependente PS1", tipo: "Servico", produto: "ps1_servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["serv_ps1"] }
+        ]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const dateByActivity = new Map(records.map((record) => [record.atividade, record.dataInicioPrevista]));
+
+    expect(dateByActivity.get("comp_aviso")).toBe("2026-07-10T12:00:00.000Z");
+    expect(dateByActivity.get("comp_lim_orc")).toBe("2026-07-17T12:00:00.000Z");
+    expect(dateByActivity.get("comp_lim_compra")).toBe("2026-07-22T12:00:00.000Z");
+    expect(dateByActivity.get("comp_receb")).toBe("2026-07-27T12:00:00.000Z");
+    expect(dateByActivity.get("serv_ps1")).toBe("2026-08-03T12:00:00.000Z");
+    expect(dateByActivity.get("serv_dep")).toBe("2026-08-07T12:00:00.000Z");
+  });
+
   it("requires an activity id for activity start delay events", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

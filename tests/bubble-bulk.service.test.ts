@@ -99,6 +99,7 @@ describe("Bubble bulk persistence", () => {
 
   it("builds active EventoCronograma records from old and new events", () => {
     const { payload } = payloadWithOneLine({
+      event_date: "2026-05-07",
       events_old: [{
         tipo: "Adiar início da atividade",
         atividade: "atividade_1",
@@ -122,6 +123,7 @@ describe("Bubble bulk persistence", () => {
         id_atividade_obra_externo: "atividade_1_2026-05-04_1",
         tipo: "Adiar início da atividade",
         obra: "obra_1",
+        requisicao_data: "2026-05-07T12:00:00.000Z",
         versaoCronograma: "versao_1"
       },
       {
@@ -132,6 +134,7 @@ describe("Bubble bulk persistence", () => {
         id_atividade_obra_externo: "atividade_2_2026-05-04_1",
         tipo: "Adiar início da atividade",
         obra: "obra_1",
+        requisicao_data: "2026-05-07T12:00:00.000Z",
         versaoCronograma: "versao_1"
       }
     ]);
@@ -145,6 +148,7 @@ describe("Bubble bulk persistence", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const { payload, lines } = payloadWithOneLine({
+      event_date: "2026-05-06",
       events_json: [{ type: "work_start_delayed", new_start_date: "2026-05-08" }]
     });
 
@@ -157,6 +161,7 @@ describe("Bubble bulk persistence", () => {
       data: "2026-05-08T12:00:00.000Z",
       tipo: "Adiar início da obra",
       obra: "obra_1",
+      requisicao_data: "2026-05-06T12:00:00.000Z",
       versaoCronograma: "versao_1"
     });
   });
