@@ -70,7 +70,14 @@ function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | nul
 
 function getAmbienteItemComposicaoId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product["id ambiente item composicao"] || product.ambienteItemComposicaoId || "") || null;
+  if (product.ambienteItemComposicaoId) return String(product.ambienteItemComposicaoId);
+
+  const isCompositionItem = Boolean(product["id produto composto"] || product["id produto simples"]);
+  if (isCompositionItem) {
+    return String(product["unique id"] || product.unique_id || product.id || "") || null;
+  }
+
+  return String(product["id ambiente item composicao"] || "") || null;
 }
 
 function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
