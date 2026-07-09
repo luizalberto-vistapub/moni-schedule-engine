@@ -9,6 +9,16 @@ const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
+const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
+  "responsavel",
+  "responsavelFranqueado",
+  "sortOcorrencia",
+  "sortTipo",
+  "status",
+  "statusCompra",
+  "statusProjeto",
+  "statusOcorrencia"
+] as const;
 
 interface BubbleBulkConfig {
   apiToken?: string;
@@ -91,6 +101,53 @@ function rawRecordValue(record: Record<string, unknown> | undefined, ...keys: st
     if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
   }
   return undefined;
+}
+
+function externalActivityParts(externalId: string): { activityId: string; cloneIndex: number } | null {
+  const match = externalId.match(/^(.*)_\d{4}-\d{2}-\d{2}_(\d+)$/);
+  if (!match) return null;
+  return {
+    activityId: match[1]!,
+    cloneIndex: Number(match[2])
+  };
+}
+
+function activityRecordId(record: Record<string, unknown>): string {
+  const direct = stringValue(recordValue(record, "atividade", "atividade_id", "activity_id", "atividadeId"));
+  if (direct) return direct;
+  const external = stringValue(recordValue(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  return external ? externalActivityParts(external)?.activityId || "" : "";
+}
+
+function activityRecordCloneIndex(record: Record<string, unknown>): number {
+  const raw = recordValue(record, "indice_clone", "clone_index", "cloneIndex");
+  const explicit = typeof raw === "number" ? raw : Number(stringValue(raw));
+  if (Number.isFinite(explicit) && explicit > 0) return Math.trunc(explicit);
+  const external = stringValue(recordValue(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  return external ? externalActivityParts(external)?.cloneIndex || 1 : 1;
+}
+
+function activityLineKey(activityId: string, cloneIndex: number): string {
+  return `${activityId}:${cloneIndex}`;
+}
+
+function previousAtividadeObraFields(payload: NormalizedSchedulePayload): Map<string, Record<string, unknown>> {
+  const fieldsByLine = new Map<string, Record<string, unknown>>();
+
+  for (const record of payload.atividade_obra_json) {
+    const activityId = activityRecordId(record);
+    if (!activityId) continue;
+
+    const fields: Record<string, unknown> = {};
+    for (const fieldName of PREVIOUS_ATIVIDADE_OBRA_FIELDS) {
+      const value = rawRecordValue(record, fieldName);
+      if (value !== undefined) fields[fieldName] = value;
+    }
+
+    if (Object.keys(fields).length) fieldsByLine.set(activityLineKey(activityId, activityRecordCloneIndex(record)), fields);
+  }
+
+  return fieldsByLine;
 }
 
 function stringValue(value: unknown): string | null {
@@ -341,8 +398,11 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
 
   if (!currentObraId || !versionId) return [];
 
+  const previousFieldsByLine = previousAtividadeObraFields(payload);
+
   return lines.map((line) => {
     const ambiente = line.ambiente ? currentAmbientesByName.get(line.ambiente) : undefined;
+    const previousFields = previousFieldsByLine.get(activityLineKey(line.atividadeId, line.clone_index)) || {};
 
     return {
       copyDuracao: line.clone_index > 1,
@@ -366,7 +426,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       ambiente: line.ambiente || "",
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
       "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
-      icon: iconFromAmbiente(ambiente) || ""
+      icon: iconFromAmbiente(ambiente) || "",
+      ...previousFields
     };
   });
 }
@@ -613,4 +674,3 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   const dependencyPatches = buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords);
   await patchAtividadeObraDependencies(dependencyPatches, config, options);
 }
-

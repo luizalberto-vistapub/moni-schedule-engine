@@ -431,6 +431,39 @@ describe("Bubble bulk persistence", () => {
     expect(atividadeObraRecordsWithoutAmbienteId[0]["ambiente x obra"]).toBe("");
   });
 
+  it("preserves hydrated Atividade x Obra fields from the previous schedule records", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividade_obra_json: [{
+        atividade: "serv_1",
+        indice_clone: 1,
+        id_atividade_obra_externo: "serv_1_2026-05-04_1",
+        responsavel: "Franqueado",
+        responsavelFranqueado: "user_1",
+        sortOcorrencia: "2026-05-04|serv_1",
+        sortTipo: "Servico|001",
+        status: "Em andamento",
+        statusCompra: "Compra aprovada",
+        statusProjeto: "Projeto recebido",
+        statusOcorrencia: "Sem ocorrencia"
+      }]
+    });
+
+    const [record] = buildAtividadeObraRecords(payload, [{ ...lines[0]!, data_programada: "2026-05-06", atividade_obra_id_externo: "serv_1_2026-05-06_1" }]);
+
+    expect(record).toMatchObject({
+      id_atividade_obra_externo: "serv_1_2026-05-06_1",
+      dataInicioPrevista: "2026-05-06T12:00:00.000Z",
+      responsavel: "Franqueado",
+      responsavelFranqueado: "user_1",
+      sortOcorrencia: "2026-05-04|serv_1",
+      sortTipo: "Servico|001",
+      status: "Em andamento",
+      statusCompra: "Compra aprovada",
+      statusProjeto: "Projeto recebido",
+      statusOcorrencia: "Sem ocorrencia"
+    });
+  });
+
   it("sends composition ambiente reference to the Bubble ambiente x item composicao field", () => {
     const payload = normalizePayload(basePayload({
       versao_cronograma_unique_id: "versao_1",
