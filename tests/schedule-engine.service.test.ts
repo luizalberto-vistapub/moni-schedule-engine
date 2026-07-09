@@ -679,7 +679,7 @@ describe("schedule engine", () => {
       produtoId: "prod_compra",
       produto: "Produto de compra",
       ambienteId: "amb_item_1",
-      ambienteItemComposicaoId: "item_compra_1",
+      ambienteItemComposicaoId: "amb_item_1",
       ambiente: "Ambiente Cap"
     });
     expect(result.lines[2]).toMatchObject({

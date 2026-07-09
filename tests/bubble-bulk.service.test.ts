@@ -488,7 +488,7 @@ describe("Bubble bulk persistence", () => {
       atividade: "serv_1",
       id_atividade_obra_externo: result.lines[0]!.atividade_obra_id_externo,
       versaoCronograma: "versao_1",
-      "ambiente x item composicao": "item_servico_1",
+      "ambiente x item composicao": "amb_item_1",
       "ambiente x obra": ""
     });
   });
