@@ -206,8 +206,29 @@ function validateRecalculateEventFields(mode: ScheduleMode, events: Record<strin
   }
 }
 
+function recalculateEventOverrideKey(event: Record<string, unknown>): string {
+  const type = eventType(event);
+  if (type === "work_start_delayed" || type === "from_date_delayed") return "schedule";
+  if (!isActivityDateChangeEvent(type)) return "";
+
+  const activityId = activityStartEventActivityId(event);
+  return activityId ? `activity:${activityId}` : "";
+}
+
 function activeRecalculateEvents(payload: SchedulePayload): Record<string, unknown>[] {
-  return [...payload.events_old, ...payload.events_json];
+  const currentEventKeys = new Set(
+    payload.events_json
+      .map(recalculateEventOverrideKey)
+      .filter(Boolean)
+  );
+  const oldEvents = currentEventKeys.size
+    ? payload.events_old.filter((event) => {
+      const key = recalculateEventOverrideKey(event);
+      return !key || !currentEventKeys.has(key);
+    })
+    : payload.events_old;
+
+  return [...oldEvents, ...payload.events_json];
 }
 
 function payloadEventDate(payload: SchedulePayload): string {

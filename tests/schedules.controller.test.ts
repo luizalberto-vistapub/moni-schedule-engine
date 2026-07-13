@@ -706,6 +706,48 @@ describe("schedule controllers", () => {
     expect(response.body.validations.errors).toContain("activity_start_delayed events must include atividade_id");
   });
 
+  it("lets events_json override previous events_old for the same activity", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_3",
+        previous_version_id: "versao_2",
+        mode: "",
+        dias_trabalho_semana: 6,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-08-01T03:00:00.000Z" }],
+        events_old: [{
+          tipo: "activity_date_changed_only",
+          atividade: "serv_1",
+          id_atividade_obra_externo: "serv_1_2026-08-10_1",
+          data: "2026-08-15"
+        }],
+        events_json: [{
+          type: "activity_start_delayed",
+          atividade_id: "serv_1",
+          id_atividade_obra_externo: "serv_1_2026-08-10_1",
+          new_start_date: "2026-08-12"
+        }],
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(201);
+    expect(response.body.ok).toBe(true);
+
+    const atividadeObraBody = persistedBulkBody("atividadexobra");
+    const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records.find((record) => record.atividade === "serv_1")).toMatchObject({
+      dataInicioPrevista: "2026-08-12T12:00:00.000Z"
+    });
+
+    const eventoCronogramaBody = persistedBulkBody("eventocronograma");
+    const eventRecords = eventoCronogramaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventRecords).toHaveLength(1);
+    expect(eventRecords[0]).toMatchObject({
+      atividade: "serv_1",
+      data: "2026-08-12T12:00:00.000Z",
+      tipo: "Adiar início da atividade"
+    });
+  });
   it("keeps previous activity start delays from events_old during recalculation", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

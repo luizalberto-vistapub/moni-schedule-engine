@@ -295,9 +295,31 @@ function activeEventKey(event: Record<string, unknown>, index: number): string {
   return `${type}:${stringValue(recordValue(event, "_id", "id", "unique id")) || index}`;
 }
 
+function scheduleEventOverrideKey(event: Record<string, unknown>): string {
+  const type = eventType(event);
+  if (type === "work_start_delayed" || type === "from_date_delayed") return "schedule";
+  if (type === "activity_start_delayed" || type === "activity_date_changed_cascade" || type === "activity_date_changed_only") {
+    const activityId = eventActivityId(event);
+    return activityId ? `activity:${activityId}` : "";
+  }
+  return "";
+}
+
 function activeScheduleEvents(payload: NormalizedSchedulePayload): Record<string, unknown>[] {
+  const currentEventKeys = new Set(
+    payload.events_json
+      .map(scheduleEventOverrideKey)
+      .filter(Boolean)
+  );
+  const oldEvents = currentEventKeys.size
+    ? payload.events_old.filter((event) => {
+      const key = scheduleEventOverrideKey(event);
+      return !key || !currentEventKeys.has(key);
+    })
+    : payload.events_old;
+
   const activeEvents = new Map<string, Record<string, unknown>>();
-  [...payload.events_old, ...payload.events_json].forEach((event, index) => {
+  [...oldEvents, ...payload.events_json].forEach((event, index) => {
     activeEvents.set(activeEventKey(event, index), event);
   });
   return [...activeEvents.values()];
