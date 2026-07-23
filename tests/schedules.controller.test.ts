@@ -22,9 +22,9 @@ describe("schedule controllers", () => {
 
   function persistedBulkBody(typeName: string): string {
     const calls = (fetch as unknown as { mock: { calls: Array<Array<{ body?: string } | string>> } }).mock.calls;
-    const call = calls.find(([url]) => String(url).includes(`/obj/${typeName}/bulk`));
-    expect(call).toBeTruthy();
-    return String((call![1] as { body?: string }).body);
+    const matchingCalls = calls.filter(([url]) => String(url).includes(`/obj/${typeName}/bulk`));
+    expect(matchingCalls.length).toBeGreaterThan(0);
+    return matchingCalls.map((call) => String((call[1] as { body?: string }).body)).join("\n");
   }
 
   it("returns health status", async () => {

@@ -33,6 +33,7 @@ interface BubbleBulkConfig {
 interface PersistScheduleOptions {
   requestId?: string | number | object;
   log?: Logger;
+  onFirstAtividadeObraCreated?: (id: string) => void;
 }
 
 interface PersistedBulkRecord {
@@ -374,6 +375,68 @@ function parseBulkCreatedIds(responseText: string, expectedCount: number): (stri
   return ids.slice(0, expectedCount);
 }
 
+function firstCreatedIdFromNdjsonLine(line: string): string | null {
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    if (parsed.status === "error" || parsed.success === false) return null;
+    return stringValue(parsed.id);
+  } catch {
+    return null;
+  }
+}
+
+async function bulkResponseText(response: Response, onCreatedId?: (id: string) => void): Promise<string> {
+  if (!onCreatedId) return response.text();
+  if (!response.body) {
+    const responseText = await response.text();
+    for (const line of responseText.split(/\r?\n/).filter((item) => item.trim())) {
+      const createdId = firstCreatedIdFromNdjsonLine(line.trim());
+      if (createdId) {
+        onCreatedId(createdId);
+        break;
+      }
+    }
+    return responseText;
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let responseText = "";
+  let pendingLine = "";
+  let notified = false;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    responseText += chunk;
+    pendingLine += chunk;
+
+    const lines = pendingLine.split(/\r?\n/);
+    pendingLine = lines.pop() || "";
+
+    for (const line of lines) {
+      const createdId = firstCreatedIdFromNdjsonLine(line.trim());
+      if (createdId && !notified) {
+        notified = true;
+        onCreatedId(createdId);
+      }
+    }
+  }
+
+  const trailing = decoder.decode();
+  responseText += trailing;
+  pendingLine += trailing;
+
+  if (pendingLine.trim()) {
+    const createdId = firstCreatedIdFromNdjsonLine(pendingLine.trim());
+    if (createdId && !notified) onCreatedId(createdId);
+  }
+
+  return responseText;
+}
+
 function isMissingAmbienteXObraReference(responseText: string): boolean {
   return responseText.includes("ambiente x obra") && responseText.includes("MISSING_DATA");
 }
@@ -509,8 +572,11 @@ function buildAtividadeObraDependencyPatches(lines: ScheduleLine[], persistedRec
 
 async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
   const persistedRecords: PersistedBulkRecord[] = [];
+  const recordBatches = typeName === config.atividadeObraType && options.onFirstAtividadeObraCreated && records.length > 1
+    ? [records.slice(0, 1), ...chunks(records.slice(1), config.batchSize)]
+    : chunks(records, config.batchSize);
 
-  for (const [batchIndex, batch] of chunks(records, config.batchSize).entries()) {
+  for (const [batchIndex, batch] of recordBatches.entries()) {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
 
     options.log?.info({
@@ -530,7 +596,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
       body: ndjson(batch)
     });
 
-    const responseText = await response.text();
+    const responseText = await bulkResponseText(response, typeName === config.atividadeObraType ? options.onFirstAtividadeObraCreated : undefined);
     if (!response.ok) {
       if (
         typeName === config.atividadeObraType
@@ -555,7 +621,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
           },
           body: ndjson(omitAmbienteXObra(batch))
         });
-        const retryResponseText = await retryResponse.text();
+        const retryResponseText = await bulkResponseText(retryResponse, options.onFirstAtividadeObraCreated);
         if (retryResponse.ok) {
           assertBulkBodySucceeded(typeName, retryResponseText);
           const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
@@ -695,4 +761,42 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   }
   const dependencyPatches = buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords);
   await patchAtividadeObraDependencies(dependencyPatches, config, options);
+}
+
+export function persistScheduleBulksWithFirstCreatedSignal(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): {
+  firstAtividadeObraCreated: Promise<string>;
+  completion: Promise<void>;
+} {
+  let resolveFirstCreated!: (id: string) => void;
+  let rejectFirstCreated!: (error: unknown) => void;
+  let firstCreatedSettled = false;
+
+  const firstAtividadeObraCreated = new Promise<string>((resolve, reject) => {
+    resolveFirstCreated = resolve;
+    rejectFirstCreated = reject;
+  });
+
+  const completion = persistScheduleBulks(payload, lines, {
+    ...options,
+    onFirstAtividadeObraCreated: (id) => {
+      options.onFirstAtividadeObraCreated?.(id);
+      if (!firstCreatedSettled) {
+        firstCreatedSettled = true;
+        resolveFirstCreated(id);
+      }
+    }
+  }).then(() => {
+    if (!firstCreatedSettled) {
+      firstCreatedSettled = true;
+      resolveFirstCreated("");
+    }
+  }).catch((error) => {
+    if (!firstCreatedSettled) {
+      firstCreatedSettled = true;
+      rejectFirstCreated(error);
+    }
+    throw error;
+  });
+
+  return { firstAtividadeObraCreated, completion };
 }
