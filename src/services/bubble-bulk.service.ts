@@ -9,6 +9,7 @@ const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
+const TEMPORARY_EARLY_ATIVIDADE_OBRA_BATCH_SIZE = 10;
 const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "responsavel",
   "responsavelFranqueado",
@@ -375,68 +376,6 @@ function parseBulkCreatedIds(responseText: string, expectedCount: number): (stri
   return ids.slice(0, expectedCount);
 }
 
-function firstCreatedIdFromNdjsonLine(line: string): string | null {
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    if (parsed.status === "error" || parsed.success === false) return null;
-    return stringValue(parsed.id);
-  } catch {
-    return null;
-  }
-}
-
-async function bulkResponseText(response: Response, onCreatedId?: (id: string) => void): Promise<string> {
-  if (!onCreatedId) return response.text();
-  if (!response.body) {
-    const responseText = await response.text();
-    for (const line of responseText.split(/\r?\n/).filter((item) => item.trim())) {
-      const createdId = firstCreatedIdFromNdjsonLine(line.trim());
-      if (createdId) {
-        onCreatedId(createdId);
-        break;
-      }
-    }
-    return responseText;
-  }
-
-  const decoder = new TextDecoder();
-  const reader = response.body.getReader();
-  let responseText = "";
-  let pendingLine = "";
-  let notified = false;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value, { stream: true });
-    responseText += chunk;
-    pendingLine += chunk;
-
-    const lines = pendingLine.split(/\r?\n/);
-    pendingLine = lines.pop() || "";
-
-    for (const line of lines) {
-      const createdId = firstCreatedIdFromNdjsonLine(line.trim());
-      if (createdId && !notified) {
-        notified = true;
-        onCreatedId(createdId);
-      }
-    }
-  }
-
-  const trailing = decoder.decode();
-  responseText += trailing;
-  pendingLine += trailing;
-
-  if (pendingLine.trim()) {
-    const createdId = firstCreatedIdFromNdjsonLine(pendingLine.trim());
-    if (createdId && !notified) onCreatedId(createdId);
-  }
-
-  return responseText;
-}
-
 function isMissingAmbienteXObraReference(responseText: string): boolean {
   return responseText.includes("ambiente x obra") && responseText.includes("MISSING_DATA");
 }
@@ -572,9 +511,10 @@ function buildAtividadeObraDependencyPatches(lines: ScheduleLine[], persistedRec
 
 async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
   const persistedRecords: PersistedBulkRecord[] = [];
-  const recordBatches = typeName === config.atividadeObraType && options.onFirstAtividadeObraCreated && records.length > 1
-    ? [records.slice(0, 1), ...chunks(records.slice(1), config.batchSize)]
-    : chunks(records, config.batchSize);
+  const batchSize = typeName === config.atividadeObraType && options.onFirstAtividadeObraCreated
+    ? TEMPORARY_EARLY_ATIVIDADE_OBRA_BATCH_SIZE
+    : config.batchSize;
+  const recordBatches = chunks(records, batchSize);
 
   for (const [batchIndex, batch] of recordBatches.entries()) {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
@@ -596,7 +536,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
       body: ndjson(batch)
     });
 
-    const responseText = await bulkResponseText(response, typeName === config.atividadeObraType ? options.onFirstAtividadeObraCreated : undefined);
+    const responseText = await response.text();
     if (!response.ok) {
       if (
         typeName === config.atividadeObraType
@@ -621,11 +561,15 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
           },
           body: ndjson(omitAmbienteXObra(batch))
         });
-        const retryResponseText = await bulkResponseText(retryResponse, options.onFirstAtividadeObraCreated);
+        const retryResponseText = await retryResponse.text();
         if (retryResponse.ok) {
           assertBulkBodySucceeded(typeName, retryResponseText);
           const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
           persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
+          if (typeName === config.atividadeObraType && batchIndex === 0) {
+            const firstCreatedId = createdIds.find((id): id is string => Boolean(id));
+            if (firstCreatedId) options.onFirstAtividadeObraCreated?.(firstCreatedId);
+          }
           options.log?.info({
             requestId: options.requestId,
             typeName,
@@ -651,6 +595,10 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
     assertBulkBodySucceeded(typeName, responseText);
     const createdIds = parseBulkCreatedIds(responseText, batch.length);
     persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
+    if (typeName === config.atividadeObraType && batchIndex === 0) {
+      const firstCreatedId = createdIds.find((id): id is string => Boolean(id));
+      if (firstCreatedId) options.onFirstAtividadeObraCreated?.(firstCreatedId);
+    }
 
     options.log?.info({
       requestId: options.requestId,
