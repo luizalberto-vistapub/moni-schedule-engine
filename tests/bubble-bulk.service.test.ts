@@ -299,48 +299,44 @@ describe("Bubble bulk persistence", () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("signals after the first temporary Atividade x Obra batch of ten is persisted", async () => {
+  it("signals the first Atividade x Obra id before the whole streamed bulk response finishes", async () => {
     process.env.BUBBLE_BULK_BATCH_SIZE = "500";
-    let firstFetchResolved!: (response: Response) => void;
-    let secondFetchResolved!: (response: Response) => void;
+    let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     let completionFinished = false;
-    const firstFetchResponse = new Promise<Response>((resolve) => {
-      firstFetchResolved = resolve;
-    });
-    const secondFetchResponse = new Promise<Response>((resolve) => {
-      secondFetchResolved = resolve;
-    });
-    let fetchCallCount = 0;
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit): Promise<Response> => {
-      fetchCallCount += 1;
-      return fetchCallCount === 1 ? firstFetchResponse : secondFetchResponse;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      if (fetchMock.mock.calls.length > 1) {
+        return new Response("{\"status\":\"success\",\"id\":\"bubble_2\"}\n");
+      }
+
+      return new Response(new ReadableStream<Uint8Array>({
+        start(streamController) {
+          controller = streamController;
+        }
+      }));
     });
     vi.stubGlobal("fetch", fetchMock);
     const { payload, lines } = payloadWithOneLine();
-    const twelveLines = Array.from({ length: 12 }, (_, index) => ({
-      ...lines[0]!,
-      atividade_obra_id_externo: `atividade_${index + 1}_2026-05-05_1`
-    }));
+    const twoLines = [lines[0]!, { ...lines[0]!, atividade_obra_id_externo: "atividade_2_2026-05-05_1" }];
 
-    const persistence = persistScheduleBulksWithFirstCreatedSignal(payload, twelveLines);
+    const persistence = persistScheduleBulksWithFirstCreatedSignal(payload, twoLines);
     persistence.completion.then(() => {
       completionFinished = true;
     });
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(completionFinished).toBe(false);
+    await vi.waitFor(() => expect(controller).toBeTruthy());
+    controller!.enqueue(encoder.encode("{\"status\":\"success\",\"id\":\"bubble_1\"}\n"));
 
-    firstFetchResolved(new Response(Array.from({ length: 10 }, (_, index) => `{"status":"success","id":"bubble_${index + 1}"}`).join("\n")));
     await expect(persistence.firstAtividadeObraCreated).resolves.toBe("bubble_1");
     expect(completionFinished).toBe(false);
 
-    secondFetchResolved(new Response("{\"status\":\"success\",\"id\":\"bubble_11\"}\n{\"status\":\"success\",\"id\":\"bubble_12\"}\n"));
+    controller!.close();
     await persistence.completion;
 
     expect(completionFinished).toBe(true);
     const calls = fetchMock.mock.calls as Array<[string, RequestInit]>;
-    expect(String(calls[0]![1]?.body).split(/\r?\n/).filter(Boolean)).toHaveLength(10);
-    expect(String(calls[1]![1]?.body).split(/\r?\n/).filter(Boolean)).toHaveLength(2);
+    expect(String(calls[0]![1]?.body).split(/\r?\n/).filter(Boolean)).toHaveLength(1);
+    expect(String(calls[1]![1]?.body).split(/\r?\n/).filter(Boolean)).toHaveLength(1);
   });
 
   it("returns empty records when required ids are absent", () => {
