@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, buildEventoCronogramaRecords, persistScheduleBulks, persistScheduleBulksWithFirstCreatedSignal } from "../src/services/bubble-bulk.service.js";
+import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, buildEventoCronogramaRecords, persistScheduleBulks } from "../src/services/bubble-bulk.service.js";
 import { normalizePayload } from "../src/services/normalize-payload.service.js";
 import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 import { basePayload } from "./test-helpers.js";
@@ -297,46 +297,6 @@ describe("Bubble bulk persistence", () => {
     await persistScheduleBulks(payload, [lines[0]!, { ...lines[0]!, atividade_obra_id_externo: "atividade_2_2026-05-05_1" }]);
 
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("signals the first Atividade x Obra id before the whole streamed bulk response finishes", async () => {
-    process.env.BUBBLE_BULK_BATCH_SIZE = "500";
-    let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-    let completionFinished = false;
-    const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
-      if (fetchMock.mock.calls.length > 1) {
-        return new Response("{\"status\":\"success\",\"id\":\"bubble_2\"}\n");
-      }
-
-      return new Response(new ReadableStream<Uint8Array>({
-        start(streamController) {
-          controller = streamController;
-        }
-      }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const { payload, lines } = payloadWithOneLine();
-    const twoLines = [lines[0]!, { ...lines[0]!, atividade_obra_id_externo: "atividade_2_2026-05-05_1" }];
-
-    const persistence = persistScheduleBulksWithFirstCreatedSignal(payload, twoLines);
-    persistence.completion.then(() => {
-      completionFinished = true;
-    });
-
-    await vi.waitFor(() => expect(controller).toBeTruthy());
-    controller!.enqueue(encoder.encode("{\"status\":\"success\",\"id\":\"bubble_1\"}\n"));
-
-    await expect(persistence.firstAtividadeObraCreated).resolves.toBe("bubble_1");
-    expect(completionFinished).toBe(false);
-
-    controller!.close();
-    await persistence.completion;
-
-    expect(completionFinished).toBe(true);
-    const calls = fetchMock.mock.calls as Array<[string, RequestInit]>;
-    expect(String(calls[0]![1]?.body).split(/\r?\n/).filter(Boolean)).toHaveLength(1);
-    expect(String(calls[1]![1]?.body).split(/\r?\n/).filter(Boolean)).toHaveLength(1);
   });
 
   it("returns empty records when required ids are absent", () => {

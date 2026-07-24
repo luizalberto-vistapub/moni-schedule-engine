@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError } from "zod";
-import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulksWithFirstCreatedSignal } from "../services/bubble-bulk.service.js";
+import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
 import { addBusinessDays } from "../services/business-days.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
 import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/response-builder.service.js";
@@ -658,39 +658,14 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
       errorsCount: response.validations.errors.length
     }, "schedule calculation finished");
 
-    const bulkPersistence = persistScheduleBulksWithFirstCreatedSignal(payload, result.lines, { requestId: req.id, log });
-    let firstAtividadeObraId = "";
-    let earlyResponseSent = false;
-    const backgroundPersistence = bulkPersistence.completion
-      .then(() => {
-        log?.info({
-          requestId: req.id,
-          cronogramaUniqueId: payload.cronograma_unique_id,
-          mode: payload.mode,
-          linesCount: result.lines.length
-        }, "schedule bulk persistence finished");
-      })
-      .catch((error) => {
-        if (!earlyResponseSent) return;
-        log?.error({
-          requestId: req.id,
-          cronogramaUniqueId: payload.cronograma_unique_id,
-          mode: payload.mode,
-          firstAtividadeObraId,
-          ...errorLogFields(error)
-        }, "schedule bulk persistence failed after response");
-      });
-    firstAtividadeObraId = await bulkPersistence.firstAtividadeObraCreated;
-    earlyResponseSent = true;
-    void backgroundPersistence;
+    await persistScheduleBulks(payload, result.lines, { requestId: req.id, log });
 
     log?.info({
       requestId: req.id,
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
-      linesCount: result.lines.length,
-      firstAtividadeObraId
-    }, "schedule bulk persistence acknowledged");
+      linesCount: result.lines.length
+    }, "schedule bulk persistence finished");
 
     res.status(201).json(response);
   } catch (error) {
