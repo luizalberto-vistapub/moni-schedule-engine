@@ -1,5 +1,12 @@
 # moni-schedule-engine
 
+[![CI](https://img.shields.io/github/actions/workflow/status/luizalberto-vistapub/moni-schedule-engine/ci.yml?branch=main&label=CI)](https://github.com/luizalberto-vistapub/moni-schedule-engine/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vitest](https://img.shields.io/badge/tests-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
+[![Live](https://img.shields.io/badge/Live-main-0A7B83)](#deploy-e-ambientes)
+[![Development](https://img.shields.io/badge/Development-codex%2Fbubble--bulk--persistence-CB6D51)](#deploy-e-ambientes)
+
 Servidor Node.js + TypeScript para processar o motor de cronograma de obra do sistema Moni.
 
 ## Arquitetura
@@ -48,6 +55,41 @@ BUBBLE_EVENTO_CRONOGRAMA_TYPE=eventocronograma
 ```
 
 Sem `BUBBLE_API_TOKEN`, o servidor retorna erro de configuracao e nao responde `201`, porque `201 Created` so deve acontecer depois da persistencia no Bubble.
+
+## Deploy E Ambientes
+
+Mapeamento atual de deploy:
+
+| Ambiente | Servico Render | Branch Git |
+| --- | --- | --- |
+| Live | `moni-schedule-engine` | `main` |
+| Development | `moni-schedule-engine-1` | `codex/bubble-bulk-persistence` |
+
+Por ser um repositorio publico, este README nao lista as URLs exatas dos endpoints. Mantenha a configuracao das URLs no Bubble e no Render como dado operacional do ambiente.
+
+### Render
+
+Conferir em cada servico:
+
+- `moni-schedule-engine` apontando para `main`
+- `moni-schedule-engine-1` apontando para `codex/bubble-bulk-persistence`
+- Auto-Deploy habilitado, se desejado
+- variaveis de ambiente separadas entre Live e Development
+
+### Bubble.io
+
+- a versao Live deve usar o endpoint do servico ligado a `main`
+- as branches de desenvolvimento devem usar o endpoint do servico ligado a `codex/bubble-bulk-persistence`
+- verificar API Connector, workflows, plugins e variaveis que possam conter URLs antigas
+- antes de fazer deploy para Live no Bubble, confirmar que o deploy da `main` terminou no Render
+
+### Fluxo De Publicacao
+
+1. Publicar alteracoes na branch de desenvolvimento.
+2. Validar no ambiente Development do Bubble.
+3. Fazer merge da branch de desenvolvimento em `main`.
+4. Confirmar o deploy da `main` no Render.
+5. So depois disso promover a mudanca para Live no Bubble.
 
 ## Scripts
 
