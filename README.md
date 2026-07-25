@@ -52,9 +52,13 @@ BUBBLE_BULK_BATCH_SIZE=500
 BUBBLE_CRONOGRAMA_LINHA_TYPE=cronogramalinha
 BUBBLE_ATIVIDADE_OBRA_TYPE=atividadexobra
 BUBBLE_EVENTO_CRONOGRAMA_TYPE=eventocronograma
+SWAGGER_BRANCH=codex/bubble-bulk-persistence
+SWAGGER_ENVIRONMENT=Development
 ```
 
 Sem `BUBBLE_API_TOKEN`, o servidor retorna erro de configuracao e nao responde `201`, porque `201 Created` so deve acontecer depois da persistencia no Bubble.
+
+`SWAGGER_BRANCH` e `SWAGGER_ENVIRONMENT` sao opcionais, mas devem ser configuradas no Render para deixar a documentacao distinta por ambiente. Use `main` / `Live` no servico de producao e `codex/bubble-bulk-persistence` / `Development` no servico de desenvolvimento.
 
 ## Deploy E Ambientes
 
@@ -75,6 +79,7 @@ Conferir em cada servico:
 - `moni-schedule-engine-1` apontando para `codex/bubble-bulk-persistence`
 - Auto-Deploy habilitado, se desejado
 - variaveis de ambiente separadas entre Live e Development
+- `SWAGGER_BRANCH` e `SWAGGER_ENVIRONMENT` identificando corretamente cada Swagger
 
 ### Bubble.io
 
@@ -112,6 +117,8 @@ curl http://localhost:3000/ready
 
 - `GET /health`
 - `GET /ready`
+- `GET /docs`
+- `GET /docs/openapi.json`
 - `POST /api/v1/schedules/generate`
 - `POST /api/v1/schedules/recalculate`
 
