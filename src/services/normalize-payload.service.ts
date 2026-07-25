@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, PurchaseStage, SchedulePayload } from "../types/payload.types.js";
+import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, PurchaseStage, SchedulePayload } from "../types/payload.types.js";
 
 const recordArray = z.array(z.record(z.unknown())).default([]);
 
@@ -12,13 +12,19 @@ export const payloadSchema = z.object({
   reason: z.string().nullable().optional(),
   numero: z.number().nullable().optional(),
   previous_version_id: z.string().nullable().optional(),
+  event_date: z.string().nullable().optional(),
+  request_date: z.string().nullable().optional(),
+  requisicao_data: z.string().nullable().optional(),
+  data_requisicao: z.string().nullable().optional(),
   obra_json: z.array(z.record(z.unknown())).min(1),
   obra_ambiente_json: recordArray,
   obra_ambiente_produto_json: recordArray,
+  obra_ambiente_item_composicao_json: recordArray,
   atividades_json: z.array(z.record(z.unknown())).default([]),
   atividade_obra_json: recordArray,
+  events_old: recordArray,
   events_json: recordArray
-}) as unknown as z.ZodType<SchedulePayload>;
+}).passthrough() as unknown as z.ZodType<SchedulePayload>;
 
 function normalizeActivityType(value: unknown): NormalizedActivity["tipo"] {
   const text = String(value || "")
@@ -67,6 +73,10 @@ function asString(value: unknown, fallback: string): string {
   return fallback;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function field(record: Record<string, unknown>, ...keys: string[]): unknown {
   for (const key of keys) {
     if (record[key] !== undefined) return record[key];
@@ -77,6 +87,7 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
 function normalizeActivity(activity: ActivityPayload, index: number): NormalizedActivity {
   const id = asString(field(activity, "id", "unique_id", "unique id"), `atividade_${index + 1}`);
   const nome = asString(activity.nome || activity.name, id);
+  const tipo = normalizeActivityType(activity.tipo);
   const rawOffset = activity.offsetDias ?? field(activity, "diasAntecedencia");
   const rawEquipe = activity.equipe || field(activity, "tipo equipe");
 
@@ -84,7 +95,7 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     ...activity,
     id,
     nome,
-    tipo: normalizeActivityType(activity.tipo),
+    tipo,
     ordem: Number(activity.ordem ?? index + 1),
     duracao: Math.max(1, Math.ceil(Number(activity.duracao ?? 1))),
     duracaoVariavel: Boolean(activity.duracaoVariavel),
@@ -92,16 +103,109 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     etapaCompra: normalizePurchaseStage(activity.etapaCompra),
     peso: Number(activity.peso ?? 1),
     equipe: typeof rawEquipe === "string" && rawEquipe ? rawEquipe : null,
-    atividadeServicoAncoraId: activity.atividadeServicoAncoraId || null,
+    atividadeServicoAncoraId: tipo === "Compra" ? activity.atividadeServicoAncoraId || null : null,
     interdependenciasMasterIds: Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [],
     offsetDias: rawOffset === undefined || rawOffset === null || rawOffset === "" ? undefined : Number(rawOffset),
     raw: { ...activity }
   };
 }
 
-export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
+function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActivity[] {
+  if (activity.tipo !== "Servi\u00e7o" || !Array.isArray(activity.raw.atividadeProjeto)) return [];
+
+  return activity.raw.atividadeProjeto
+    .filter((project): project is Record<string, unknown> => typeof project === "object" && project !== null)
+    .map((project, index): NormalizedActivity => {
+      const id = asString(field(project, "idAtividadeProjeto", "id", "unique_id", "unique id"), `${activity.id}_projeto_${index + 1}`);
+      const nome = asString(field(project, "nomeAtividadeProjeto", "nome", "name"), id);
+
+      return {
+        id,
+        nome,
+        tipo: "Projeto",
+        ordem: activity.ordem,
+        duracao: 1,
+        duracaoVariavel: false,
+        quantidadeBase: null,
+        etapaCompra: null,
+        peso: 1,
+        equipe: null,
+        offsetDias: project.diasAntecedencia === undefined || project.diasAntecedencia === null || project.diasAntecedencia === "" ? undefined : Number(project.diasAntecedencia),
+        atividadeServicoAncoraId: activity.id,
+        interdependenciasMasterIds: [],
+        produto: activity.produto,
+        produtoId: activity.produtoId,
+        raw: { ...project, sourceActivityId: activity.id }
+      };
+    });
+}
+
+function mergeDirectProjectWithReference(directProject: NormalizedActivity, linkedProject: NormalizedActivity): NormalizedActivity {
   return {
-    ...payload,
-    atividades_json: payload.atividades_json.map(normalizeActivity)
+    ...directProject,
+    ordem: linkedProject.ordem,
+    offsetDias: linkedProject.offsetDias ?? directProject.offsetDias,
+    atividadeServicoAncoraId: linkedProject.atividadeServicoAncoraId,
+    produto: directProject.produto || linkedProject.produto,
+    produtoId: directProject.produtoId || linkedProject.produtoId,
+    raw: {
+      ...directProject.raw,
+      atividadeProjetoLink: linkedProject.raw,
+      sourceActivityId: linkedProject.atividadeServicoAncoraId
+    }
   };
 }
+
+function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload): ObraAmbienteProdutoPayload {
+  const id = optionalString(product.id) || optionalString(product.unique_id) || optionalString(product["unique id"]);
+  const ambienteId = optionalString(product.ambienteId)
+    || optionalString(product.obraAmbienteId)
+    || optionalString(product["ambiente x obra"])
+    || optionalString(product["id ambiente item composicao"]);
+  const produtoId = optionalString(product.produtoId) || optionalString(product.produto) || optionalString(product["id produto simples"]);
+  const produtoNome = optionalString(product.produtoNome) || optionalString(product["nome produto"]) || optionalString(product["nome produto simples"]);
+
+  return {
+    ...product,
+    id,
+    unique_id: optionalString(product.unique_id) || optionalString(product["unique id"]),
+    ambienteId,
+    obraAmbienteId: ambienteId,
+    produtoId,
+    produto: produtoId,
+    produtoNome,
+    quantidade: product.quantidade ?? product["quantidade produto composto"] ?? null
+  };
+}
+
+export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
+  const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
+  const obraAmbienteProdutos = payload.obra_ambiente_produto_json.length
+    ? payload.obra_ambiente_produto_json
+    : compositionProducts.map(normalizeCompositionProduct);
+  const activities = payload.atividades_json.map(normalizeActivity);
+  const directActivitiesById = new Map(activities.map((activity) => [activity.id, activity]));
+  const linkedProjectKeys = new Set<string>();
+  const linkedProjectIds = new Set<string>();
+  const projectActivities = activities
+    .flatMap(normalizeActivityProjects)
+    .flatMap((linkedProject) => {
+      const directActivity = directActivitiesById.get(linkedProject.id);
+      if (directActivity && directActivity.tipo !== "Projeto") return [];
+      const project = directActivity ? mergeDirectProjectWithReference(directActivity, linkedProject) : linkedProject;
+      const key = `${project.id}:${project.atividadeServicoAncoraId}`;
+      if (linkedProjectKeys.has(key)) return [];
+      linkedProjectKeys.add(key);
+      linkedProjectIds.add(project.id);
+      return [project];
+    });
+  const baseActivities = activities.filter((activity) => activity.tipo !== "Projeto" || !linkedProjectIds.has(activity.id));
+
+  return {
+    ...payload,
+    obra_ambiente_produto_json: obraAmbienteProdutos,
+    obra_ambiente_item_composicao_json: compositionProducts,
+    atividades_json: [...baseActivities, ...projectActivities]
+  };
+}
+

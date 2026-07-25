@@ -1,5 +1,6 @@
 import type { NormalizedActivity, NormalizedSchedulePayload, ObraAmbientePayload, ObraAmbienteProdutoPayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
+import { addDays } from "../utils/dates.js";
 import { addBusinessDays, nextBusinessDay, previousBusinessDay } from "./business-days.service.js";
 import { differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 import { stableLineId } from "../utils/ids.js";
@@ -13,6 +14,7 @@ interface PlacementContext {
   serviceStarts: Map<string, Date>;
   serviceEnds: Map<string, Date>;
   serviceCloneDates: Map<string, Date[]>;
+  servicesByCompositeId: Map<string, NormalizedActivity[]>;
   lines: ScheduleLine[];
   teamWeightByDay: Map<string, number>;
   activityDays: Map<string, Set<string>>;
@@ -34,27 +36,51 @@ function cloneCountFor(activity: NormalizedActivity, product: ObraAmbienteProdut
 
 function getProductName(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.produtoNome || product["nome produto"] || product.produto || product.produtoId || "") || null;
+  return String(product.produtoNome || product["nome produto"] || product["nome produto simples"] || product.produto || product.produtoId || product["id produto simples"] || "") || null;
 }
 
 function getProductId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.produtoId || product.produto || "") || null;
+  return String(product.produtoId || product.produto || product["id produto simples"] || "") || null;
+}
+
+function getCompositeProductId(product: ObraAmbienteProdutoPayload | null): string | null {
+  if (!product) return null;
+  return String(product["id produto composto"] || product.produtoCompostoId || product["produto composto"] || "") || null;
 }
 
 function getActivityProductId(activity: NormalizedActivity): string | null {
   return String(activity.produto || activity.produtoId || "") || null;
 }
 
-function productForActivity(ctx: PlacementContext, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+function productForActivityFrom(productsByProductId: Map<string, ObraAmbienteProdutoPayload>, fallbackProduct: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
   const productId = getActivityProductId(activity);
-  if (productId) return ctx.productsByProductId.get(productId) || null;
-  return ctx.fallbackProduct;
+  if (productId) return productsByProductId.get(productId) || null;
+  return fallbackProduct;
+}
+
+function productForActivity(ctx: PlacementContext, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+  return productForActivityFrom(ctx.productsByProductId, ctx.fallbackProduct, activity);
 }
 
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product.ambiente || "") || null;
+  return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product["id ambiente item composicao"] || product.ambiente || "") || null;
+}
+
+function getAmbienteItemComposicaoId(product: ObraAmbienteProdutoPayload | null): string | null {
+  if (!product) return null;
+  const id = product["id ambiente item composicao"]
+    || product.ambienteItemComposicaoId
+    || product["ambiente x item composicao"];
+  return String(id || "") || null;
+}
+
+function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
+  if (!ambiente) return fallbackId;
+  const id = [ambiente["unique id"], ambiente.unique_id, ambiente.id, fallbackId]
+    .find((value) => value !== undefined && value !== null && value !== "");
+  return String(id);
 }
 
 function formatCodigoD(daysFromStart: number): string {
@@ -65,8 +91,9 @@ function formatCodigoD(daysFromStart: number): string {
 
 function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
   const dateOnly = formatDateOnly(date);
-  const ambienteId = getAmbienteId(product);
-  const ambiente = ambienteId ? ctx.ambientesById.get(ambienteId) : undefined;
+  const rawAmbienteId = getAmbienteId(product);
+  const ambiente = rawAmbienteId ? ctx.ambientesById.get(rawAmbienteId) : undefined;
+  const ambienteId = getObraAmbienteId(ambiente, rawAmbienteId);
   const daysFromStart = differenceInCalendarDays(ctx.obraStart, date) + 1;
 
   return {
@@ -74,11 +101,12 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     atividadeId: activity.id,
     atividadeNome: activity.nome,
     atividadeTipo: activity.tipo,
-    atividadeServicoAncoraId: activity.atividadeServicoAncoraId,
+    atividadeServicoAncoraId: anchor?.id || activity.atividadeServicoAncoraId || null,
     atividadeServicoAncoraNome: anchor?.nome || null,
     obraAmbienteProdutoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
     produtoId: getProductId(product),
     ambienteId,
+    ambienteItemComposicaoId: getAmbienteItemComposicaoId(product),
     data_programada: dateOnly,
     codigo_d: formatCodigoD(daysFromStart),
     dia_semana: weekdayName(date),
@@ -87,11 +115,12 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     nome_atividade: activity.nome,
     equipe: activity.equipe,
     peso: activity.peso,
-    ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || ambienteId) : null,
+    ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || rawAmbienteId) : null,
     produto: getProductName(product),
     ordem: activity.ordem,
     clone_index: cloneIndex,
     anchor_service_name: anchor?.nome || null,
+    interdependenciasMasterIds: [],
     raw: activity.raw
   };
 }
@@ -134,9 +163,42 @@ function laterDate(a: Date, b: Date): Date {
   return a > b ? a : b;
 }
 
+function forcedActivityStart(activity: NormalizedActivity): Date | null {
+  const value = activity.__recalculateStartDate;
+  return typeof value === "string" && value ? parseDateOnly(value) : null;
+}
+
+function purchaseStageOrder(activity: NormalizedActivity): number {
+  const stageOrder: Record<string, number> = {
+    AVISO_ORCAMENTO: 1,
+    LIMITE_ORCAMENTO: 2,
+    LIMITE_COMPRA: 3,
+    RECEBIMENTO: 4
+  };
+  /* v8 ignore next -- normalized purchases have a known stage before ordering. */
+  return activity.etapaCompra ? stageOrder[activity.etapaCompra] || 99 : 99;
+}
+
+function compareAnchoredActivityOrder(a: NormalizedActivity, b: NormalizedActivity): number {
+  return a.ordem - b.ordem || a.id.localeCompare(b.id);
+}
+
+function comparePurchaseChainOrder(a: NormalizedActivity, b: NormalizedActivity): number {
+  return purchaseStageOrder(a) - purchaseStageOrder(b) || compareAnchoredActivityOrder(a, b);
+}
+
+function purchaseChainKey(anchorId: string, activity: NormalizedActivity): string {
+  const activityAnchorId = activity.atividadeServicoAncoraId || "";
+  /* v8 ignore next -- fallback supports malformed purchase payloads without an item id. */
+  const purchaseItemId = activityAnchorId && activityAnchorId !== anchorId ? activityAnchorId : getActivityProductId(activity);
+  return `${anchorId}:${purchaseItemId || "__default__"}`;
+}
+
 function placeService(ctx: PlacementContext, service: NormalizedActivity, earliestStart: Date): void {
   const dependencyEnd = latestDependencyEndDate(ctx, service);
   let cursor = dependencyEnd ? laterDate(earliestStart, addBusinessDays(dependencyEnd, 1, ctx.payload.dias_trabalho_semana)) : earliestStart;
+  const forcedStart = forcedActivityStart(service);
+  if (forcedStart) cursor = laterDate(cursor, forcedStart);
   const product = productForActivity(ctx, service);
   const totalClones = cloneCountFor(service, product);
   let firstDate: Date | null = null;
@@ -191,48 +253,98 @@ function placeServices(ctx: PlacementContext, services: NormalizedActivity[]): v
 }
 
 function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedActivity[], servicesById: Map<string, NormalizedActivity>): void {
-  const purchases = activities.filter((activity) => activity.tipo === "Compra").sort((a, b) => a.ordem - b.ordem);
-  const projects = activities.filter((activity) => activity.tipo === "Projeto").sort((a, b) => a.ordem - b.ordem);
+  const purchases = activities.filter((activity) => activity.tipo === "Compra" && activity.etapaCompra).sort(comparePurchaseChainOrder);
+  const projects = activities.filter((activity) => activity.tipo === "Projeto").sort(compareAnchoredActivityOrder);
   const anchorCounters = new Map<string, number>();
   const purchaseLinesByAnchor = new Map<string, ScheduleLine[]>();
 
+  const resolveAnchor = (activity: NormalizedActivity): NormalizedActivity | null => {
+    const earliestServiceForComposite = (compositeId: string): NormalizedActivity | null => {
+      const services = ctx.servicesByCompositeId.get(compositeId);
+      if (!services?.length) return null;
+      const [earliest] = [...services].sort((a, b) => ctx.serviceStarts.get(a.id)!.getTime() - ctx.serviceStarts.get(b.id)!.getTime());
+      return earliest;
+    };
+
+    if (activity.atividadeServicoAncoraId) {
+      const explicitService = servicesById.get(activity.atividadeServicoAncoraId);
+      if (explicitService) {
+        const explicitCompositeId = getCompositeProductId(productForActivity(ctx, explicitService));
+        return explicitCompositeId ? earliestServiceForComposite(explicitCompositeId) || explicitService : explicitService;
+      }
+      const anchorProduct = ctx.productsByProductId.get(activity.atividadeServicoAncoraId);
+      const anchorCompositeId = getCompositeProductId(anchorProduct || null);
+      if (anchorCompositeId) {
+        const serviceByAnchorProduct = earliestServiceForComposite(anchorCompositeId);
+        if (serviceByAnchorProduct) return serviceByAnchorProduct;
+      }
+      const serviceByComposite = earliestServiceForComposite(activity.atividadeServicoAncoraId);
+      if (serviceByComposite) return serviceByComposite;
+    }
+    const compositeId = getCompositeProductId(productForActivity(ctx, activity));
+    return compositeId ? earliestServiceForComposite(compositeId) : null;
+  };
+
+  const purchasesByChain = new Map<string, { anchorId: string; activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
   for (const activity of purchases) {
-    const anchorId = activity.atividadeServicoAncoraId;
+    const anchor = resolveAnchor(activity);
+    const anchorId = anchor?.id;
     if (!anchorId) continue;
-    const anchorStart = ctx.serviceStarts.get(anchorId);
-    const anchor = servicesById.get(anchorId);
-    if (!anchorStart || !anchor) continue;
-    const product = productForActivity(ctx, anchor);
-    const counterKey = `${anchorId}:${activity.tipo}`;
-    const currentCounter = anchorCounters.get(counterKey) || 0;
-    const defaultOffset = currentCounter + 1;
-    const offset = Number(activity.offsetDias ?? defaultOffset);
-    const date = previousBusinessDay(addBusinessDays(anchorStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
-    const line = buildLine(ctx, product, activity, date, 1, anchor);
-    ctx.lines.push(line);
-    purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
-    anchorCounters.set(counterKey, currentCounter + 1);
+    const chainKey = purchaseChainKey(anchorId, activity);
+    purchasesByChain.set(chainKey, [...(purchasesByChain.get(chainKey) || []), { anchorId, activity, anchor }]);
+  }
+
+  for (const purchaseEntries of purchasesByChain.values()) {
+    const anchorId = purchaseEntries[0].anchorId;
+    const anchorStart = ctx.serviceStarts.get(anchorId)!;
+    const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
+
+    for (const { activity, anchor } of orderedEntries.reverse()) {
+      let product = productForActivity(ctx, activity);
+      if (!product) product = productForActivity(ctx, anchor);
+      const counterKey = `${anchorId}:${activity.tipo}`;
+      const currentCounter = anchorCounters.get(counterKey) || 0;
+      const defaultOffset = currentCounter + 1;
+      const offset = Number(activity.offsetDias ?? defaultOffset);
+      const forcedStart = forcedActivityStart(activity);
+      const date = forcedStart || addDays(anchorStart, -offset);
+      const line = buildLine(ctx, product, activity, date, 1, anchor);
+      ctx.lines.push(line);
+      purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
+      anchorCounters.set(counterKey, currentCounter + 1);
+    }
   }
 
   for (const activity of projects) {
-    const anchorId = activity.atividadeServicoAncoraId;
+    const anchor = resolveAnchor(activity);
+    const anchorId = anchor?.id;
     if (!anchorId) continue;
-    const anchorStart = ctx.serviceStarts.get(anchorId);
-    const anchor = servicesById.get(anchorId);
-    if (!anchorStart || !anchor) continue;
-    const product = productForActivity(ctx, anchor);
-    const purchasesForAnchor = purchaseLinesByAnchor.get(anchorId) || [];
-    const avisoOrcamento = purchasesForAnchor.find((line) => line.subtipo_compra === "AVISO_ORCAMENTO");
-    const earliestPurchase = [...purchasesForAnchor].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
-    const referenceDate = avisoOrcamento?.data_programada || earliestPurchase?.data_programada;
+    const anchorStart = ctx.serviceStarts.get(anchorId)!;
+    let product = productForActivity(ctx, activity);
+    if (!product) product = productForActivity(ctx, anchor);
+    const earliestPurchase = [...(purchaseLinesByAnchor.get(anchorId) || [])].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
     const defaultOffset = currentCounter + 2;
     const offset = Number(activity.offsetDias ?? defaultOffset);
-    const referenceStart = referenceDate ? parseDateOnly(referenceDate) : anchorStart;
-    const date = previousBusinessDay(addBusinessDays(referenceStart, -offset, ctx.payload.dias_trabalho_semana), ctx.payload.dias_trabalho_semana);
+    const forcedStart = forcedActivityStart(activity);
+    const referenceStart = earliestPurchase ? parseDateOnly(earliestPurchase.data_programada) : anchorStart;
+    const date = forcedStart || addDays(referenceStart, -offset);
     ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
     anchorCounters.set(counterKey, currentCounter + 1);
+  }
+}
+
+function populateAtividadeObraDependencies(ctx: PlacementContext): void {
+  const lineIdsByActivity = new Map<string, string[]>();
+  for (const line of ctx.lines) {
+    lineIdsByActivity.set(line.atividadeId, [...(lineIdsByActivity.get(line.atividadeId) || []), line.atividade_obra_id_externo]);
+  }
+
+  const activityDependenciesById = new Map(ctx.payload.atividades_json.map((activity) => [activity.id, activity.interdependenciasMasterIds]));
+  for (const line of ctx.lines) {
+    const dependencyActivityIds = activityDependenciesById.get(line.atividadeId) || [];
+    line.interdependenciasMasterIds = dependencyActivityIds.flatMap((dependencyId) => lineIdsByActivity.get(dependencyId) || []);
   }
 }
 
@@ -253,10 +365,23 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
       .map((product) => [getProductId(product), product] as const)
       .filter((entry): entry is [string, ObraAmbienteProdutoPayload] => Boolean(entry[0]))
   );
-  const ambientesById = new Map(payload.obra_ambiente_json.map((ambiente) => [String(ambiente.id || ambiente.unique_id || ambiente["unique id"] || ""), ambiente]));
+  const ambientesById = new Map(
+    payload.obra_ambiente_json.flatMap((ambiente) => {
+      const ids = [ambiente.id, ambiente.unique_id, ambiente["unique id"], ambiente.ambiente]
+        .map((id) => String(id || ""))
+        .filter(Boolean);
+      return ids.map((id) => [id, ambiente] as const);
+    })
+  );
   const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort(compareServiceOrder);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
   const servicesById = new Map(services.map((service) => [service.id, service]));
+  const servicesByCompositeId = new Map<string, NormalizedActivity[]>();
+  for (const service of services) {
+    const compositeId = getCompositeProductId(productForActivityFrom(productsByProductId, fallbackProduct, service));
+    if (!compositeId) continue;
+    servicesByCompositeId.set(compositeId, [...(servicesByCompositeId.get(compositeId) || []), service]);
+  }
   const ctx: PlacementContext = {
     payload,
     obraStart,
@@ -266,6 +391,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     serviceStarts: new Map(),
     serviceEnds: new Map(),
     serviceCloneDates: new Map(),
+    servicesByCompositeId,
     lines: [],
     teamWeightByDay: new Map(),
     activityDays: new Map()
@@ -273,6 +399,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
 
   placeServices(ctx, services);
   placeAnchoredActivities(ctx, anchored, servicesById);
+  populateAtividadeObraDependencies(ctx);
   ctx.lines.sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
 
   return { lines: ctx.lines, validations: { warnings: [], errors: [] } };

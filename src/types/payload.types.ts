@@ -6,6 +6,9 @@ export type PurchaseStage = "AVISO_ORCAMENTO" | "LIMITE_ORCAMENTO" | "LIMITE_COM
 export interface ObraPayload {
   id?: string;
   unique_id?: string;
+  "unique id"?: string;
+  nome?: string;
+  name?: string;
   dataInicio?: string;
   data_inicio?: string;
   startDate?: string;
@@ -15,6 +18,7 @@ export interface ObraPayload {
 export interface ObraAmbientePayload {
   id?: string;
   unique_id?: string;
+  "unique id"?: string;
   nome?: string;
   name?: string;
   [key: string]: unknown;
@@ -31,6 +35,18 @@ export interface ObraAmbienteProdutoPayload {
   ambienteNome?: string;
   quantidade?: number | null;
   [key: string]: unknown;
+}
+
+export interface ObraAmbienteItemComposicaoPayload extends ObraAmbienteProdutoPayload {
+  "id ambiente item composicao"?: string;
+  "id produto composto"?: string;
+  "nome produto composto"?: string;
+  "categoria produto composto"?: string;
+  "tipo categoria produto composto"?: string;
+  "quantidade produto composto"?: number | null;
+  "unidade medida produto composto"?: string;
+  "id produto simples"?: string;
+  "nome produto simples"?: string;
 }
 
 export interface ActivityPayload {
@@ -71,6 +87,13 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
 
 export interface SchedulePayload {
   cronograma_unique_id: string;
+  versao_cronograma_unique_id?: string;
+  versao_cronograma_id?: string;
+  versaoCronograma?: string;
+  version_id?: string;
+  bubble_api_version?: string;
+  bubble_version?: string;
+  version?: string;
   mode: ScheduleMode;
   dias_trabalho_semana: 5 | 6;
   timezone?: string;
@@ -78,14 +101,21 @@ export interface SchedulePayload {
   reason?: string | null;
   numero?: number | null;
   previous_version_id?: string | null;
+  event_date?: string | null;
+  request_date?: string | null;
+  requisicao_data?: string | null;
+  data_requisicao?: string | null;
   obra_json: ObraPayload[];
   obra_ambiente_json: ObraAmbientePayload[];
   obra_ambiente_produto_json: ObraAmbienteProdutoPayload[];
+  obra_ambiente_item_composicao_json?: ObraAmbienteItemComposicaoPayload[];
   atividades_json: ActivityPayload[];
   atividade_obra_json: Record<string, unknown>[];
+  events_old: Record<string, unknown>[];
   events_json: Record<string, unknown>[];
 }
 
 export interface NormalizedSchedulePayload extends Omit<SchedulePayload, "atividades_json"> {
   atividades_json: NormalizedActivity[];
 }
+
