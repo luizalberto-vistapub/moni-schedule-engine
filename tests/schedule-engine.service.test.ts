@@ -148,6 +148,55 @@ describe("schedule engine", () => {
     });
   });
 
+  it("ancora compra no produto simples dentro do produto composto informado", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [
+        { id: "amb_parede", nome: "Parede" },
+        { id: "amb_piso", nome: "Piso" }
+      ],
+      obra_ambiente_produto_json: [
+        { id: "oap_espacador_parede", ambienteId: "amb_parede", produto: "prod_espacador", "id produto composto": "comp_parede", quantidade: 30 },
+        { id: "oap_serv_parede", ambienteId: "amb_parede", produto: "prod_serv_parede", "id produto composto": "comp_parede", quantidade: 1 },
+        { id: "oap_espacador_piso", ambienteId: "amb_piso", produto: "prod_espacador", "id produto composto": "comp_piso", quantidade: 10 },
+        { id: "oap_serv_piso", ambienteId: "amb_piso", produto: "prod_serv_piso", "id produto composto": "comp_piso", quantidade: 1 }
+      ],
+      atividades_json: [
+        {
+          id: "serv_parede",
+          nome: "Servico parede",
+          tipo: "Servico",
+          produto: "prod_serv_parede",
+          ordem: 1
+        },
+        {
+          id: "serv_piso",
+          nome: "Servico piso",
+          tipo: "Servico",
+          produto: "prod_serv_piso",
+          ordem: 2
+        },
+        {
+          id: "compra_espacador_piso",
+          nome: "Compra espacador piso",
+          tipo: "Compra",
+          produto: "prod_espacador",
+          ordem: 1,
+          atividadeServicoAncoraId: "comp_piso",
+          etapaCompra: "Recebimento"
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const purchase = result.lines.find((line) => line.atividadeId === "compra_espacador_piso");
+
+    expect(purchase).toMatchObject({
+      obraAmbienteProdutoId: "oap_espacador_piso",
+      ambiente: "Piso",
+      atividadeServicoAncoraId: "serv_piso"
+    });
+  });
+
   it("payload com quantidadeBase vazia normaliza para null", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [

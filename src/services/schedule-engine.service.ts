@@ -9,6 +9,7 @@ interface PlacementContext {
   payload: NormalizedSchedulePayload;
   obraStart: Date;
   productsByProductId: Map<string, ObraAmbienteProdutoPayload>;
+  productsByProductAndCompositeId: Map<string, ObraAmbienteProdutoPayload>;
   fallbackProduct: ObraAmbienteProdutoPayload | null;
   ambientesById: Map<string, ObraAmbientePayload>;
   serviceStarts: Map<string, Date>;
@@ -60,6 +61,12 @@ function productForActivityFrom(productsByProductId: Map<string, ObraAmbientePro
 }
 
 function productForActivity(ctx: PlacementContext, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+  const productId = getActivityProductId(activity);
+  const compositeId = activity.atividadeServicoAncoraId || "";
+  if (productId && compositeId) {
+    const contextualProduct = ctx.productsByProductAndCompositeId.get(productCompositeKey(productId, compositeId));
+    if (contextualProduct) return contextualProduct;
+  }
   return productForActivityFrom(ctx.productsByProductId, ctx.fallbackProduct, activity);
 }
 
@@ -84,6 +91,10 @@ function productSortKey(product: ObraAmbienteProdutoPayload): string {
 
 function compareProductOrder(a: ObraAmbienteProdutoPayload, b: ObraAmbienteProdutoPayload): number {
   return productSortKey(a).localeCompare(productSortKey(b));
+}
+
+function productCompositeKey(productId: string, compositeId: string): string {
+  return `${productId}:${compositeId}`;
 }
 
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
@@ -385,9 +396,15 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const orderedProducts = [...payload.obra_ambiente_produto_json].sort(compareProductOrder);
   const fallbackProduct = orderedProducts[0] || null;
   const productsByProductId = new Map<string, ObraAmbienteProdutoPayload>();
+  const productsByProductAndCompositeId = new Map<string, ObraAmbienteProdutoPayload>();
   for (const product of orderedProducts) {
     const productId = getProductId(product);
     if (productId && !productsByProductId.has(productId)) productsByProductId.set(productId, product);
+    const compositeId = getCompositeProductId(product);
+    if (productId && compositeId) {
+      const key = productCompositeKey(productId, compositeId);
+      if (!productsByProductAndCompositeId.has(key)) productsByProductAndCompositeId.set(key, product);
+    }
   }
   const ambientesById = new Map(
     payload.obra_ambiente_json.flatMap((ambiente) => {
@@ -410,6 +427,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     payload,
     obraStart,
     productsByProductId,
+    productsByProductAndCompositeId,
     fallbackProduct,
     ambientesById,
     serviceStarts: new Map(),
