@@ -571,6 +571,51 @@ describe("schedule engine", () => {
     expect(datesByActivity.get("servico_1")).toBe("2026-07-01");
   });
 
+  it("gera compra ancorada em composto mesmo quando o produto de servico aparece em outro composto primeiro", () => {
+    const payload = normalizePayload(basePayload({
+      dias_trabalho_semana: 6,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-07-01T03:00:00.000Z" }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "item_servico_composto_1", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_mo", "nome produto simples": "Servico repetido" },
+        { "unique id": "item_compra_composto_2", "id ambiente item composicao": "amb_2", "id produto composto": "composto_2", "id produto simples": "prod_compra", "nome produto simples": "Compra contexto 2" },
+        { "unique id": "item_servico_composto_2", "id ambiente item composicao": "amb_2", "id produto composto": "composto_2", "id produto simples": "prod_mo", "nome produto simples": "Servico repetido" }
+      ],
+      atividades_json: [
+        { id: "servico_1", nome: "Servico", tipo: "Servico", produto: "prod_mo", ordem: 8, duracao: 1 },
+        { id: "aviso", nome: "Aviso", tipo: "Compra", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_2", etapaCompra: "Aviso de orcamento", diasAntecedencia: 1 },
+        { id: "limite", nome: "Limite", tipo: "Compra", produto: "prod_compra", ordem: 2, atividadeServicoAncoraId: "composto_2", etapaCompra: "Limite de compra", diasAntecedencia: 1 },
+        { id: "recebimento", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 3, atividadeServicoAncoraId: "composto_2", etapaCompra: "Recebimento", diasAntecedencia: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.filter((line) => line.tipo === "Compra").map((line) => line.atividadeId).sort()).toEqual(["aviso", "limite", "recebimento"]);
+    expect(result.validations.warnings).toEqual([]);
+  });
+
+  it("sinaliza compra com composto sem servico ancora gerado", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "item_compra", "id ambiente item composicao": "amb_1", "id produto composto": "composto_sem_servico", "id produto simples": "prod_compra", "nome produto simples": "Compra sem servico" }
+      ],
+      atividades_json: [
+        { id: "servico_1", nome: "Servico", tipo: "Servico", produto: "prod_outro", ordem: 1, duracao: 1 },
+        { id: "aviso", nome: "Aviso", tipo: "Compra", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_sem_servico", etapaCompra: "Aviso de orcamento", diasAntecedencia: 1 },
+        { id: "recebimento", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 2, atividadeServicoAncoraId: "composto_sem_servico", etapaCompra: "Recebimento", diasAntecedencia: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.filter((line) => line.tipo === "Compra")).toHaveLength(0);
+    expect(result.validations.warnings).toEqual([
+      "Atividades ancoradas nao geradas: tipo=Compra; quantidade=2; produto=prod_compra; atividadeServicoAncoraId=composto_sem_servico; motivo=sem servico ancora gerado."
+    ]);
+  });
+
   it("formata codigo D-0 no dia anterior ao D+1", () => {
     const payload = normalizePayload(basePayload({
       dias_trabalho_semana: 6,
