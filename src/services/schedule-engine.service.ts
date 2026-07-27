@@ -10,6 +10,7 @@ interface PlacementContext {
   obraStart: Date;
   productsByProductId: Map<string, ObraAmbienteProdutoPayload>;
   productsByProductAndCompositeId: Map<string, ObraAmbienteProdutoPayload>;
+  productsByProductCompositeAndContextId: Map<string, ObraAmbienteProdutoPayload>;
   fallbackProduct: ObraAmbienteProdutoPayload | null;
   ambientesById: Map<string, ObraAmbientePayload>;
   serviceStarts: Map<string, Date>;
@@ -97,6 +98,10 @@ function productCompositeKey(productId: string, compositeId: string): string {
   return `${productId}:${compositeId}`;
 }
 
+function productCompositeContextKey(productId: string, compositeId: string, contextId: string): string {
+  return `${productId}:${compositeId}:${contextId}`;
+}
+
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
   return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product["id ambiente item composicao"] || product.ambiente || "") || null;
@@ -108,6 +113,21 @@ function getAmbienteItemComposicaoId(product: ObraAmbienteProdutoPayload | null)
     || product.ambienteItemComposicaoId
     || product["ambiente x item composicao"];
   return String(id || "") || null;
+}
+
+function productContextId(product: ObraAmbienteProdutoPayload | null): string | null {
+  return getAmbienteItemComposicaoId(product) || getAmbienteId(product);
+}
+
+function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedActivity, anchor: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+  const productId = getActivityProductId(activity);
+  const compositeId = activity.atividadeServicoAncoraId || getCompositeProductId(productForActivity(ctx, anchor)) || "";
+  const contextId = productContextId(productForActivity(ctx, anchor));
+  if (productId && compositeId && contextId) {
+    const contextualProduct = ctx.productsByProductCompositeAndContextId.get(productCompositeContextKey(productId, compositeId, contextId));
+    if (contextualProduct) return contextualProduct;
+  }
+  return productForActivity(ctx, activity);
 }
 
 function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
@@ -334,7 +354,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
 
     for (const { activity, anchor } of orderedEntries.reverse()) {
-      let product = productForActivity(ctx, activity);
+      let product = productForAnchoredActivity(ctx, activity, anchor);
       if (!product) product = productForActivity(ctx, anchor);
       const counterKey = `${anchorId}:${activity.tipo}`;
       const currentCounter = anchorCounters.get(counterKey) || 0;
@@ -354,7 +374,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const anchorId = anchor?.id;
     if (!anchorId) continue;
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
-    let product = productForActivity(ctx, activity);
+    let product = productForAnchoredActivity(ctx, activity, anchor);
     if (!product) product = productForActivity(ctx, anchor);
     const earliestPurchase = [...(purchaseLinesByAnchor.get(anchorId) || [])].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
     const counterKey = `${anchorId}:${activity.tipo}`;
@@ -397,6 +417,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const fallbackProduct = orderedProducts[0] || null;
   const productsByProductId = new Map<string, ObraAmbienteProdutoPayload>();
   const productsByProductAndCompositeId = new Map<string, ObraAmbienteProdutoPayload>();
+  const productsByProductCompositeAndContextId = new Map<string, ObraAmbienteProdutoPayload>();
   for (const product of orderedProducts) {
     const productId = getProductId(product);
     if (productId && !productsByProductId.has(productId)) productsByProductId.set(productId, product);
@@ -404,6 +425,11 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     if (productId && compositeId) {
       const key = productCompositeKey(productId, compositeId);
       if (!productsByProductAndCompositeId.has(key)) productsByProductAndCompositeId.set(key, product);
+      const contextId = productContextId(product);
+      if (contextId) {
+        const contextKey = productCompositeContextKey(productId, compositeId, contextId);
+        if (!productsByProductCompositeAndContextId.has(contextKey)) productsByProductCompositeAndContextId.set(contextKey, product);
+      }
     }
   }
   const ambientesById = new Map(
@@ -428,6 +454,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     obraStart,
     productsByProductId,
     productsByProductAndCompositeId,
+    productsByProductCompositeAndContextId,
     fallbackProduct,
     ambientesById,
     serviceStarts: new Map(),

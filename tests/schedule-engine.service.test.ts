@@ -152,11 +152,13 @@ describe("schedule engine", () => {
     const payload = normalizePayload(basePayload({
       obra_ambiente_json: [
         { id: "amb_parede", nome: "Parede" },
-        { id: "amb_piso", nome: "Piso" }
+        { id: "amb_piso", nome: "Piso" },
+        { id: "amb_outro", nome: "Outro ambiente" }
       ],
       obra_ambiente_produto_json: [
         { id: "oap_espacador_parede", ambienteId: "amb_parede", produto: "prod_espacador", "id produto composto": "comp_parede", quantidade: 30 },
         { id: "oap_serv_parede", ambienteId: "amb_parede", produto: "prod_serv_parede", "id produto composto": "comp_parede", quantidade: 1 },
+        { id: "oap_espacador_outro", ambienteId: "amb_outro", produto: "prod_espacador", "id produto composto": "comp_piso", quantidade: 1 },
         { id: "oap_espacador_piso", ambienteId: "amb_piso", produto: "prod_espacador", "id produto composto": "comp_piso", quantidade: 10 },
         { id: "oap_serv_piso", ambienteId: "amb_piso", produto: "prod_serv_piso", "id produto composto": "comp_piso", quantidade: 1 }
       ],
