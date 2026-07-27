@@ -106,6 +106,48 @@ describe("schedule engine", () => {
     });
   });
 
+  it("usa produto canonico quando o mesmo produto aparece em ordens diferentes", () => {
+    const payloadBody = {
+      obra_ambiente_json: [
+        { id: "amb_a", nome: "Ambiente A" },
+        { id: "amb_b", nome: "Ambiente B" }
+      ],
+      obra_ambiente_produto_json: [
+        { id: "oap_b", ambienteId: "amb_b", produto: "prod_repetido", "id produto composto": "comp_b", quantidade: 30 },
+        { id: "oap_a", ambienteId: "amb_a", produto: "prod_repetido", "id produto composto": "comp_a", quantidade: 10 }
+      ],
+      atividades_json: [
+        {
+          id: "serv_repetido",
+          nome: "Servico com produto repetido",
+          tipo: "Servico" as const,
+          produto: "prod_repetido",
+          ordem: 1,
+          duracao: 1,
+          duracaoVariavel: true,
+          quantidadeBase: 10
+        }
+      ]
+    };
+    const forwardPayload = normalizePayload(basePayload(payloadBody));
+    const reversedPayload = normalizePayload(basePayload({
+      ...payloadBody,
+      obra_ambiente_produto_json: [...payloadBody.obra_ambiente_produto_json].reverse()
+    }));
+
+    const forwardResult = runScheduleEngine(forwardPayload);
+    const reversedResult = runScheduleEngine(reversedPayload);
+
+    expect(forwardResult.lines.map((line) => line.atividade_obra_id_externo)).toEqual(
+      reversedResult.lines.map((line) => line.atividade_obra_id_externo)
+    );
+    expect(forwardResult.lines).toHaveLength(1);
+    expect(forwardResult.lines[0]).toMatchObject({
+      obraAmbienteProdutoId: "oap_a",
+      ambiente: "Ambiente A"
+    });
+  });
+
   it("payload com quantidadeBase vazia normaliza para null", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [

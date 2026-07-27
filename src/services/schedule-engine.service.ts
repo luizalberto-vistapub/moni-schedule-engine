@@ -63,6 +63,29 @@ function productForActivity(ctx: PlacementContext, activity: NormalizedActivity)
   return productForActivityFrom(ctx.productsByProductId, ctx.fallbackProduct, activity);
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function productSortKey(product: ObraAmbienteProdutoPayload): string {
+  return [
+    getProductId(product),
+    getCompositeProductId(product),
+    stringValue(product.produtoNome),
+    stringValue(product["nome produto"]),
+    stringValue(product["nome produto simples"]),
+    String(product.quantidade ?? ""),
+    getAmbienteItemComposicaoId(product),
+    stringValue(product.id),
+    stringValue(product.unique_id),
+    stringValue(product["unique id"])
+  ].map((value) => value || "").join("|");
+}
+
+function compareProductOrder(a: ObraAmbienteProdutoPayload, b: ObraAmbienteProdutoPayload): number {
+  return productSortKey(a).localeCompare(productSortKey(b));
+}
+
 function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
   return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product["id ambiente item composicao"] || product.ambiente || "") || null;
@@ -359,12 +382,13 @@ function compareServiceOrder(a: NormalizedActivity, b: NormalizedActivity): numb
 
 export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineResult {
   const obraStart = getObraStart(payload);
-  const fallbackProduct = payload.obra_ambiente_produto_json[0] || null;
-  const productsByProductId = new Map(
-    payload.obra_ambiente_produto_json
-      .map((product) => [getProductId(product), product] as const)
-      .filter((entry): entry is [string, ObraAmbienteProdutoPayload] => Boolean(entry[0]))
-  );
+  const orderedProducts = [...payload.obra_ambiente_produto_json].sort(compareProductOrder);
+  const fallbackProduct = orderedProducts[0] || null;
+  const productsByProductId = new Map<string, ObraAmbienteProdutoPayload>();
+  for (const product of orderedProducts) {
+    const productId = getProductId(product);
+    if (productId && !productsByProductId.has(productId)) productsByProductId.set(productId, product);
+  }
   const ambientesById = new Map(
     payload.obra_ambiente_json.flatMap((ambiente) => {
       const ids = [ambiente.id, ambiente.unique_id, ambiente["unique id"], ambiente.ambiente]
