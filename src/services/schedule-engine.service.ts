@@ -244,10 +244,21 @@ function comparePurchaseChainOrder(a: NormalizedActivity, b: NormalizedActivity)
 }
 
 function compareCanonicalPurchase(a: NormalizedActivity, b: NormalizedActivity): number {
-  const missingCreatedAt = "\uffff";
-  const aCreatedAt = typeof a.createdAt === "string" && a.createdAt ? a.createdAt : missingCreatedAt;
-  const bCreatedAt = typeof b.createdAt === "string" && b.createdAt ? b.createdAt : missingCreatedAt;
-  return aCreatedAt.localeCompare(bCreatedAt) || a.id.localeCompare(b.id);
+  const createdAtTime = (activity: NormalizedActivity): number => {
+    if (typeof activity.createdAt !== "string" || !activity.createdAt) return Number.POSITIVE_INFINITY;
+    const timestamp = Date.parse(activity.createdAt);
+    return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp;
+  };
+  return createdAtTime(a) - createdAtTime(b) || a.id.localeCompare(b.id);
+}
+
+export function compareAnchorPriority(
+  a: Pick<NormalizedActivity, "ordem" | "id">,
+  aStart: Date,
+  b: Pick<NormalizedActivity, "ordem" | "id">,
+  bStart: Date
+): number {
+  return a.ordem - b.ordem || aStart.getTime() - bStart.getTime() || a.id.localeCompare(b.id);
 }
 
 function purchaseChainKey(anchorId: string, activity: NormalizedActivity): string {
@@ -341,9 +352,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     a: { anchor: NormalizedActivity; compositeId: string | null },
     b: { anchor: NormalizedActivity; compositeId: string | null }
   ): number => (
-    a.anchor.ordem - b.anchor.ordem
-    || ctx.serviceStarts.get(a.anchor.id)!.getTime() - ctx.serviceStarts.get(b.anchor.id)!.getTime()
-    || a.anchor.id.localeCompare(b.anchor.id)
+    compareAnchorPriority(a.anchor, ctx.serviceStarts.get(a.anchor.id)!, b.anchor, ctx.serviceStarts.get(b.anchor.id)!)
     || String(a.compositeId || "").localeCompare(String(b.compositeId || ""))
   );
 

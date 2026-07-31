@@ -3,7 +3,7 @@ import type { ActivityPayload } from "../src/types/payload.types.js";
 import { addBusinessDays, isBusinessDay, nextBusinessDay, previousBusinessDay } from "../src/services/business-days.service.js";
 import { normalizePayload } from "../src/services/normalize-payload.service.js";
 import { buildScheduleResponse } from "../src/services/response-builder.service.js";
-import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
+import { compareAnchorPriority, runScheduleEngine } from "../src/services/schedule-engine.service.js";
 import { parseDateOnly, formatDateOnly } from "../src/utils/dates.js";
 import { basePayload } from "./test-helpers.js";
 
@@ -1128,6 +1128,46 @@ describe("schedule engine", () => {
       atividadeServicoAncoraId: "a_servico",
       obraAmbienteProdutoId: "compra_a"
     });
+  });
+
+  it("prioriza a menor ordem da ancora mesmo quando sua data informada e posterior", () => {
+    const lowerOrder = { id: "servico_ordem_1", ordem: 1 };
+    const higherOrder = { id: "servico_ordem_5", ordem: 5 };
+
+    expect(compareAnchorPriority(
+      lowerOrder,
+      new Date("2026-06-01T00:00:00.000Z"),
+      higherOrder,
+      new Date("2026-05-01T00:00:00.000Z")
+    )).toBeLessThan(0);
+  });
+
+  it("escolhe a compra mais antiga por timestamp e desempata pelo id sem gerar warning", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "compra_contextual", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_compra" },
+        { "unique id": "servico_contextual", "id ambiente item composicao": "amb_1", "id produto composto": "composto_1", "id produto simples": "prod_servico" }
+      ],
+      atividades_json: [
+        { id: "servico", nome: "Serviço", tipo: "Servico", produto: "prod_servico", ordem: 1, duracao: 1 },
+        { id: "z_compra_antiga", nome: "Recebimento Z", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "composto_1", createdAt: "2026-01-01T04:00:00+02:00" },
+        { id: "m_compra_recente", nome: "Recebimento M", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "composto_1", createdAt: "2026-01-01T03:00:00Z" },
+        { id: "a_compra_antiga", nome: "Recebimento A", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "composto_1", createdAt: "2026-01-01T04:00:00+02:00" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const purchases = result.lines.filter((line) => line.tipo === "Compra");
+
+    expect(purchases).toHaveLength(1);
+    expect(purchases[0]).toMatchObject({
+      atividadeId: "a_compra_antiga",
+      subtipo_compra: "RECEBIMENTO",
+      atividadeServicoAncoraId: "servico",
+      obraAmbienteProdutoId: "compra_contextual"
+    });
+    expect(result.validations.warnings).toEqual([]);
   });
 
   it("ignora compras e projetos sem ancora resolvida", () => {

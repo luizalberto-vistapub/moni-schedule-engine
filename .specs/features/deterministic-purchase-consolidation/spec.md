@@ -17,6 +17,7 @@ The same simple product can appear in several composition contexts while Bubble 
 
 - Consolidation scope is one schedule generation payload (one work/version).
 - The identity of a purchase chain is the simple product ID; each recognized purchase stage may occur at most once in the generated schedule.
+- Valid `createdAt` values are compared as timestamps; missing or invalid values sort after valid timestamps and then use activity ID.
 - A received `atividadeServicoAncoraId` is only a fallback when no service can be derived from the purchase simple product.
 - Deliberately discarded duplicate purchases do not produce unresolved-anchor warnings.
 
