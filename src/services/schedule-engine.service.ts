@@ -11,6 +11,7 @@ interface PlacementContext {
   productsByProductId: Map<string, ObraAmbienteProdutoPayload>;
   productsByProductAndCompositeId: Map<string, ObraAmbienteProdutoPayload>;
   productsByProductCompositeAndContextId: Map<string, ObraAmbienteProdutoPayload>;
+  compositeIdsByProductId: Map<string, string[]>;
   fallbackProduct: ObraAmbienteProdutoPayload | null;
   ambientesById: Map<string, ObraAmbientePayload>;
   serviceStarts: Map<string, Date>;
@@ -120,9 +121,9 @@ function productContextId(product: ObraAmbienteProdutoPayload | null): string | 
   return getAmbienteItemComposicaoId(product) || getAmbienteId(product);
 }
 
-function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedActivity, anchor: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedActivity, anchor: NormalizedActivity, anchorCompositeId?: string | null): ObraAmbienteProdutoPayload | null {
   const productId = getActivityProductId(activity);
-  const compositeId = activity.atividadeServicoAncoraId || getCompositeProductId(productForActivity(ctx, anchor)) || "";
+  const compositeId = anchorCompositeId || activity.atividadeServicoAncoraId || getCompositeProductId(productForActivity(ctx, anchor)) || "";
   const contextId = productContextId(productForActivity(ctx, anchor));
   if (productId && compositeId && contextId) {
     const contextualProduct = ctx.productsByProductCompositeAndContextId.get(productCompositeContextKey(productId, compositeId, contextId));
@@ -242,10 +243,16 @@ function comparePurchaseChainOrder(a: NormalizedActivity, b: NormalizedActivity)
   return purchaseStageOrder(a) - purchaseStageOrder(b) || compareAnchoredActivityOrder(a, b);
 }
 
+function compareCanonicalPurchase(a: NormalizedActivity, b: NormalizedActivity): number {
+  const missingCreatedAt = "\uffff";
+  const aCreatedAt = typeof a.createdAt === "string" && a.createdAt ? a.createdAt : missingCreatedAt;
+  const bCreatedAt = typeof b.createdAt === "string" && b.createdAt ? b.createdAt : missingCreatedAt;
+  return aCreatedAt.localeCompare(bCreatedAt) || a.id.localeCompare(b.id);
+}
+
 function purchaseChainKey(anchorId: string, activity: NormalizedActivity): string {
-  const activityAnchorId = activity.atividadeServicoAncoraId || "";
   /* v8 ignore next -- fallback supports malformed purchase payloads without an item id. */
-  const purchaseItemId = activityAnchorId && activityAnchorId !== anchorId ? activityAnchorId : getActivityProductId(activity);
+  const purchaseItemId = getActivityProductId(activity) || activity.atividadeServicoAncoraId;
   return `${anchorId}:${purchaseItemId || "__default__"}`;
 }
 
@@ -308,7 +315,15 @@ function placeServices(ctx: PlacementContext, services: NormalizedActivity[]): v
 }
 
 function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedActivity[], servicesById: Map<string, NormalizedActivity>): void {
-  const purchases = activities.filter((activity) => activity.tipo === "Compra" && activity.etapaCompra).sort(comparePurchaseChainOrder);
+  const purchaseCandidates = activities.filter((activity) => activity.tipo === "Compra" && activity.etapaCompra);
+  const canonicalPurchasesByStage = new Map<string, NormalizedActivity>();
+  for (const activity of purchaseCandidates) {
+    const productId = getActivityProductId(activity);
+    const key = productId ? `${productId}:${activity.etapaCompra}` : `__atividade__:${activity.id}`;
+    const current = canonicalPurchasesByStage.get(key);
+    if (!current || compareCanonicalPurchase(activity, current) < 0) canonicalPurchasesByStage.set(key, activity);
+  }
+  const purchases = [...canonicalPurchasesByStage.values()].sort(comparePurchaseChainOrder);
   const projects = activities.filter((activity) => activity.tipo === "Projeto").sort(compareAnchoredActivityOrder);
   const anchorCounters = new Map<string, number>();
   const purchaseLinesByAnchor = new Map<string, ScheduleLine[]>();
@@ -322,43 +337,69 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     skippedAnchors.set(key, { count: (current?.count || 0) + 1, sample: current?.sample || activity, reason });
   };
 
-  const resolveAnchor = (activity: NormalizedActivity): NormalizedActivity | null => {
-    const earliestServiceForComposite = (compositeId: string): NormalizedActivity | null => {
-      const services = ctx.servicesByCompositeId.get(compositeId);
-      if (!services?.length) return null;
-      const [earliest] = [...services].sort((a, b) => ctx.serviceStarts.get(a.id)!.getTime() - ctx.serviceStarts.get(b.id)!.getTime());
-      return earliest;
-    };
+  const compareAnchorCandidates = (
+    a: { anchor: NormalizedActivity; compositeId: string | null },
+    b: { anchor: NormalizedActivity; compositeId: string | null }
+  ): number => (
+    a.anchor.ordem - b.anchor.ordem
+    || ctx.serviceStarts.get(a.anchor.id)!.getTime() - ctx.serviceStarts.get(b.anchor.id)!.getTime()
+    || a.anchor.id.localeCompare(b.anchor.id)
+    || String(a.compositeId || "").localeCompare(String(b.compositeId || ""))
+  );
 
+  const preferredServiceForComposite = (compositeId: string): { anchor: NormalizedActivity; compositeId: string } | null => {
+    const services = ctx.servicesByCompositeId.get(compositeId);
+    if (!services?.length) return null;
+    const [preferred] = services
+      .map((anchor) => ({ anchor, compositeId }))
+      .sort(compareAnchorCandidates);
+    return preferred;
+  };
+
+  const resolveAnchor = (activity: NormalizedActivity): { anchor: NormalizedActivity; compositeId: string | null } | null => {
+    if (activity.tipo === "Compra") {
+      const productId = getActivityProductId(activity);
+      const productCandidates = (productId ? ctx.compositeIdsByProductId.get(productId) : null) || [];
+      const candidates = productCandidates
+        .flatMap((compositeId) => {
+          const preferred = preferredServiceForComposite(compositeId);
+          return preferred ? [preferred] : [];
+        })
+        .sort(compareAnchorCandidates);
+      if (candidates.length) return candidates[0];
+    }
     if (activity.atividadeServicoAncoraId) {
       const explicitService = servicesById.get(activity.atividadeServicoAncoraId);
       if (explicitService) {
         const explicitCompositeId = getCompositeProductId(productForActivity(ctx, explicitService));
-        return explicitCompositeId ? earliestServiceForComposite(explicitCompositeId) || explicitService : explicitService;
+        return explicitCompositeId
+          ? preferredServiceForComposite(explicitCompositeId) || { anchor: explicitService, compositeId: explicitCompositeId }
+          : { anchor: explicitService, compositeId: null };
       }
       const anchorProduct = ctx.productsByProductId.get(activity.atividadeServicoAncoraId);
       const anchorCompositeId = getCompositeProductId(anchorProduct || null);
       if (anchorCompositeId) {
-        const serviceByAnchorProduct = earliestServiceForComposite(anchorCompositeId);
+        const serviceByAnchorProduct = preferredServiceForComposite(anchorCompositeId);
         if (serviceByAnchorProduct) return serviceByAnchorProduct;
       }
-      const serviceByComposite = earliestServiceForComposite(activity.atividadeServicoAncoraId);
+      const serviceByComposite = preferredServiceForComposite(activity.atividadeServicoAncoraId);
       if (serviceByComposite) return serviceByComposite;
     }
     const compositeId = getCompositeProductId(productForActivity(ctx, activity));
-    return compositeId ? earliestServiceForComposite(compositeId) : null;
+    return compositeId ? preferredServiceForComposite(compositeId) : null;
   };
 
-  const purchasesByChain = new Map<string, { anchorId: string; activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
+  const purchasesByChain = new Map<string, { anchorId: string; activity: NormalizedActivity; anchor: NormalizedActivity; compositeId: string | null }[]>();
   for (const activity of purchases) {
-    const anchor = resolveAnchor(activity);
-    const anchorId = anchor?.id;
-    if (!anchorId) {
+    const resolvedAnchor = resolveAnchor(activity);
+    if (!resolvedAnchor) {
       recordSkippedAnchor(activity, "sem servico ancora gerado");
       continue;
     }
+    const { anchor, compositeId } = resolvedAnchor;
+    const anchorId = anchor.id;
     const chainKey = purchaseChainKey(anchorId, activity);
-    purchasesByChain.set(chainKey, [...(purchasesByChain.get(chainKey) || []), { anchorId, activity, anchor }]);
+    purchasesByChain.set(chainKey, [...(purchasesByChain.get(chainKey) || []), { anchorId, activity, anchor, compositeId }]);
   }
 
   for (const purchaseEntries of purchasesByChain.values()) {
@@ -366,8 +407,8 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
     const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
 
-    for (const { activity, anchor } of orderedEntries.reverse()) {
-      let product = productForAnchoredActivity(ctx, activity, anchor);
+    for (const { activity, anchor, compositeId } of orderedEntries.reverse()) {
+      let product = productForAnchoredActivity(ctx, activity, anchor, compositeId);
       if (!product) product = productForActivity(ctx, anchor);
       const counterKey = `${anchorId}:${activity.tipo}`;
       const currentCounter = anchorCounters.get(counterKey) || 0;
@@ -383,7 +424,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
   }
 
   for (const activity of projects) {
-    const anchor = resolveAnchor(activity);
+    const anchor = resolveAnchor(activity)?.anchor;
     const anchorId = anchor?.id;
     if (!anchorId) {
       recordSkippedAnchor(activity, "sem servico ancora gerado");
@@ -440,11 +481,14 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const productsByProductId = new Map<string, ObraAmbienteProdutoPayload>();
   const productsByProductAndCompositeId = new Map<string, ObraAmbienteProdutoPayload>();
   const productsByProductCompositeAndContextId = new Map<string, ObraAmbienteProdutoPayload>();
+  const compositeIdsByProductId = new Map<string, string[]>();
   for (const product of orderedProducts) {
     const productId = getProductId(product);
     if (productId && !productsByProductId.has(productId)) productsByProductId.set(productId, product);
     const compositeId = getCompositeProductId(product);
     if (productId && compositeId) {
+      const compositeIds = compositeIdsByProductId.get(productId) || [];
+      if (!compositeIds.includes(compositeId)) compositeIdsByProductId.set(productId, [...compositeIds, compositeId]);
       const key = productCompositeKey(productId, compositeId);
       if (!productsByProductAndCompositeId.has(key)) productsByProductAndCompositeId.set(key, product);
       const contextId = productContextId(product);
@@ -489,6 +533,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     productsByProductId,
     productsByProductAndCompositeId,
     productsByProductCompositeAndContextId,
+    compositeIdsByProductId,
     fallbackProduct,
     ambientesById,
     serviceStarts: new Map(),

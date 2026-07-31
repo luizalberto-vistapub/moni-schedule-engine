@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ActivityPayload } from "../src/types/payload.types.js";
 import { addBusinessDays, isBusinessDay, nextBusinessDay, previousBusinessDay } from "../src/services/business-days.service.js";
 import { normalizePayload } from "../src/services/normalize-payload.service.js";
 import { buildScheduleResponse } from "../src/services/response-builder.service.js";
@@ -148,7 +149,7 @@ describe("schedule engine", () => {
     });
   });
 
-  it("ancora compra no produto simples dentro do produto composto informado", () => {
+  it("ignora o produto composto informado quando outro contexto do produto tem servico de menor ordem", () => {
     const payload = normalizePayload(basePayload({
       obra_ambiente_json: [
         { id: "amb_parede", nome: "Parede" },
@@ -193,9 +194,9 @@ describe("schedule engine", () => {
     const purchase = result.lines.find((line) => line.atividadeId === "compra_espacador_piso");
 
     expect(purchase).toMatchObject({
-      obraAmbienteProdutoId: "oap_espacador_piso",
-      ambiente: "Piso",
-      atividadeServicoAncoraId: "serv_piso"
+      obraAmbienteProdutoId: "oap_espacador_parede",
+      ambiente: "Parede",
+      atividadeServicoAncoraId: "serv_parede"
     });
   });
 
@@ -974,6 +975,159 @@ describe("schedule engine", () => {
 
     expect(generatedProjects.map((activity) => activity.id)).toEqual(["projeto_sem_antecedencia", "projeto_em_branco"]);
     expect(generatedProjects.map((activity) => activity.offsetDias)).toEqual([undefined, undefined]);
+  });
+
+  it("consolida compras repetidas no servico de menor ordem independentemente da ancora e da ordem do payload", () => {
+    const purchaseStages = [
+      { suffix: "aviso", nome: "Aviso", etapaCompra: "Aviso de orçamento", diasAntecedencia: 30 },
+      { suffix: "limite_orcamento", nome: "Limite orçamento", etapaCompra: "Limite de orçamento", diasAntecedencia: 28 },
+      { suffix: "limite_compra", nome: "Limite compra", etapaCompra: "Limite de compra", diasAntecedencia: 14 },
+      { suffix: "recebimento", nome: "Recebimento", etapaCompra: "Recebimento", diasAntecedencia: 2 }
+    ];
+    const purchases: ActivityPayload[] = purchaseStages.flatMap((stage, stageIndex) => [
+      {
+        id: `${stage.suffix}_primeira`,
+        nome: stage.nome,
+        tipo: "Compra",
+        produto: "prod_compra",
+        ordem: 1,
+        etapaCompra: stage.etapaCompra,
+        diasAntecedencia: stage.diasAntecedencia,
+        createdAt: `2026-01-01T00:00:0${stageIndex}.000Z`
+      },
+      {
+        id: `${stage.suffix}_duplicada`,
+        nome: `${stage.nome} duplicada`,
+        tipo: "Compra",
+        produto: "prod_compra",
+        ordem: 1,
+        etapaCompra: stage.etapaCompra,
+        diasAntecedencia: stage.diasAntecedencia,
+        createdAt: `2026-01-02T00:00:0${stageIndex}.000Z`
+      }
+    ]);
+    const compositionProducts = [
+      {
+        "unique id": "compra_ordem_1",
+        "id ambiente item composicao": "amb_ordem_1",
+        "id produto composto": "composto_ordem_1",
+        "id produto simples": "prod_compra",
+        "nome produto simples": "Porcelanato"
+      },
+      {
+        "unique id": "servico_ordem_1_produto",
+        "id ambiente item composicao": "amb_ordem_1",
+        "id produto composto": "composto_ordem_1",
+        "id produto simples": "prod_servico_ordem_1",
+        "nome produto simples": "Mão de obra ordem 1"
+      },
+      {
+        "unique id": "compra_ordem_5",
+        "id ambiente item composicao": "amb_ordem_5",
+        "id produto composto": "composto_ordem_5",
+        "id produto simples": "prod_compra",
+        "nome produto simples": "Porcelanato"
+      },
+      {
+        "unique id": "servico_ordem_5_produto",
+        "id ambiente item composicao": "amb_ordem_5",
+        "id produto composto": "composto_ordem_5",
+        "id produto simples": "prod_servico_ordem_5",
+        "nome produto simples": "Mão de obra ordem 5"
+      }
+    ];
+    const services: ActivityPayload[] = [
+      { id: "servico_ordem_1", nome: "Assentar primeiro ambiente", tipo: "Servico", produto: "prod_servico_ordem_1", ordem: 1, duracao: 1 },
+      { id: "servico_ordem_5", nome: "Assentar segundo ambiente", tipo: "Servico", produto: "prod_servico_ordem_5", ordem: 5, duracao: 1 }
+    ];
+    const generate = (anchorId: string, reverse: boolean) => {
+      const anchoredPurchases = purchases.map((purchase) => ({ ...purchase, atividadeServicoAncoraId: anchorId }));
+      const atividades_json = [...services, ...(reverse ? anchoredPurchases.reverse() : anchoredPurchases)];
+      const payload = normalizePayload(basePayload({
+        obra_ambiente_json: [
+          { "unique id": "amb_ordem_1", "nome ambiente": "Sala" },
+          { "unique id": "amb_ordem_5", "nome ambiente": "Varanda" }
+        ],
+        obra_ambiente_produto_json: [],
+        obra_ambiente_item_composicao_json: compositionProducts,
+        atividades_json: reverse ? atividades_json.reverse() : atividades_json
+      }));
+
+      return runScheduleEngine(payload).lines
+        .filter((line) => line.tipo === "Compra")
+        .map((line) => ({
+          atividadeId: line.atividadeId,
+          etapa: line.subtipo_compra,
+          ancora: line.atividadeServicoAncoraId,
+          data: line.data_programada,
+          produtoContextual: line.obraAmbienteProdutoId
+        }));
+    };
+
+    const anchoredInLateComposite = generate("composto_ordem_5", false);
+    const anchoredInEarlyCompositeAndReversed = generate("composto_ordem_1", true);
+
+    expect(anchoredInLateComposite).toEqual([
+      { atividadeId: "aviso_primeira", etapa: "AVISO_ORCAMENTO", ancora: "servico_ordem_1", data: "2026-04-04", produtoContextual: "compra_ordem_1" },
+      { atividadeId: "limite_orcamento_primeira", etapa: "LIMITE_ORCAMENTO", ancora: "servico_ordem_1", data: "2026-04-06", produtoContextual: "compra_ordem_1" },
+      { atividadeId: "limite_compra_primeira", etapa: "LIMITE_COMPRA", ancora: "servico_ordem_1", data: "2026-04-20", produtoContextual: "compra_ordem_1" },
+      { atividadeId: "recebimento_primeira", etapa: "RECEBIMENTO", ancora: "servico_ordem_1", data: "2026-05-02", produtoContextual: "compra_ordem_1" }
+    ]);
+    expect(anchoredInEarlyCompositeAndReversed).toEqual(anchoredInLateComposite);
+  });
+
+  it("desempata a ancora pela menor data programada quando os servicos tem a mesma ordem", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "compra_cedo", "id ambiente item composicao": "amb_1", "id produto composto": "composto_cedo", "id produto simples": "prod_compra" },
+        { "unique id": "produto_servico_cedo", "id ambiente item composicao": "amb_1", "id produto composto": "composto_cedo", "id produto simples": "prod_servico_cedo" },
+        { "unique id": "compra_tarde", "id ambiente item composicao": "amb_1", "id produto composto": "composto_tarde", "id produto simples": "prod_compra" },
+        { "unique id": "produto_servico_tarde", "id ambiente item composicao": "amb_1", "id produto composto": "composto_tarde", "id produto simples": "prod_servico_tarde" }
+      ],
+      atividades_json: [
+        { id: "z_servico_cedo", nome: "Serviço cedo", tipo: "Servico", produto: "prod_servico_cedo", ordem: 1, duracao: 1 },
+        { id: "a_servico_tarde", nome: "Serviço tarde", tipo: "Servico", produto: "prod_servico_tarde", ordem: 1, duracao: 1, interdependenciasMasterIds: ["z_servico_cedo"] },
+        { id: "recebimento", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "composto_tarde" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const purchase = result.lines.find((line) => line.atividadeId === "recebimento");
+
+    expect(result.lines.find((line) => line.atividadeId === "z_servico_cedo")!.data_programada).toBe("2026-05-04");
+    expect(result.lines.find((line) => line.atividadeId === "a_servico_tarde")!.data_programada).toBe("2026-05-05");
+    expect(purchase).toMatchObject({
+      atividadeServicoAncoraId: "z_servico_cedo",
+      obraAmbienteProdutoId: "compra_cedo"
+    });
+  });
+
+  it("desempata a ancora pelo id quando ordem e data programada sao iguais", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        { "unique id": "compra_a", "id ambiente item composicao": "amb_1", "id produto composto": "composto_a", "id produto simples": "prod_compra" },
+        { "unique id": "produto_servico_a", "id ambiente item composicao": "amb_1", "id produto composto": "composto_a", "id produto simples": "prod_servico_a" },
+        { "unique id": "compra_z", "id ambiente item composicao": "amb_1", "id produto composto": "composto_z", "id produto simples": "prod_compra" },
+        { "unique id": "produto_servico_z", "id ambiente item composicao": "amb_1", "id produto composto": "composto_z", "id produto simples": "prod_servico_z" }
+      ],
+      atividades_json: [
+        { id: "z_servico", nome: "Serviço Z", tipo: "Servico", produto: "prod_servico_z", ordem: 1, duracao: 1 },
+        { id: "a_servico", nome: "Serviço A", tipo: "Servico", produto: "prod_servico_a", ordem: 1, duracao: 1 },
+        { id: "recebimento", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "composto_z" }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const purchase = result.lines.find((line) => line.atividadeId === "recebimento");
+
+    expect(result.lines.find((line) => line.atividadeId === "a_servico")!.data_programada).toBe("2026-05-04");
+    expect(result.lines.find((line) => line.atividadeId === "z_servico")!.data_programada).toBe("2026-05-04");
+    expect(purchase).toMatchObject({
+      atividadeServicoAncoraId: "a_servico",
+      obraAmbienteProdutoId: "compra_a"
+    });
   });
 
   it("ignora compras e projetos sem ancora resolvida", () => {
