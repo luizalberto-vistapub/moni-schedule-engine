@@ -248,6 +248,26 @@ describe("schedule engine", () => {
     expect(payload.atividades_json[1].etapaCompra).toBe("RECEBIMENTO");
   });
 
+  it("reconhece as quatro etapas dentro do nome complementado e rejeita a compra mae", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        { id: "aviso", tipo: "Compra", etapaCompra: "Aviso de orçamento - TESTE VIVI PS1 - COMPRA" },
+        { id: "limite_orcamento", tipo: "Compra", etapaCompra: "TESTE - Limite de orçamento - PRODUTO" },
+        { id: "limite_compra", tipo: "Compra", etapaCompra: "PRODUTO - Limite de compra" },
+        { id: "recebimento", tipo: "Compra", etapaCompra: "Recebimento - TESTE VIVI PS1 - COMPRA" },
+        { id: "mae", tipo: "Compra", etapaCompra: "Atividade de compra 1 - TESTE VIVI PS1 - COMPRA" }
+      ]
+    }));
+
+    expect(payload.atividades_json.map((activity) => activity.etapaCompra)).toEqual([
+      "AVISO_ORCAMENTO",
+      "LIMITE_ORCAMENTO",
+      "LIMITE_COMPRA",
+      "RECEBIMENTO",
+      null
+    ]);
+  });
+
   it("normaliza ancora somente para compras", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [

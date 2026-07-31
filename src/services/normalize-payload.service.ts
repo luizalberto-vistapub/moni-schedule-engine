@@ -65,7 +65,9 @@ function normalizePurchaseStage(value: unknown): PurchaseStage | null {
     RECEBIMENTO: "RECEBIMENTO"
   };
 
-  return aliases[normalized] || null;
+  const padded = `_${normalized}_`;
+  const match = Object.entries(aliases).find(([alias]) => padded.includes(`_${alias}_`));
+  return match?.[1] || null;
 }
 
 function asString(value: unknown, fallback: string): string {
