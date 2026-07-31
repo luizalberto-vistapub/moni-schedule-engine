@@ -252,18 +252,26 @@ describe("schedule engine", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
         { id: "aviso", tipo: "Compra", etapaCompra: "Aviso de orçamento - TESTE VIVI PS1 - COMPRA" },
+        { id: "aviso_sem_de", tipo: "Compra", etapaCompra: "PRODUTO - Aviso orçamento - COMPRA" },
         { id: "limite_orcamento", tipo: "Compra", etapaCompra: "TESTE - Limite de orçamento - PRODUTO" },
+        { id: "limite_orcamento_sem_de", tipo: "Compra", etapaCompra: "PRODUTO - Limite orçamento - COMPRA" },
         { id: "limite_compra", tipo: "Compra", etapaCompra: "PRODUTO - Limite de compra" },
+        { id: "limite_compra_sem_de", tipo: "Compra", etapaCompra: "PRODUTO - Limite compra - TESTE" },
         { id: "recebimento", tipo: "Compra", etapaCompra: "Recebimento - TESTE VIVI PS1 - COMPRA" },
-        { id: "mae", tipo: "Compra", etapaCompra: "Atividade de compra 1 - TESTE VIVI PS1 - COMPRA" }
+        { id: "mae", tipo: "Compra", etapaCompra: "Atividade de compra 1 - TESTE VIVI PS1 - COMPRA" },
+        { id: "palavra_parcial", tipo: "Compra", etapaCompra: "Pré-recebimentos - TESTE VIVI PS1 - COMPRA" }
       ]
     }));
 
     expect(payload.atividades_json.map((activity) => activity.etapaCompra)).toEqual([
       "AVISO_ORCAMENTO",
+      "AVISO_ORCAMENTO",
+      "LIMITE_ORCAMENTO",
       "LIMITE_ORCAMENTO",
       "LIMITE_COMPRA",
+      "LIMITE_COMPRA",
       "RECEBIMENTO",
+      null,
       null
     ]);
   });
