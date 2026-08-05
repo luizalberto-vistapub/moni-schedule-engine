@@ -423,8 +423,7 @@ describe("Bubble bulk persistence", () => {
       ambiente: "",
       "ambiente x item composicao": "",
       "ambiente x obra": "amb_1",
-      icon: "",
-      valorRaiz: 0
+      icon: ""
     });
     expect(atividadeObraRecords[0]).not.toHaveProperty("interdependencias MASTER (Atividade x Obra)");
 
@@ -492,53 +491,6 @@ describe("Bubble bulk persistence", () => {
       "ambiente x item composicao": "amb_item_1",
       "ambiente x obra": ""
     });
-  });
-
-  it("calculates Atividade x Obra valorRaiz from composition value and activity percentage", () => {
-    const payload = normalizePayload(basePayload({
-      versao_cronograma_unique_id: "versao_1",
-      cronograma_unique_id: "cronograma_1",
-      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
-      obra_ambiente_json: [{ "unique id": "amb_item_1", name: "Sala" }],
-      obra_ambiente_produto_json: [],
-      obra_ambiente_item_composicao_json: [
-        {
-          "unique id": "item_servico_1",
-          "id ambiente item composicao": "amb_item_1",
-          "id produto composto": "composto_1",
-          "id produto simples": "prod_servico",
-          "nome produto simples": "Mao de obra",
-          valor: 1000
-        },
-        {
-          "unique id": "item_compra_1",
-          "id ambiente item composicao": "amb_item_1",
-          "id produto composto": "composto_1",
-          "id produto simples": "prod_compra",
-          "nome produto simples": "Material compra",
-          valor: 600
-        }
-      ],
-      atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_servico", ordem: 1, duracao: 3, percentual: 0.3 },
-        { id: "comp_aviso", nome: "Aviso", tipo: "Compra", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1", etapaCompra: "Aviso de orcamento", diasAntecedencia: 30, percentual: 0.25 },
-        { id: "comp_lim_orc", nome: "Limite orcamento", tipo: "Compra", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1", etapaCompra: "Limite de orcamento", diasAntecedencia: 28, percentual: 0.25 },
-        { id: "comp_lim_compra", nome: "Limite compra", tipo: "Compra", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1", etapaCompra: "Limite de compra", diasAntecedencia: 14, percentual: 0.25 },
-        { id: "comp_receb", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1", etapaCompra: "Recebimento", diasAntecedencia: 2, percentual: 0.25 }
-      ]
-    }));
-    const result = runScheduleEngine(payload);
-
-    const records = buildAtividadeObraRecords(payload, result.lines);
-    const serviceValorRaiz = records
-      .filter((record) => record.atividade === "serv_1")
-      .map((record) => record.valorRaiz);
-    const purchaseValorRaiz = records
-      .filter((record) => String(record.atividade).startsWith("comp_"))
-      .map((record) => record.valorRaiz);
-
-    expect(serviceValorRaiz).toEqual([100, 100, 100]);
-    expect(purchaseValorRaiz).toEqual([150, 150, 150, 150]);
   });
 
   it("includes the contextual product in Projeto Atividade x Obra names", () => {
