@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { NormalizedSchedulePayload, ObraAmbientePayload, ObraPayload } from "../types/payload.types.js";
+import type { NormalizedSchedulePayload, ObraAmbientePayload, ObraAmbienteProdutoPayload, ObraPayload } from "../types/payload.types.js";
 import type { ScheduleLine } from "../types/schedule.types.js";
 
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
@@ -231,6 +231,89 @@ function atividadeObraNomeAtividade(line: ScheduleLine): string {
   return `${activityName}${separator}${productName}`;
 }
 
+function numberValue(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value !== "string") return 0;
+
+  const text = value.trim();
+  if (!text) return 0;
+
+  let normalized = text.replace(/\s/g, "").replace(/[^\d,.-]/g, "");
+  const lastComma = normalized.lastIndexOf(",");
+  const lastDot = normalized.lastIndexOf(".");
+  if (lastComma >= 0 && lastDot >= 0) {
+    normalized = lastComma > lastDot
+      ? normalized.replace(/\./g, "").replace(",", ".")
+      : normalized.replace(/,/g, "");
+  } else if (lastComma >= 0) {
+    normalized = normalized.replace(",", ".");
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function productRecordId(product: ObraAmbienteProdutoPayload): string | null {
+  return stringValue(recordValue(product, "id", "unique_id", "unique id"));
+}
+
+function productSimpleId(product: ObraAmbienteProdutoPayload): string | null {
+  return stringValue(recordValue(product, "produtoId", "produto", "id produto simples"));
+}
+
+function valorRaizLineKey(line: ScheduleLine): string {
+  return [
+    line.tipo,
+    line.atividadeId,
+    line.obraAmbienteProdutoId || "",
+    line.produtoId || ""
+  ].join("|");
+}
+
+function serviceCopyCounts(lines: ScheduleLine[]): Map<string, number> {
+  const copyCounts = new Map<string, number>();
+  for (const line of lines) {
+    if (line.tipo !== "Servi\u00e7o") continue;
+    const key = valorRaizLineKey(line);
+    copyCounts.set(key, (copyCounts.get(key) || 0) + 1);
+  }
+  return copyCounts;
+}
+
+function productValues(payload: NormalizedSchedulePayload): { byRecordId: Map<string, number>; byProductId: Map<string, number> } {
+  const byRecordId = new Map<string, number>();
+  const byProductId = new Map<string, number>();
+
+  for (const product of payload.obra_ambiente_produto_json) {
+    const valor = numberValue(recordValue(product, "valor"));
+    const recordId = productRecordId(product);
+    const productId = productSimpleId(product);
+    if (recordId) byRecordId.set(recordId, valor);
+    if (productId && !byProductId.has(productId)) byProductId.set(productId, valor);
+  }
+
+  return { byRecordId, byProductId };
+}
+
+function productValueForLine(line: ScheduleLine, values: { byRecordId: Map<string, number>; byProductId: Map<string, number> }): number {
+  const byRecordId = line.obraAmbienteProdutoId ? values.byRecordId.get(line.obraAmbienteProdutoId) : undefined;
+  if (byRecordId !== undefined) return byRecordId;
+  return line.produtoId ? values.byProductId.get(line.produtoId) ?? 0 : 0;
+}
+
+function roundValorRaiz(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function valorRaizForLine(line: ScheduleLine, values: { byRecordId: Map<string, number>; byProductId: Map<string, number> }, copyCounts: Map<string, number>): number {
+  const valorProduto = productValueForLine(line, values);
+  const percentual = numberValue(recordValue(line.raw, "percentual"));
+
+  if (line.tipo === "Compra") return roundValorRaiz(valorProduto * percentual);
+  if (line.tipo === "Servi\u00e7o") return roundValorRaiz(valorProduto * (percentual / (copyCounts.get(valorRaizLineKey(line)) || 1)));
+  return 0;
+}
+
 function eventType(event: Record<string, unknown>): string | null {
   const type = stringValue(recordValue(event, "type", "tipo"));
   return type ? normalizeEventType(type) : null;
@@ -421,6 +504,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
   if (!currentObraId || !versionId) return [];
 
   const previousFieldsByLine = previousAtividadeObraFields(payload);
+  const values = productValues(payload);
+  const copyCounts = serviceCopyCounts(lines);
 
   return lines.map((line) => {
     const ambiente = line.ambiente ? currentAmbientesByName.get(line.ambiente) : undefined;
@@ -449,7 +534,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
       "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
-      ...previousFields
+      ...previousFields,
+      valorRaiz: valorRaizForLine(line, values, copyCounts)
     };
   });
 }
