@@ -231,6 +231,11 @@ function atividadeObraNomeAtividade(line: ScheduleLine): string {
   return `${activityName}${separator}${productName}`;
 }
 
+function activityResponsibleFields(line: ScheduleLine): Record<string, unknown> {
+  const responsavel = stringValue(recordValue(line.raw, "responsavel", "respons\u00e1vel"));
+  return responsavel ? { responsavel } : {};
+}
+
 function numberValue(value: unknown): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (typeof value !== "string") return 0;
@@ -534,6 +539,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
       "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
+      ...activityResponsibleFields(line),
       ...previousFields,
       valorRaiz: valorRaizForLine(line, values, copyCounts)
     };

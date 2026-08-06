@@ -432,6 +432,19 @@ describe("Bubble bulk persistence", () => {
     expect(atividadeObraRecordsWithoutAmbienteId[0]["ambiente x obra"]).toBe("");
   });
 
+  it("sends activity responsible to Atividade x Obra bulk records", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, "responsável": "user_responsavel_1" }]
+    });
+
+    const [record] = buildAtividadeObraRecords(payload, lines);
+
+    expect(record).toMatchObject({
+      atividade: "serv_1",
+      responsavel: "user_responsavel_1"
+    });
+  });
+
   it("preserves hydrated Atividade x Obra fields from the previous schedule records", () => {
     const { payload, lines } = payloadWithOneLine({
       atividade_obra_json: [{
