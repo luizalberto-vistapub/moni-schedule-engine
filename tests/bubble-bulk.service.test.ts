@@ -445,6 +445,22 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("uses activity responsible when previous Atividade x Obra record has blank responsible", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, responsavel: "Loja Moní" }],
+      atividade_obra_json: [{
+        atividade: "serv_1",
+        indice_clone: 1,
+        id_atividade_obra_externo: "serv_1_2026-05-04_1",
+        responsavel: ""
+      }]
+    });
+
+    const [record] = buildAtividadeObraRecords(payload, lines);
+
+    expect(record.responsavel).toBe("Loja Moní");
+  });
+
   it("preserves hydrated Atividade x Obra fields from the previous schedule records", () => {
     const { payload, lines } = payloadWithOneLine({
       atividade_obra_json: [{

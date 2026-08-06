@@ -539,8 +539,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
       "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
-      ...activityResponsibleFields(line),
       ...previousFields,
+      ...activityResponsibleFields(line),
       valorRaiz: valorRaizForLine(line, values, copyCounts)
     };
   });
