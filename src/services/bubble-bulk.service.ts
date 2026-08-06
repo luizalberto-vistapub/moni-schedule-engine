@@ -726,6 +726,36 @@ async function patchAtividadeObraDependencies(patches: { id: string; fields: Rec
   }
 }
 
+function logPurchaseAtividadeObraBulk(payload: NormalizedSchedulePayload, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): void {
+  const purchases = records.filter((record) => record.tipo === "Compra");
+  if (!purchases.length) return;
+
+  const zeroValorRaiz = purchases.filter((record) => Number(record.valorRaiz || 0) === 0);
+
+  console.log("MONI_DEBUG_ATIVIDADE_COMPRA_BULK", JSON.stringify({
+    requestId: options.requestId,
+    cronograma: payload.cronograma_unique_id,
+    versaoCronograma: versaoCronogramaId(payload),
+    bubbleApiVersion: config.version,
+    atividadeObraType: config.atividadeObraType,
+    totalAtividadeObraRecords: records.length,
+    totalCompras: purchases.length,
+    comprasComValorRaizZero: zeroValorRaiz.length,
+    comprasComValorRaizNaoZero: purchases.length - zeroValorRaiz.length,
+    compras: purchases.map((record) => ({
+      atividade: record.atividade,
+      id_atividade_obra_externo: record.id_atividade_obra_externo,
+      nomeAtividade: record.nomeAtividade,
+      nomeProduto: record.nomeProduto,
+      produtoRaiz: record["Produto (raiz)"],
+      ambienteItemComposicao: record["ambiente x item composicao"],
+      tipo: record.tipo,
+      valorRaiz: record.valorRaiz,
+      hasValorRaizField: Object.prototype.hasOwnProperty.call(record, "valorRaiz")
+    }))
+  }));
+}
+
 export async function persistScheduleBulks(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
   const requestedBubbleApiVersion = bubbleApiVersion(payload);
   const requestedVersaoCronogramaId = versaoCronogramaId(payload);
@@ -775,6 +805,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
+  logPurchaseAtividadeObraBulk(payload, atividadeObraRecords, config, options);
   const persistedAtividadeObraRecords = await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);
