@@ -40,6 +40,15 @@ interface PersistedBulkRecord {
   bubbleId: string | null;
 }
 
+interface BubbleListResponse {
+  response?: {
+    cursor?: number;
+    count?: number;
+    remaining?: number;
+    results?: Record<string, unknown>[];
+  };
+}
+
 interface BubbleFieldDiagnostic {
   field: string;
   receivedValue: unknown;
@@ -473,6 +482,91 @@ function omitAmbienteXObra(records: Record<string, unknown>[]): Record<string, u
   });
 }
 
+function atividadeObraLookupUrl(config: BubbleBulkConfig, versionId: string, cursor: number): string {
+  const constraints = encodeURIComponent(JSON.stringify([
+    { key: "versaoCronograma", constraint_type: "equals", value: versionId }
+  ]));
+  return `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}?constraints=${constraints}&limit=100&cursor=${cursor}`;
+}
+
+async function findExistingAtividadeObraIds(
+  versionId: string,
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions
+): Promise<Map<string, string>> {
+  const existingIds = new Map<string, string>();
+  let cursor = 0;
+
+  for (;;) {
+    const url = atividadeObraLookupUrl(config, versionId, cursor);
+
+    options.log?.info({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      cursor
+    }, "atividade obra idempotency lookup started");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`
+      }
+    });
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      options.log?.error({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        statusCode: response.status,
+        responseText
+      }, "atividade obra idempotency lookup failed");
+      throw new BubbleBulkRequestError(`Bubble atividade obra lookup failed with ${response.status}: ${responseText}`);
+    }
+
+    let parsed: BubbleListResponse;
+    try {
+      parsed = responseText.trim() ? JSON.parse(responseText) as BubbleListResponse : {};
+    } catch {
+      throw new BubbleBulkRequestError(`Bubble atividade obra lookup returned invalid JSON: ${responseText}`);
+    }
+
+    const results = Array.isArray(parsed.response?.results) ? parsed.response.results : [];
+    for (const result of results) {
+      const externalId = stringValue(recordValue(result, "id_atividade_obra_externo"));
+      const id = bubbleId(result);
+      if (!externalId || !id) continue;
+      if (existingIds.has(externalId)) {
+        options.log?.warn({
+          requestId: options.requestId,
+          typeName: config.atividadeObraType,
+          externalId,
+          keptId: existingIds.get(externalId),
+          duplicateId: id
+        }, "duplicate atividade obra external id found during lookup");
+        continue;
+      }
+      existingIds.set(externalId, id);
+    }
+
+    const remaining = Number(parsed.response?.remaining || 0);
+    const count = Number(parsed.response?.count || results.length);
+    const currentCursor = Number(parsed.response?.cursor || cursor);
+    if (!Number.isFinite(remaining) || remaining <= 0 || !Number.isFinite(count) || count <= 0) break;
+    cursor = currentCursor + count;
+  }
+
+  options.log?.info({
+    requestId: options.requestId,
+    typeName: config.atividadeObraType,
+    existingRecordsCount: existingIds.size
+  }, "atividade obra idempotency lookup completed");
+
+  return existingIds;
+}
+
 export function buildCronogramaLinhaRecords(payload: NormalizedSchedulePayload, lines: ScheduleLine[]): Record<string, unknown>[] {
   const versionId = versaoCronogramaId(payload);
   const currentObraId = obraId(payload);
@@ -690,6 +784,127 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
   return persistedRecords;
 }
 
+async function patchExistingAtividadeObraRecords(
+  updates: { id: string; record: Record<string, unknown> }[],
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions
+): Promise<PersistedBulkRecord[]> {
+  const persistedRecords: PersistedBulkRecord[] = [];
+
+  for (const [index, update] of updates.entries()) {
+    const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}/${encodeURIComponent(update.id)}`;
+
+    options.log?.info({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      patchIndex: index
+    }, "atividade obra idempotent patch started");
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(update.record)
+    });
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      if (isMissingAmbienteXObraReference(responseText) && update.record["ambiente x obra"]) {
+        const retryRecord = omitAmbienteXObra([update.record])[0]!;
+        const retryResponse = await fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(retryRecord)
+        });
+        const retryResponseText = await retryResponse.text();
+        if (retryResponse.ok) {
+          persistedRecords.push({ record: update.record, bubbleId: update.id });
+          options.log?.info({
+            requestId: options.requestId,
+            typeName: config.atividadeObraType,
+            url,
+            patchIndex: index
+          }, "atividade obra idempotent patch persisted without ambiente x obra reference");
+          continue;
+        }
+
+        options.log?.error({
+          requestId: options.requestId,
+          typeName: config.atividadeObraType,
+          url,
+          patchIndex: index,
+          statusCode: retryResponse.status,
+          responseText: retryResponseText
+        }, "atividade obra idempotent patch failed");
+        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponseText}`);
+      }
+
+      options.log?.error({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        patchIndex: index,
+        statusCode: response.status,
+        responseText
+      }, "atividade obra idempotent patch failed");
+      throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${response.status}: ${responseText}`);
+    }
+
+    persistedRecords.push({ record: update.record, bubbleId: update.id });
+    options.log?.info({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      patchIndex: index
+    }, "atividade obra idempotent patch persisted");
+  }
+
+  return persistedRecords;
+}
+
+async function upsertAtividadeObraRecords(
+  records: Record<string, unknown>[],
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions
+): Promise<PersistedBulkRecord[]> {
+  const versionId = stringValue(recordValue(records[0], "versaoCronograma"));
+  if (!versionId) return postBulk(config.atividadeObraType, records, config, options);
+
+  const existingIds = await findExistingAtividadeObraIds(versionId, config, options);
+  const updates: { id: string; record: Record<string, unknown> }[] = [];
+  const creates: Record<string, unknown>[] = [];
+
+  for (const record of records) {
+    const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
+    const existingId = externalId ? existingIds.get(externalId) : null;
+    if (existingId) {
+      updates.push({ id: existingId, record });
+    } else {
+      creates.push(record);
+    }
+  }
+
+  const updatedRecords = await patchExistingAtividadeObraRecords(updates, config, options);
+  const createdRecords = await postBulk(config.atividadeObraType, creates, config, options);
+  const persistedByExternalId = new Map<string, PersistedBulkRecord>();
+
+  for (const persisted of [...updatedRecords, ...createdRecords]) {
+    const externalId = stringValue(recordValue(persisted.record, "id_atividade_obra_externo"));
+    if (externalId) persistedByExternalId.set(externalId, persisted);
+  }
+
+  return records.map((record) => {
+    const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
+    return externalId ? persistedByExternalId.get(externalId) || { record, bubbleId: null } : { record, bubbleId: null };
+  });
+}
+
 async function patchAtividadeObraDependencies(patches: { id: string; fields: Record<string, unknown> }[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
   for (const [index, patch] of patches.entries()) {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}/${encodeURIComponent(patch.id)}`;
@@ -781,7 +996,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
-  const persistedAtividadeObraRecords = await postBulk(config.atividadeObraType, atividadeObraRecords, config, options);
+  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, config, options);
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);
   }

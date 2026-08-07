@@ -169,7 +169,13 @@ describe("schedule controllers", () => {
 
   it("preserves previous atividade obra dates before from date paralysis", async () => {
     let fetchCallIndex = 0;
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
       const currentCall = fetchCallIndex;
       fetchCallIndex += 1;
       return {
@@ -619,6 +625,12 @@ describe("schedule controllers", () => {
   it("recalculates future purchase chain lines and dependent services from the request event date", async () => {
     let fetchCallIndex = 0;
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
       const currentCall = fetchCallIndex;
       fetchCallIndex += 1;
       const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
