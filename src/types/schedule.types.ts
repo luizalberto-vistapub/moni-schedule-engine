@@ -7,10 +7,12 @@ export interface ScheduleLine {
   atividadeTipo: NormalizedActivityType;
   atividadeServicoAncoraId: string | null;
   atividadeServicoAncoraNome: string | null;
+  atividadeServicoAncoraExternoId: string | null;
   obraAmbienteProdutoId: string | null;
   produtoId: string | null;
   ambienteId: string | null;
   ambienteItemComposicaoId: string | null;
+  external_index: number;
   data_programada: string;
   codigo_d: string;
   dia_semana: string;
@@ -22,6 +24,7 @@ export interface ScheduleLine {
   ambiente: string | null;
   produto: string | null;
   ordem: number;
+  ordemCronograma: number;
   clone_index: number;
   anchor_service_name: string | null;
   interdependenciasMasterIds: string[];

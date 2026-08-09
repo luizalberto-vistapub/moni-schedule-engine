@@ -9,10 +9,30 @@ import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 describe("schedule controllers", () => {
   beforeEach(() => {
     process.env.BUBBLE_API_TOKEN = "test_token";
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      text: async () => ""
-    })));
+    let idIndex = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
+      if (init?.method === "PATCH") {
+        return {
+          ok: true,
+          status: 204,
+          text: async (): Promise<string> => ""
+        };
+      }
+
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map(() => JSON.stringify({ id: `bubble_${idIndex += 1}` })).join("\n")
+      };
+    }));
   });
 
   afterEach(() => {
@@ -216,15 +236,15 @@ describe("schedule controllers", () => {
       "2026-08-14T12:00:00.000Z"
     ]);
     expect(records.find((record) => record.nomeAtividade === "Servico 1")).toMatchObject({
-      id_atividade_obra_externo: "serv_1_2026-08-10_1",
+      id_atividade_obra_externo: "serv_1|amb_1|1",
       dataInicioPrevista: "2026-08-10T12:00:00.000Z"
     });
 
     expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({
-      id_atividade_obra_externo: "serv_2_2026-08-13_1"
+      id_atividade_obra_externo: "serv_2|amb_1|1"
     });
     expect(records.find((record) => record.atividade === "serv_3")).toMatchObject({
-      id_atividade_obra_externo: "serv_3_2026-08-14_1"
+      id_atividade_obra_externo: "serv_3|amb_1|1"
     });
   });
 
@@ -318,11 +338,11 @@ describe("schedule controllers", () => {
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     const datesByExternalId = new Map(records.map((record) => [record.id_atividade_obra_externo, record.dataInicioPrevista]));
-    expect(datesByExternalId.get("serv_1_2026-05-04_1")).toBe("2026-05-04T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_2_2026-05-05_1")).toBe("2026-05-05T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_2_2026-05-10_2")).toBe("2026-05-10T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_3_2026-05-11_1")).toBe("2026-05-11T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_4_2026-05-08_1")).toBe("2026-05-08T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_1|amb_1|1")).toBe("2026-05-04T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2|amb_1|1")).toBe("2026-05-05T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-10T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_4|amb_1|1")).toBe("2026-05-08T12:00:00.000Z");
   });
 
   it("changes selected purchase date and cascades to its anchor service dependents without event date cutoff", async () => {
@@ -518,8 +538,8 @@ describe("schedule controllers", () => {
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.map((record) => record.id_atividade_obra_externo)).toEqual([
-      "serv_1_2026-08-10_1",
-      "serv_1_2026-08-10_2"
+      "serv_1|amb_1|1",
+      "serv_1|amb_1|2"
     ]);
   });
 
@@ -552,11 +572,11 @@ describe("schedule controllers", () => {
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records).toEqual([
       expect.objectContaining({
-        id_atividade_obra_externo: "serv_2_2026-08-08_1",
+        id_atividade_obra_externo: "serv_2|amb_1|1",
         dataInicioPrevista: "2026-08-08T12:00:00.000Z"
       }),
       expect.objectContaining({
-        id_atividade_obra_externo: "serv_1_2026-08-09_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
         dataInicioPrevista: "2026-08-09T12:00:00.000Z"
       })
     ]);
@@ -588,7 +608,7 @@ describe("schedule controllers", () => {
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1|"))).toMatchObject({
       dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
   });
@@ -617,7 +637,7 @@ describe("schedule controllers", () => {
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1|"))).toMatchObject({
       dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
   });
@@ -793,10 +813,10 @@ describe("schedule controllers", () => {
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1_"))).toMatchObject({
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_1|"))).toMatchObject({
       dataInicioPrevista: "2026-08-11T12:00:00.000Z"
     });
-    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_2_"))).toMatchObject({
+    expect(records.find((record) => record.id_atividade_obra_externo.startsWith("compra_2|"))).toMatchObject({
       dataInicioPrevista: "2026-08-12T12:00:00.000Z"
     });
 

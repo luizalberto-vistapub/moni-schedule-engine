@@ -160,10 +160,19 @@ function mergeDirectProjectWithReference(directProject: NormalizedActivity, link
 
 function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload): ObraAmbienteProdutoPayload {
   const id = optionalString(product.id) || optionalString(product.unique_id) || optionalString(product["unique id"]);
-  const ambienteId = optionalString(product.ambienteId)
-    || optionalString(product.obraAmbienteId)
+  const ambienteXObraId = optionalString(product.ambienteXobraId)
+    || optionalString(product.ambienteXObraId)
+    || optionalString(product["id ambiente x obra"])
     || optionalString(product["ambiente x obra"])
+    || optionalString(product.obraAmbienteId)
+    || optionalString(product.ambienteId)
     || optionalString(product["id ambiente item composicao"]);
+  const ambienteItemComposicaoId = optionalString(product.ambienteItemComposicaoId)
+    || optionalString(product["ambiente x item composicao"])
+    || optionalString(product["id ambiente item composicao"]);
+  const ambienteId = ambienteXObraId
+    || optionalString(product.obraAmbienteId)
+    || optionalString(product.ambienteId);
   const produtoId = optionalString(product.produtoId) || optionalString(product.produto) || optionalString(product["id produto simples"]);
   const produtoNome = optionalString(product.produtoNome) || optionalString(product["nome produto"]) || optionalString(product["nome produto simples"]);
 
@@ -173,6 +182,9 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
     unique_id: optionalString(product.unique_id) || optionalString(product["unique id"]),
     ambienteId,
     obraAmbienteId: ambienteId,
+    ambienteItemComposicaoId,
+    "ambiente x obra": ambienteId,
+    "ambiente x item composicao": ambienteItemComposicaoId,
     produtoId,
     produto: produtoId,
     produtoNome,
@@ -182,7 +194,8 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
 
 export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
   const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
-  const obraAmbienteProdutos = payload.obra_ambiente_produto_json.length
+  const obraAmbienteProdutoJson = payload.obra_ambiente_produto_json || [];
+  const obraAmbienteProdutos = obraAmbienteProdutoJson.length
     ? payload.obra_ambiente_produto_json
     : compositionProducts.map(normalizeCompositionProduct);
   const activities = payload.atividades_json.map(normalizeActivity);

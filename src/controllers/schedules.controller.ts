@@ -8,7 +8,6 @@ import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/r
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
-import { stableLineId } from "../utils/ids.js";
 import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 
 const RECALCULATE_EVENT_TYPES = new Set([
@@ -174,8 +173,8 @@ function recalculatedStartDate(event: Record<string, unknown>): string {
 function activityStartEventActivityId(event: Record<string, unknown>): string {
   const activityId = stringValue(field(event, "atividade_id", "activity_id", "atividade"));
   if (activityId) return activityId;
-  return stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"))
-    .replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "");
+  const external = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  return externalActivityParts(external)?.activityId || external.replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "");
 }
 
 function isActivityDateChangeEvent(type: string): boolean {
@@ -291,6 +290,13 @@ function recordDateOnly(record: Record<string, unknown>): string {
 }
 
 function externalActivityParts(externalId: string): { activityId: string; cloneIndex: number } | null {
+  const current = externalId.match(/^(.*)\|[^|]*\|(\d+)$/);
+  if (current) {
+    return {
+      activityId: current[1],
+      cloneIndex: Number(current[2])
+    };
+  }
   const match = externalId.match(/^(.*)_\d{4}-\d{2}-\d{2}_(\d+)$/);
   if (!match) return null;
   return {
@@ -375,7 +381,6 @@ function withLineDate(line: ScheduleLine, date: string, payload: SchedulePayload
   const startDate = obraStartDate(payload)!;
   return {
     ...line,
-    atividade_obra_id_externo: stableLineId(line.atividadeId, date, line.clone_index),
     data_programada: date,
     codigo_d: formatCodigoD(differenceInCalendarDays(startDate, parsedDate) + 1),
     dia_semana: weekdayName(parsedDate)

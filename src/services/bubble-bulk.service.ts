@@ -9,6 +9,7 @@ const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
+const ATIVIDADE_OBRA_MASTER_FIELD = "Atividade x Obra Master";
 const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "responsavel",
   "responsavelFranqueado",
@@ -17,7 +18,13 @@ const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "status",
   "statusCompra",
   "statusProjeto",
-  "statusOcorrencia"
+  "statusOcorrencia",
+  "dataInicioExecucao",
+  "dataExecucao",
+  "dataExecu\u00e7\u00e3o",
+  "dataAprovacao",
+  "dataReprovacao",
+  "observacao"
 ] as const;
 
 interface BubbleBulkConfig {
@@ -38,6 +45,11 @@ interface PersistScheduleOptions {
 interface PersistedBulkRecord {
   record: Record<string, unknown>;
   bubbleId: string | null;
+}
+
+interface AtividadeObraPatch {
+  id: string;
+  fields: Record<string, unknown>;
 }
 
 interface BubbleListResponse {
@@ -113,6 +125,13 @@ function rawRecordValue(record: Record<string, unknown> | undefined, ...keys: st
 }
 
 function externalActivityParts(externalId: string): { activityId: string; cloneIndex: number } | null {
+  const current = externalId.match(/^(.*)\|[^|]*\|(\d+)$/);
+  if (current) {
+    return {
+      activityId: current[1]!,
+      cloneIndex: Number(current[2])
+    };
+  }
   const match = externalId.match(/^(.*)_\d{4}-\d{2}-\d{2}_(\d+)$/);
   if (!match) return null;
   return {
@@ -140,6 +159,10 @@ function activityLineKey(activityId: string, cloneIndex: number): string {
   return `${activityId}:${cloneIndex}`;
 }
 
+function activityLineEquivalentKey(line: ScheduleLine): string {
+  return `${line.atividadeId}:${line.ambienteId || ""}:${line.external_index}`;
+}
+
 function previousAtividadeObraFields(payload: NormalizedSchedulePayload): Map<string, Record<string, unknown>> {
   const fieldsByLine = new Map<string, Record<string, unknown>>();
 
@@ -153,7 +176,11 @@ function previousAtividadeObraFields(payload: NormalizedSchedulePayload): Map<st
       if (value !== undefined) fields[fieldName] = value;
     }
 
-    if (Object.keys(fields).length) fieldsByLine.set(activityLineKey(activityId, activityRecordCloneIndex(record)), fields);
+    if (Object.keys(fields).length) {
+      const equivalentKey = atividadeObraEquivalentKey(record);
+      if (equivalentKey) fieldsByLine.set(equivalentKey, fields);
+      fieldsByLine.set(activityLineKey(activityId, activityRecordCloneIndex(record)), fields);
+    }
   }
 
   return fieldsByLine;
@@ -381,7 +408,9 @@ function eventDays(event: Record<string, unknown>): number | null {
 function eventActivityId(event: Record<string, unknown>): string | null {
   const activityId = stringValue(recordValue(event, "atividade_id", "activity_id", "atividade"));
   if (activityId) return activityId;
-  return stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"))?.replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "") || null;
+  const external = stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  if (!external) return null;
+  return externalActivityParts(external)?.activityId || external.replace(/_\d{4}-\d{2}-\d{2}_\d+$/, "") || null;
 }
 
 function activeEventKey(event: Record<string, unknown>, index: number): string {
@@ -567,6 +596,77 @@ async function findExistingAtividadeObraIds(
   return existingIds;
 }
 
+function atividadeObraAmbienteXObraId(record: Record<string, unknown>): string {
+  return stringValue(recordValue(record, "ambiente x obra", "ambienteXobraId", "ambienteXObraId", "ambienteId", "obraAmbienteId")) || "";
+}
+
+function atividadeObraEquivalentKey(record: Record<string, unknown>): string | null {
+  const activityId = activityRecordId(record);
+  if (!activityId) return null;
+  return `${activityId}:${atividadeObraAmbienteXObraId(record)}:${activityRecordCloneIndex(record)}`;
+}
+
+function atividadeObraLooseEquivalentKey(record: Record<string, unknown>): string | null {
+  const activityId = activityRecordId(record);
+  if (!activityId) return null;
+  return `${activityId}:${activityRecordCloneIndex(record)}`;
+}
+
+function addUniqueMapEntry(map: Map<string, string | null>, key: string | null, id: string): void {
+  if (!key) return;
+  if (map.has(key)) {
+    map.set(key, null);
+    return;
+  }
+  map.set(key, id);
+}
+
+function previousAtividadeObraIds(payload: NormalizedSchedulePayload, records: Record<string, unknown>[]): Map<string, string> {
+  const idsByExternalId = new Map<string, string>();
+  const idsByEquivalentKey = new Map<string, string | null>();
+  const idsByLooseEquivalentKey = new Map<string, string | null>();
+  const currentLooseCounts = new Map<string, number>();
+
+  for (const record of records) {
+    const looseKey = atividadeObraLooseEquivalentKey(record);
+    if (looseKey) currentLooseCounts.set(looseKey, (currentLooseCounts.get(looseKey) || 0) + 1);
+  }
+
+  for (const previous of payload.atividade_obra_json) {
+    const id = bubbleId(previous);
+    if (!id) continue;
+    const externalId = stringValue(recordValue(previous, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+    if (externalId) idsByExternalId.set(externalId, id);
+    addUniqueMapEntry(idsByEquivalentKey, atividadeObraEquivalentKey(previous), id);
+    addUniqueMapEntry(idsByLooseEquivalentKey, atividadeObraLooseEquivalentKey(previous), id);
+  }
+
+  const previousIds = new Map<string, string>();
+  for (const record of records) {
+    const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
+    if (!externalId) continue;
+
+    const byExternalId = idsByExternalId.get(externalId);
+    if (byExternalId) {
+      previousIds.set(externalId, byExternalId);
+      continue;
+    }
+
+    const equivalentKey = atividadeObraEquivalentKey(record);
+    const equivalentId = equivalentKey ? idsByEquivalentKey.get(equivalentKey) : null;
+    if (equivalentId) {
+      previousIds.set(externalId, equivalentId);
+      continue;
+    }
+
+    const looseKey = atividadeObraLooseEquivalentKey(record);
+    const looseId = looseKey ? idsByLooseEquivalentKey.get(looseKey) : null;
+    if (looseKey && currentLooseCounts.get(looseKey) === 1 && looseId) previousIds.set(externalId, looseId);
+  }
+
+  return previousIds;
+}
+
 export function buildCronogramaLinhaRecords(payload: NormalizedSchedulePayload, lines: ScheduleLine[]): Record<string, unknown>[] {
   const versionId = versaoCronogramaId(payload);
   const currentObraId = obraId(payload);
@@ -590,6 +690,7 @@ export function buildCronogramaLinhaRecords(payload: NormalizedSchedulePayload, 
     ordem: line.ordem,
     indice_clone: line.clone_index,
     nome_servico_ancora: line.anchor_service_name || "",
+    id_atividade_obra_externo_servico_ancora: line.atividadeServicoAncoraExternoId || "",
     dados_brutos_json: JSON.stringify(line)
   }));
 }
@@ -608,7 +709,9 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
 
   return lines.map((line) => {
     const ambiente = line.ambiente ? currentAmbientesByName.get(line.ambiente) : undefined;
-    const previousFields = previousFieldsByLine.get(activityLineKey(line.atividadeId, line.clone_index)) || {};
+    const previousFields = previousFieldsByLine.get(activityLineEquivalentKey(line))
+      || previousFieldsByLine.get(activityLineKey(line.atividadeId, line.clone_index))
+      || {};
 
     return {
       copyDuracao: line.clone_index > 1,
@@ -625,14 +728,16 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "Produto (raiz)": line.produtoId || "",
       obra: currentObraId,
       ordemRaiz: line.ordem,
+      ordemCronograma: line.ordemCronograma,
       peso: line.peso,
       status: "Não iniciada",
       tipo: line.tipo,
       versaoCronograma: versionId,
       ambiente: line.ambiente || "",
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
-      "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
+      "ambiente x obra": line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
+      master: false,
       ...previousFields,
       ...activityResponsibleFields(line),
       valorRaiz: valorRaizForLine(line, values, copyCounts)
@@ -667,12 +772,18 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
   });
 }
 
-function buildAtividadeObraDependencyPatches(lines: ScheduleLine[], persistedRecords: PersistedBulkRecord[]): { id: string; fields: Record<string, unknown> }[] {
+function persistedIdByExternalId(persistedRecords: PersistedBulkRecord[]): Map<string, string> {
   const bubbleIdByExternalId = new Map<string, string>();
   for (const persisted of persistedRecords) {
     const externalId = stringValue(persisted.record.id_atividade_obra_externo);
     if (externalId && persisted.bubbleId) bubbleIdByExternalId.set(externalId, persisted.bubbleId);
   }
+
+  return bubbleIdByExternalId;
+}
+
+function buildAtividadeObraDependencyPatches(lines: ScheduleLine[], persistedRecords: PersistedBulkRecord[]): AtividadeObraPatch[] {
+  const bubbleIdByExternalId = persistedIdByExternalId(persistedRecords);
 
   return lines
     .filter((line) => line.interdependenciasMasterIds.length)
@@ -691,6 +802,125 @@ function buildAtividadeObraDependencyPatches(lines: ScheduleLine[], persistedRec
         }
       };
     });
+}
+
+function explicitAtividadeMasterCatalogId(line: ScheduleLine): string | null {
+  const explicitMaster = stringValue(recordValue(line.raw, "atividadeMaster"));
+  return explicitMaster || null;
+}
+
+function catalogDependencyIds(line: ScheduleLine): string[] {
+  const rawDependencies = recordValue(line.raw, "interdependenciasMasterIds");
+  if (!Array.isArray(rawDependencies)) return [];
+  return rawDependencies.map((dependency) => stringValue(dependency)).filter((dependency): dependency is string => Boolean(dependency));
+}
+
+function catalogDependencyRoot(
+  activityId: string,
+  dependenciesByActivityId: Map<string, string[]>,
+  explicitMasterByActivityId: Map<string, string>,
+  visiting = new Set<string>()
+): string {
+  const explicit = explicitMasterByActivityId.get(activityId);
+  if (explicit) return explicit;
+  if (visiting.has(activityId)) return activityId;
+
+  const dependencies = [...(dependenciesByActivityId.get(activityId) || [])].sort();
+  if (!dependencies.length) return activityId;
+
+  visiting.add(activityId);
+  const root = catalogDependencyRoot(dependencies[0]!, dependenciesByActivityId, explicitMasterByActivityId, visiting);
+  visiting.delete(activityId);
+  return root;
+}
+
+function sameLineContext(a: ScheduleLine, b: ScheduleLine, options: { sameProduct?: boolean } = {}): boolean {
+  return (a.ambienteId || "") === (b.ambienteId || "")
+    && (!options.sameProduct || (a.produtoId || "") === (b.produtoId || ""));
+}
+
+function firstMasterCandidate(lines: ScheduleLine[]): ScheduleLine | undefined {
+  return [...lines].sort(compareMasterCandidates)[0];
+}
+
+function compareMasterCandidates(a: ScheduleLine, b: ScheduleLine): number {
+  return a.ordemCronograma - b.ordemCronograma
+    || a.clone_index - b.clone_index
+    || a.data_programada.localeCompare(b.data_programada)
+    || a.atividadeId.localeCompare(b.atividadeId);
+}
+
+function atividadeObraMasterExternalId(
+  line: ScheduleLine,
+  lines: ScheduleLine[],
+  dependenciesByActivityId: Map<string, string[]>,
+  explicitMasterByActivityId: Map<string, string>
+): string {
+  if ((line.tipo === "Compra" || line.tipo === "Projeto") && line.atividadeServicoAncoraExternoId) {
+    return line.atividadeServicoAncoraExternoId;
+  }
+
+  if ((line.tipo === "Compra" || line.tipo === "Projeto") && line.atividadeServicoAncoraId) {
+    const anchor = firstMasterCandidate(lines.filter((candidate) => (
+      candidate.atividadeId === line.atividadeServicoAncoraId
+      && sameLineContext(candidate, line)
+    )));
+    if (anchor) return anchor.atividade_obra_id_externo;
+  }
+
+  const targetActivityId = line.tipo === "Serviço"
+    ? catalogDependencyRoot(line.atividadeId, dependenciesByActivityId, explicitMasterByActivityId)
+    : explicitAtividadeMasterCatalogId(line) || line.atividadeId;
+
+  const target = firstMasterCandidate(lines.filter((candidate) => (
+    candidate.atividadeId === targetActivityId
+    && sameLineContext(candidate, line, { sameProduct: line.tipo === "Serviço" })
+  )));
+
+  return (target || firstMasterCandidate(lines.filter((candidate) => (
+    candidate.atividadeId === line.atividadeId
+    && sameLineContext(candidate, line, { sameProduct: true })
+  ))) || line).atividade_obra_id_externo;
+}
+
+function buildAtividadeObraMasterPatches(lines: ScheduleLine[], persistedRecords: PersistedBulkRecord[]): AtividadeObraPatch[] {
+  const bubbleIdByExternalId = persistedIdByExternalId(persistedRecords);
+  const dependenciesByActivityId = new Map<string, string[]>();
+  const explicitMasterByActivityId = new Map<string, string>();
+  for (const line of lines) {
+    if (!dependenciesByActivityId.has(line.atividadeId)) dependenciesByActivityId.set(line.atividadeId, catalogDependencyIds(line));
+    const explicitMaster = explicitAtividadeMasterCatalogId(line);
+    if (explicitMaster) explicitMasterByActivityId.set(line.atividadeId, explicitMaster);
+  }
+
+  return lines.map((line) => {
+    const ownBubbleId = bubbleIdByExternalId.get(line.atividade_obra_id_externo);
+    const masterExternalId = atividadeObraMasterExternalId(line, lines, dependenciesByActivityId, explicitMasterByActivityId);
+    const masterBubbleId = masterExternalId ? bubbleIdByExternalId.get(masterExternalId) : undefined;
+    if (!ownBubbleId || !masterBubbleId) {
+      throw new BubbleBulkRequestError(`Could not resolve Bubble atividade x obra master ids for ${line.atividade_obra_id_externo}`);
+    }
+
+    return {
+      id: ownBubbleId,
+      fields: {
+        [ATIVIDADE_OBRA_MASTER_FIELD]: masterBubbleId,
+        master: line.atividade_obra_id_externo === masterExternalId
+      }
+    };
+  });
+}
+
+function mergeAtividadeObraPatches(patches: AtividadeObraPatch[]): AtividadeObraPatch[] {
+  const fieldsById = new Map<string, Record<string, unknown>>();
+  for (const patch of patches) {
+    fieldsById.set(patch.id, {
+      ...(fieldsById.get(patch.id) || {}),
+      ...patch.fields
+    });
+  }
+
+  return [...fieldsById.entries()].map(([id, fields]) => ({ id, fields }));
 }
 
 async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
@@ -870,6 +1100,7 @@ async function patchExistingAtividadeObraRecords(
 
 async function upsertAtividadeObraRecords(
   records: Record<string, unknown>[],
+  payload: NormalizedSchedulePayload,
   config: BubbleBulkConfig,
   options: PersistScheduleOptions
 ): Promise<PersistedBulkRecord[]> {
@@ -877,6 +1108,9 @@ async function upsertAtividadeObraRecords(
   if (!versionId) return postBulk(config.atividadeObraType, records, config, options);
 
   const existingIds = await findExistingAtividadeObraIds(versionId, config, options);
+  for (const [externalId, id] of previousAtividadeObraIds(payload, records)) {
+    if (!existingIds.has(externalId)) existingIds.set(externalId, id);
+  }
   const updates: { id: string; record: Record<string, unknown> }[] = [];
   const creates: Record<string, unknown>[] = [];
 
@@ -905,7 +1139,7 @@ async function upsertAtividadeObraRecords(
   });
 }
 
-async function patchAtividadeObraDependencies(patches: { id: string; fields: Record<string, unknown> }[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
+async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
   for (const [index, patch] of patches.entries()) {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}/${encodeURIComponent(patch.id)}`;
 
@@ -996,10 +1230,13 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
-  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, config, options);
+  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, payload, config, options);
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);
   }
-  const dependencyPatches = buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords);
-  await patchAtividadeObraDependencies(dependencyPatches, config, options);
+  const postPersistPatches = mergeAtividadeObraPatches([
+    ...buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords),
+    ...buildAtividadeObraMasterPatches(lines, persistedAtividadeObraRecords)
+  ]);
+  await patchAtividadeObraDependencies(postPersistPatches, config, options);
 }
