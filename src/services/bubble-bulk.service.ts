@@ -606,67 +606,6 @@ function atividadeObraEquivalentKey(record: Record<string, unknown>): string | n
   return `${activityId}:${atividadeObraAmbienteXObraId(record)}:${activityRecordCloneIndex(record)}`;
 }
 
-function atividadeObraLooseEquivalentKey(record: Record<string, unknown>): string | null {
-  const activityId = activityRecordId(record);
-  if (!activityId) return null;
-  return `${activityId}:${activityRecordCloneIndex(record)}`;
-}
-
-function addUniqueMapEntry(map: Map<string, string | null>, key: string | null, id: string): void {
-  if (!key) return;
-  if (map.has(key)) {
-    map.set(key, null);
-    return;
-  }
-  map.set(key, id);
-}
-
-function previousAtividadeObraIds(payload: NormalizedSchedulePayload, records: Record<string, unknown>[]): Map<string, string> {
-  const idsByExternalId = new Map<string, string>();
-  const idsByEquivalentKey = new Map<string, string | null>();
-  const idsByLooseEquivalentKey = new Map<string, string | null>();
-  const currentLooseCounts = new Map<string, number>();
-
-  for (const record of records) {
-    const looseKey = atividadeObraLooseEquivalentKey(record);
-    if (looseKey) currentLooseCounts.set(looseKey, (currentLooseCounts.get(looseKey) || 0) + 1);
-  }
-
-  for (const previous of payload.atividade_obra_json) {
-    const id = bubbleId(previous);
-    if (!id) continue;
-    const externalId = stringValue(recordValue(previous, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
-    if (externalId) idsByExternalId.set(externalId, id);
-    addUniqueMapEntry(idsByEquivalentKey, atividadeObraEquivalentKey(previous), id);
-    addUniqueMapEntry(idsByLooseEquivalentKey, atividadeObraLooseEquivalentKey(previous), id);
-  }
-
-  const previousIds = new Map<string, string>();
-  for (const record of records) {
-    const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
-    if (!externalId) continue;
-
-    const byExternalId = idsByExternalId.get(externalId);
-    if (byExternalId) {
-      previousIds.set(externalId, byExternalId);
-      continue;
-    }
-
-    const equivalentKey = atividadeObraEquivalentKey(record);
-    const equivalentId = equivalentKey ? idsByEquivalentKey.get(equivalentKey) : null;
-    if (equivalentId) {
-      previousIds.set(externalId, equivalentId);
-      continue;
-    }
-
-    const looseKey = atividadeObraLooseEquivalentKey(record);
-    const looseId = looseKey ? idsByLooseEquivalentKey.get(looseKey) : null;
-    if (looseKey && currentLooseCounts.get(looseKey) === 1 && looseId) previousIds.set(externalId, looseId);
-  }
-
-  return previousIds;
-}
-
 export function buildCronogramaLinhaRecords(payload: NormalizedSchedulePayload, lines: ScheduleLine[]): Record<string, unknown>[] {
   const versionId = versaoCronogramaId(payload);
   const currentObraId = obraId(payload);
@@ -1100,7 +1039,6 @@ async function patchExistingAtividadeObraRecords(
 
 async function upsertAtividadeObraRecords(
   records: Record<string, unknown>[],
-  payload: NormalizedSchedulePayload,
   config: BubbleBulkConfig,
   options: PersistScheduleOptions
 ): Promise<PersistedBulkRecord[]> {
@@ -1108,9 +1046,6 @@ async function upsertAtividadeObraRecords(
   if (!versionId) return postBulk(config.atividadeObraType, records, config, options);
 
   const existingIds = await findExistingAtividadeObraIds(versionId, config, options);
-  for (const [externalId, id] of previousAtividadeObraIds(payload, records)) {
-    if (!existingIds.has(externalId)) existingIds.set(externalId, id);
-  }
   const updates: { id: string; record: Record<string, unknown> }[] = [];
   const creates: Record<string, unknown>[] = [];
 
@@ -1230,7 +1165,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
-  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, payload, config, options);
+  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, config, options);
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);
   }

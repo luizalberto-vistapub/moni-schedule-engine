@@ -899,14 +899,14 @@ describe("Bubble bulk persistence", () => {
     }), "atividade obra dependency patch failed");
   });
 
-  it("patches previous Atividade x Obra records and preserves hydrated fields during recalculation", async () => {
+  it("creates new Atividade x Obra records during recalculation while preserving hydrated fields", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
       if (init?.method === "GET") return atividadeObraLookupResponse();
       if (init?.method === "PATCH") return { ok: true, status: 204, text: async () => "" };
       return {
         ok: true,
         status: 200,
-        text: async () => ""
+        text: async () => "{\"status\":\"success\",\"id\":\"created_axo_1\"}\n"
       };
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -926,10 +926,10 @@ describe("Bubble bulk persistence", () => {
 
     await persistScheduleBulks(payload, lines);
 
-    expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toBeUndefined();
-    const patchCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/previous_axo_1", "PATCH");
-    expect(patchCalls).toHaveLength(2);
-    expect(JSON.parse(String(patchCalls[0]![1]?.body))).toMatchObject({
+    const postCall = findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
+    expect(postCall).toBeDefined();
+    expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/previous_axo_1", "PATCH")).toBeUndefined();
+    expect(JSON.parse(String(postCall![1]?.body))).toMatchObject({
       id_atividade_obra_externo: "serv_1|amb_1|1",
       versaoCronograma: "versao_1",
       status: "Concluida",
@@ -937,10 +937,50 @@ describe("Bubble bulk persistence", () => {
       observacao: "Executada no cronograma anterior",
       responsavelFranqueado: "user_1"
     });
-    expect(JSON.parse(String(patchCalls[1]![1]?.body))).toMatchObject({
-      "Atividade x Obra Master": "previous_axo_1",
+    const createdPatchCall = findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/created_axo_1", "PATCH");
+    expect(JSON.parse(String(createdPatchCall?.[1]?.body))).toMatchObject({
+      "Atividade x Obra Master": "created_axo_1",
       master: true
     });
+  });
+
+  it("does not patch duplicated previous Atividade x Obra ids when recalculating a new version", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      if (init?.method === "GET") return atividadeObraLookupResponse();
+      if (init?.method === "PATCH") return { ok: true, status: 204, text: async () => "" };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => "{\"status\":\"success\",\"id\":\"created_axo_1\"}\n"
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const previousRecord = {
+      atividade: "serv_1",
+      "ambiente x obra": "amb_1",
+      indice_clone: 1,
+      id_atividade_obra_externo: "serv_1|amb_1|1",
+      status: "Nao iniciada"
+    };
+    const { payload, lines } = payloadWithOneLine({
+      atividade_obra_json: [
+        { ...previousRecord, "unique id": "previous_axo_1" },
+        { ...previousRecord, "unique id": "previous_axo_2" }
+      ]
+    });
+
+    await persistScheduleBulks(payload, lines);
+
+    const postedRows = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")
+      .flatMap((call) => String(call[1]?.body).split(/\r?\n/).filter(Boolean).map((row) => JSON.parse(row) as Record<string, unknown>));
+    expect(postedRows).toHaveLength(1);
+    expect(postedRows[0]).toMatchObject({
+      id_atividade_obra_externo: "serv_1|amb_1|1",
+      versaoCronograma: "versao_1",
+      status: "Nao iniciada"
+    });
+    expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/previous_axo_1", "PATCH")).toBeUndefined();
+    expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/previous_axo_2", "PATCH")).toBeUndefined();
   });
 
   it("maps legacy Atividade x Obra typename env to Bubble API typename", async () => {
