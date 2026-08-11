@@ -1516,4 +1516,29 @@ describe("schedule engine", () => {
       { atividadeId: "proj_shared", anchor: "serv_2", product: "prod_2" }
     ]);
   });
+
+  it("keeps atividade obra external ids stable when planned dates change", () => {
+    const payloadA = normalizePayload(basePayload({
+      obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+      obra_ambiente_produto_json: [
+        { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto 1", quantidade: 1 }
+      ],
+      atividades_json: [{ id: "serv_1", nome: "Servico 1", tipo: "Servico", produto: "prod_1", ordem: 1, duracao: 1 }]
+    }));
+    const payloadB = normalizePayload(basePayload({
+      obra_json: [{ id: "obra_1", dataInicio: "2026-05-11" }],
+      obra_ambiente_produto_json: [
+        { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto 1", quantidade: 1 }
+      ],
+      atividades_json: [{ id: "serv_1", nome: "Servico 1", tipo: "Servico", produto: "prod_1", ordem: 1, duracao: 1 }]
+    }));
+
+    const [lineA] = runScheduleEngine(payloadA).lines;
+    const [lineB] = runScheduleEngine(payloadB).lines;
+
+    expect(lineA!.atividade_obra_id_externo).toBe("serv_1|amb_1|1");
+    expect(lineB!.atividade_obra_id_externo).toBe("serv_1|amb_1|1");
+    expect(lineA!.data_programada).toBe("2026-05-04");
+    expect(lineB!.data_programada).toBe("2026-05-11");
+  });
 });

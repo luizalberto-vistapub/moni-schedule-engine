@@ -191,7 +191,8 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
 
 export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
   const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
-  const obraAmbienteProdutos = payload.obra_ambiente_produto_json.length
+  const obraAmbienteProdutoJson = payload.obra_ambiente_produto_json || [];
+  const obraAmbienteProdutos = obraAmbienteProdutoJson.length
     ? payload.obra_ambiente_produto_json
     : compositionProducts.map(normalizeCompositionProduct);
   const activities = payload.atividades_json.map(normalizeActivity);

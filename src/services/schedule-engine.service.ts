@@ -19,6 +19,7 @@ interface PlacementContext {
   serviceCloneDates: Map<string, Date[]>;
   servicesByCompositeId: Map<string, NormalizedActivity[]>;
   lines: ScheduleLine[];
+  lineExternalIndexCounters: Map<string, number>;
   teamWeightByDay: Map<string, number>;
   activityDays: Map<string, Set<string>>;
   warnings: string[];
@@ -157,19 +158,25 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
   const rawAmbienteId = getAmbienteLookupId(product);
   const ambiente = rawAmbienteId ? ctx.ambientesById.get(rawAmbienteId) : undefined;
   const ambienteId = getObraAmbienteXObraId(ambiente, product);
+  const externalContextId = ambienteId || rawAmbienteId || "sem_ambiente";
+  const externalCounterKey = `${activity.id}:${externalContextId}`;
+  const externalIndex = (ctx.lineExternalIndexCounters.get(externalCounterKey) || 0) + 1;
+  ctx.lineExternalIndexCounters.set(externalCounterKey, externalIndex);
   const daysFromStart = differenceInCalendarDays(ctx.obraStart, date) + 1;
 
   return {
-    atividade_obra_id_externo: stableLineId(activity.id, dateOnly, cloneIndex),
+    atividade_obra_id_externo: stableLineId(activity.id, externalContextId, externalIndex),
     atividadeId: activity.id,
     atividadeNome: activity.nome,
     atividadeTipo: activity.tipo,
     atividadeServicoAncoraId: anchor?.id || activity.atividadeServicoAncoraId || null,
     atividadeServicoAncoraNome: anchor?.nome || null,
+    atividadeServicoAncoraExternoId: null,
     obraAmbienteProdutoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
     produtoId: getProductId(product),
     ambienteId,
     ambienteItemComposicaoId: getAmbienteItemComposicaoId(product),
+    external_index: externalIndex,
     data_programada: dateOnly,
     codigo_d: formatCodigoD(daysFromStart),
     dia_semana: weekdayName(date),
@@ -181,6 +188,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || rawAmbienteId) : null,
     produto: getProductName(product),
     ordem: activity.ordem,
+    ordemCronograma: 0,
     clone_index: cloneIndex,
     anchor_service_name: anchor?.nome || null,
     interdependenciasMasterIds: [],
@@ -481,6 +489,19 @@ function populateAtividadeObraDependencies(ctx: PlacementContext): void {
   }
 }
 
+function populateAnchorExternalIds(lines: ScheduleLine[]): void {
+  const lineIdsByActivity = new Map<string, string[]>();
+  for (const line of lines) {
+    lineIdsByActivity.set(line.atividadeId, [...(lineIdsByActivity.get(line.atividadeId) || []), line.atividade_obra_id_externo]);
+  }
+
+  for (const line of lines) {
+    line.atividadeServicoAncoraExternoId = line.atividadeServicoAncoraId
+      ? lineIdsByActivity.get(line.atividadeServicoAncoraId)?.[0] || null
+      : null;
+  }
+}
+
 function compareServiceOrder(a: NormalizedActivity, b: NormalizedActivity): number {
   return (
     a.ordem - b.ordem
@@ -558,6 +579,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     serviceCloneDates: new Map(),
     servicesByCompositeId,
     lines: [],
+    lineExternalIndexCounters: new Map(),
     teamWeightByDay: new Map(),
     activityDays: new Map(),
     warnings: []
@@ -566,7 +588,11 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   placeServices(ctx, services);
   placeAnchoredActivities(ctx, anchored, servicesById);
   populateAtividadeObraDependencies(ctx);
+  populateAnchorExternalIds(ctx.lines);
   ctx.lines.sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
+  ctx.lines.forEach((line, index) => {
+    line.ordemCronograma = index + 1;
+  });
 
   return { lines: ctx.lines, validations: { warnings: ctx.warnings, errors: [] } };
 }
