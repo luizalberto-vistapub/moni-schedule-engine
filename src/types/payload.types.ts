@@ -66,6 +66,7 @@ export interface ActivityPayload {
   peso?: number;
   equipe?: string | null;
   familia?: string | null;
+  nomeFamilia?: string | null;
   offsetDias?: number;
   [key: string]: unknown;
 }
@@ -82,6 +83,7 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
   peso: number;
   equipe: string | null;
   familia: string | null;
+  nomeFamilia: string | null;
   atividadeServicoAncoraId: string | null;
   interdependenciasMasterIds: string[];
   raw: Record<string, unknown>;

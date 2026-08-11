@@ -21,6 +21,7 @@ export interface ScheduleLine {
   nome_atividade: string;
   equipe: string | null;
   familia: string | null;
+  nomeFamilia: string | null;
   peso: number;
   ambiente: string | null;
   produto: string | null;
