@@ -163,14 +163,11 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
   const ambienteXObraId = optionalString(product.ambienteXobraId)
     || optionalString(product.ambienteXObraId)
     || optionalString(product["id ambiente x obra"])
-    || optionalString(product["ambiente x obra"])
-    || optionalString(product.obraAmbienteId)
-    || optionalString(product.ambienteId)
-    || optionalString(product["id ambiente item composicao"]);
+    || optionalString(product["ambiente x obra"]);
   const ambienteItemComposicaoId = optionalString(product.ambienteItemComposicaoId)
     || optionalString(product["ambiente x item composicao"])
     || optionalString(product["id ambiente item composicao"]);
-  const ambienteId = ambienteXObraId
+  const ambienteId = ambienteItemComposicaoId
     || optionalString(product.obraAmbienteId)
     || optionalString(product.ambienteId);
   const produtoId = optionalString(product.produtoId) || optionalString(product.produto) || optionalString(product["id produto simples"]);
@@ -183,7 +180,7 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
     ambienteId,
     obraAmbienteId: ambienteId,
     ambienteItemComposicaoId,
-    "ambiente x obra": ambienteId,
+    "ambiente x obra": ambienteXObraId,
     "ambiente x item composicao": ambienteItemComposicaoId,
     produtoId,
     produto: produtoId,

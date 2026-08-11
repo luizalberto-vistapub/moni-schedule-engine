@@ -808,7 +808,7 @@ describe("schedule engine", () => {
 
   it("aceita item composicao e ancora compras pelo produto composto", () => {
     const payload = normalizePayload(basePayload({
-      obra_ambiente_json: [{ "unique id": "amb_item_1", "nome ambiente": "Ambiente Cap" }],
+      obra_ambiente_json: [{ "unique id": "amb_item_1", "nome ambiente": "Ambiente Cap", "id ambiente x obra": "amb_obra_1" }],
       obra_ambiente_produto_json: [],
       obra_ambiente_item_composicao_json: [
         {
@@ -845,7 +845,7 @@ describe("schedule engine", () => {
       atividadeServicoAncoraId: "servico_1",
       produtoId: "prod_compra",
       produto: "Produto de compra",
-      ambienteId: "amb_item_1",
+      ambienteId: "amb_obra_1",
       ambienteItemComposicaoId: "amb_item_1",
       ambiente: "Ambiente Cap"
     });
@@ -1288,10 +1288,11 @@ describe("schedule engine", () => {
     expect(result.lines.find((line) => line.atividadeId === "compra_orfa")).toBeUndefined();
   });
 
-  it("resolve obra x ambiente pelo unique id do obra_ambiente_json", () => {
+  it("resolve ambiente pelo unique id e usa somente id ambiente x obra como referencia Bubble", () => {
     const payload = normalizePayload(basePayload({
       obra_ambiente_json: [{
         "unique id": "1778509663183x408131843469357700",
+        "id ambiente x obra": "1778509663183xambienteobra",
         obra: "1778509641991x511373404079390700",
         ambiente: "1778260028546x369044729899253800",
         "nome ambiente": "garagem de teste"
@@ -1310,7 +1311,7 @@ describe("schedule engine", () => {
 
     const result = runScheduleEngine(payload);
 
-    expect(result.lines[0].ambienteId).toBe("1778509663183x408131843469357700");
+    expect(result.lines[0].ambienteId).toBe("1778509663183xambienteobra");
     expect(result.lines[0].ambiente).toBe("garagem de teste");
 
     const payloadWithoutObraAmbienteUniqueId = normalizePayload(basePayload({
@@ -1328,7 +1329,7 @@ describe("schedule engine", () => {
     }));
     const fallbackResult = runScheduleEngine(payloadWithoutObraAmbienteUniqueId);
 
-    expect(fallbackResult.lines[0].ambienteId).toBe("1778260028546x369044729899253800");
+    expect(fallbackResult.lines[0].ambienteId).toBeNull();
     expect(fallbackResult.lines[0].ambiente).toBe("garagem sem unique id");
   });
 

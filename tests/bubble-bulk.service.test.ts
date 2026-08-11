@@ -624,6 +624,37 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("uses obra_ambiente_json id ambiente x obra for the Bubble ambiente x obra field", () => {
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      obra_ambiente_json: [{
+        "unique id": "amb_item_record_1",
+        "id ambiente": "ambiente_catalogo_1",
+        "nome ambiente": "Sala",
+        "id ambiente x obra": "amb_obra_real_1"
+      }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [{
+        "unique id": "item_servico_1",
+        "id ambiente item composicao": "amb_item_record_1",
+        "id produto composto": "composto_1",
+        "id produto simples": "prod_servico",
+        "nome produto simples": "Mao de obra"
+      }],
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_servico", ordem: 1, duracao: 1 }]
+    }));
+    const result = runScheduleEngine(payload);
+
+    const [record] = buildAtividadeObraRecords(payload, result.lines);
+
+    expect(record).toMatchObject({
+      "ambiente x item composicao": "amb_item_record_1",
+      "ambiente x obra": "amb_obra_real_1"
+    });
+  });
+
   it("calculates Atividade x Obra valorRaiz from composition value and activity percentage", () => {
     const payload = normalizePayload(basePayload({
       versao_cronograma_unique_id: "versao_1",
