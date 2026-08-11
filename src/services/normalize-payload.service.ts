@@ -92,6 +92,7 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
   const tipo = normalizeActivityType(activity.tipo);
   const rawOffset = activity.offsetDias ?? field(activity, "diasAntecedencia");
   const rawEquipe = activity.equipe || field(activity, "tipo equipe");
+  const rawFamilia = activity.familia || field(activity, "família", "familia atividade", "família atividade");
 
   return {
     ...activity,
@@ -105,6 +106,7 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     etapaCompra: normalizePurchaseStage(activity.etapaCompra),
     peso: Number(activity.peso ?? 1),
     equipe: typeof rawEquipe === "string" && rawEquipe ? rawEquipe : null,
+    familia: typeof rawFamilia === "string" && rawFamilia ? rawFamilia : null,
     atividadeServicoAncoraId: tipo === "Compra" ? activity.atividadeServicoAncoraId || null : null,
     interdependenciasMasterIds: Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [],
     offsetDias: rawOffset === undefined || rawOffset === null || rawOffset === "" ? undefined : Number(rawOffset),
@@ -132,6 +134,7 @@ function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActi
         etapaCompra: null,
         peso: 1,
         equipe: null,
+        familia: null,
         offsetDias: project.diasAntecedencia === undefined || project.diasAntecedencia === null || project.diasAntecedencia === "" ? undefined : Number(project.diasAntecedencia),
         atividadeServicoAncoraId: activity.id,
         interdependenciasMasterIds: [],

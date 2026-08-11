@@ -20,6 +20,7 @@ export interface ScheduleLine {
   subtipo_compra: string | null;
   nome_atividade: string;
   equipe: string | null;
+  familia: string | null;
   peso: number;
   ambiente: string | null;
   produto: string | null;

@@ -65,6 +65,7 @@ export interface ActivityPayload {
   etapaCompra?: string | null;
   peso?: number;
   equipe?: string | null;
+  familia?: string | null;
   offsetDias?: number;
   [key: string]: unknown;
 }
@@ -80,6 +81,7 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
   etapaCompra: PurchaseStage | null;
   peso: number;
   equipe: string | null;
+  familia: string | null;
   atividadeServicoAncoraId: string | null;
   interdependenciasMasterIds: string[];
   raw: Record<string, unknown>;

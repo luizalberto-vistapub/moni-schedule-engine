@@ -518,6 +518,7 @@ describe("Bubble bulk persistence", () => {
       id_atividade_obra_externo: line.atividade_obra_id_externo,
       versaoCronograma: "versao_1",
       equipe: "",
+      familia: "",
       nomeProduto: "",
       "Produto (raiz)": line.produtoId,
       ambiente: "",
@@ -542,6 +543,21 @@ describe("Bubble bulk persistence", () => {
     expect(record).toMatchObject({
       atividade: "serv_1",
       responsavel: "user_responsavel_1"
+    });
+  });
+
+  it("sends activity family to Atividade x Obra bulk records", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, familia: "Estrutura" }]
+    });
+
+    const [line] = lines;
+    const [record] = buildAtividadeObraRecords(payload, lines);
+
+    expect(line?.familia).toBe("Estrutura");
+    expect(record).toMatchObject({
+      atividade: "serv_1",
+      familia: "Estrutura"
     });
   });
 

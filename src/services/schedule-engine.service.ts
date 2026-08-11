@@ -184,6 +184,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     subtipo_compra: activity.tipo === "Compra" ? activity.etapaCompra : null,
     nome_atividade: activity.nome,
     equipe: activity.equipe,
+    familia: activity.familia,
     peso: activity.peso,
     ambiente: ambiente ? String(ambiente.nome || ambiente.name || ambiente["nome ambiente"] || rawAmbienteId) : null,
     produto: getProductName(product),

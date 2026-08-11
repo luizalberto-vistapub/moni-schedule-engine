@@ -659,6 +659,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       dataInicioPrevista: toBubbleDate(line.data_programada),
       duracao: 1,
       equipe: line.equipe || "",
+      familia: line.familia || "",
       atividade: line.atividadeId,
       id_atividade_obra_externo: line.atividade_obra_id_externo,
       nomeAtividade: atividadeObraNomeAtividade(line),
