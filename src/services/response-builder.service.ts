@@ -33,10 +33,10 @@ export function buildScheduleErrorResponse(message: string, code: string, detail
     serverVersionId: null,
     version: null,
     metrics: null,
-    message,
+    message: errorMessage,
     error_message: errorMessage,
     error: {
-      message,
+      message: errorMessage,
       code,
       details
     },

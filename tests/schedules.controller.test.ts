@@ -959,8 +959,9 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.error.message).toBe("work_start_delayed events must include new_start_date");
     expect(response.body.error_message).toBe("work_start_delayed events must include new_start_date");
-    expect(response.body.message).toBe("Invalid payload");
+    expect(response.body.message).toBe("work_start_delayed events must include new_start_date");
     expect(response.body.validations.errors).toContain("work_start_delayed events must include new_start_date");
   });
 
