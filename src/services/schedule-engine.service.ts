@@ -447,13 +447,26 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     }
   }
 
+  const projectEntriesById = new Map<string, { activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
   for (const activity of projects) {
     const anchor = resolveAnchor(activity)?.anchor;
-    const anchorId = anchor?.id;
-    if (!anchorId) {
+    if (!anchor) {
       recordSkippedAnchor(activity, "sem servico ancora gerado");
       continue;
     }
+    projectEntriesById.set(activity.id, [...(projectEntriesById.get(activity.id) || []), { activity, anchor }]);
+  }
+
+  const selectedProjects = [...projectEntriesById.values()]
+    .map((entries) => entries.sort((a, b) => (
+      ctx.serviceStarts.get(a.anchor.id)!.getTime() - ctx.serviceStarts.get(b.anchor.id)!.getTime()
+      || compareAnchoredActivityOrder(a.activity, b.activity)
+      || a.anchor.id.localeCompare(b.anchor.id)
+    ))[0]!)
+    .sort((a, b) => compareAnchoredActivityOrder(a.activity, b.activity));
+
+  for (const { activity, anchor } of selectedProjects) {
+    const anchorId = anchor.id;
     const anchorStart = ctx.serviceStarts.get(anchorId)!;
     let product = productForAnchoredActivity(ctx, activity, anchor);
     if (!product) product = productForActivity(ctx, anchor);

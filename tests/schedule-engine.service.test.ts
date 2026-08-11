@@ -1005,6 +1005,41 @@ describe("schedule engine", () => {
     expect(generatedProjects.map((activity) => activity.offsetDias)).toEqual([undefined, undefined]);
   });
 
+  it("gera uma unica atividade de projeto quando o mesmo projeto aparece em varios servicos", () => {
+    const payload = normalizePayload(basePayload({
+      atividades_json: [
+        {
+          id: "servico_1",
+          nome: "Instalacao 1",
+          tipo: "Servico",
+          ordem: 2,
+          duracao: 1,
+          atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto unico", diasAntecedencia: 2 }]
+        },
+        {
+          id: "servico_2",
+          nome: "Instalacao 2",
+          tipo: "Servico",
+          ordem: 1,
+          duracao: 1,
+          atividadeProjeto: [{ idAtividadeProjeto: "projeto_1", nomeAtividadeProjeto: "Projeto unico", diasAntecedencia: 2 }]
+        }
+      ]
+    }));
+
+    const generatedProjects = payload.atividades_json.filter((activity) => activity.tipo === "Projeto");
+    const result = runScheduleEngine(payload);
+    const projectLines = result.lines.filter((line) => line.atividadeId === "projeto_1");
+
+    expect(generatedProjects).toHaveLength(2);
+    expect(projectLines).toHaveLength(1);
+    expect(projectLines[0]).toMatchObject({
+      atividadeId: "projeto_1",
+      atividadeServicoAncoraId: "servico_2",
+      anchor_service_name: "Instalacao 2"
+    });
+  });
+
   it("consolida compras repetidas no servico de menor ordem independentemente da ancora e da ordem do payload", () => {
     const purchaseStages = [
       { suffix: "aviso", nome: "Aviso", etapaCompra: "Aviso de orçamento", diasAntecedencia: 30 },
@@ -1469,7 +1504,7 @@ describe("schedule engine", () => {
     });
   });
 
-  it("creates contextual project lines when one project is referenced by multiple services", () => {
+  it("creates one project line on the earliest planned service when one project is referenced by multiple services", () => {
     const payload = normalizePayload(basePayload({
       obra_ambiente_produto_json: [
         { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto 1", quantidade: 1 },
@@ -1506,14 +1541,13 @@ describe("schedule engine", () => {
     const result = runScheduleEngine(payload);
     const projectLines = result.lines.filter((line) => line.tipo === "Projeto");
 
-    expect(projectLines).toHaveLength(2);
+    expect(projectLines).toHaveLength(1);
     expect(projectLines.map((line) => ({
       atividadeId: line.atividadeId,
       anchor: line.atividadeServicoAncoraId,
       product: line.produtoId
     }))).toEqual([
-      { atividadeId: "proj_shared", anchor: "serv_1", product: "prod_1" },
-      { atividadeId: "proj_shared", anchor: "serv_2", product: "prod_2" }
+      { atividadeId: "proj_shared", anchor: "serv_1", product: "prod_1" }
     ]);
   });
 
