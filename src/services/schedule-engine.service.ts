@@ -104,9 +104,14 @@ function productCompositeContextKey(productId: string, compositeId: string, cont
   return `${productId}:${compositeId}:${contextId}`;
 }
 
-function getAmbienteId(product: ObraAmbienteProdutoPayload | null): string | null {
+function getAmbienteLookupId(product: ObraAmbienteProdutoPayload | null): string | null {
   if (!product) return null;
-  return String(product.ambienteId || product.obraAmbienteId || product["ambiente x obra"] || product["id ambiente item composicao"] || product.ambiente || "") || null;
+  return String(product["id ambiente item composicao"] || product.ambienteItemComposicaoId || product["ambiente x item composicao"] || product.ambienteId || product.obraAmbienteId || product.ambiente || product["id ambiente x obra"] || product["ambiente x obra"] || "") || null;
+}
+
+function getProdutoAmbienteXObraId(product: ObraAmbienteProdutoPayload | null): string | null {
+  if (!product) return null;
+  return String(product["id ambiente x obra"] || product["ambiente x obra"] || product.ambienteXObraId || product.ambienteXobraId || "") || null;
 }
 
 function getAmbienteItemComposicaoId(product: ObraAmbienteProdutoPayload | null): string | null {
@@ -118,7 +123,7 @@ function getAmbienteItemComposicaoId(product: ObraAmbienteProdutoPayload | null)
 }
 
 function productContextId(product: ObraAmbienteProdutoPayload | null): string | null {
-  return getAmbienteItemComposicaoId(product) || getAmbienteId(product);
+  return getAmbienteItemComposicaoId(product) || getAmbienteLookupId(product) || getProdutoAmbienteXObraId(product);
 }
 
 function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedActivity, anchor: NormalizedActivity, anchorCompositeId?: string | null): ObraAmbienteProdutoPayload | null {
@@ -132,11 +137,13 @@ function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedA
   return productForActivity(ctx, activity);
 }
 
-function getObraAmbienteId(ambiente: ObraAmbientePayload | undefined, fallbackId: string | null): string | null {
-  if (!ambiente) return fallbackId;
-  const id = [ambiente["unique id"], ambiente.unique_id, ambiente.id, fallbackId]
+function getObraAmbienteXObraId(ambiente: ObraAmbientePayload | undefined, product: ObraAmbienteProdutoPayload | null): string | null {
+  const productId = getProdutoAmbienteXObraId(product);
+  if (productId) return productId;
+  if (!ambiente) return null;
+  const id = [ambiente["id ambiente x obra"], ambiente["ambiente x obra"], ambiente.ambienteXObraId, ambiente.ambienteXobraId, ambiente.obraAmbienteId]
     .find((value) => value !== undefined && value !== null && value !== "");
-  return String(id);
+  return id === undefined ? null : String(id);
 }
 
 function formatCodigoD(daysFromStart: number): string {
@@ -147,9 +154,9 @@ function formatCodigoD(daysFromStart: number): string {
 
 function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
   const dateOnly = formatDateOnly(date);
-  const rawAmbienteId = getAmbienteId(product);
+  const rawAmbienteId = getAmbienteLookupId(product);
   const ambiente = rawAmbienteId ? ctx.ambientesById.get(rawAmbienteId) : undefined;
-  const ambienteId = getObraAmbienteId(ambiente, rawAmbienteId);
+  const ambienteId = getObraAmbienteXObraId(ambiente, product);
   const daysFromStart = differenceInCalendarDays(ctx.obraStart, date) + 1;
 
   return {
@@ -510,6 +517,7 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const ambientesById = new Map(
     payload.obra_ambiente_json.flatMap((ambiente) => {
       const ids = [ambiente.id, ambiente.unique_id, ambiente["unique id"], ambiente.ambiente]
+        .concat([ambiente["id ambiente"], ambiente["id ambiente x obra"], ambiente["ambiente x obra"]])
         .map((id) => String(id || ""))
         .filter(Boolean);
       return ids.map((id) => [id, ambiente] as const);

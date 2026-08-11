@@ -160,10 +160,16 @@ function mergeDirectProjectWithReference(directProject: NormalizedActivity, link
 
 function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload): ObraAmbienteProdutoPayload {
   const id = optionalString(product.id) || optionalString(product.unique_id) || optionalString(product["unique id"]);
-  const ambienteId = optionalString(product.ambienteId)
-    || optionalString(product.obraAmbienteId)
-    || optionalString(product["ambiente x obra"])
+  const ambienteXObraId = optionalString(product.ambienteXobraId)
+    || optionalString(product.ambienteXObraId)
+    || optionalString(product["id ambiente x obra"])
+    || optionalString(product["ambiente x obra"]);
+  const ambienteItemComposicaoId = optionalString(product.ambienteItemComposicaoId)
+    || optionalString(product["ambiente x item composicao"])
     || optionalString(product["id ambiente item composicao"]);
+  const ambienteId = ambienteItemComposicaoId
+    || optionalString(product.obraAmbienteId)
+    || optionalString(product.ambienteId);
   const produtoId = optionalString(product.produtoId) || optionalString(product.produto) || optionalString(product["id produto simples"]);
   const produtoNome = optionalString(product.produtoNome) || optionalString(product["nome produto"]) || optionalString(product["nome produto simples"]);
 
@@ -173,6 +179,9 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
     unique_id: optionalString(product.unique_id) || optionalString(product["unique id"]),
     ambienteId,
     obraAmbienteId: ambienteId,
+    ambienteItemComposicaoId,
+    "ambiente x obra": ambienteXObraId,
+    "ambiente x item composicao": ambienteItemComposicaoId,
     produtoId,
     produto: produtoId,
     produtoNome,

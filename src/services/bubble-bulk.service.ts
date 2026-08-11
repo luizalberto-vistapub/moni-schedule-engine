@@ -537,7 +537,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       versaoCronograma: versionId,
       ambiente: line.ambiente || "",
       "ambiente x item composicao": line.ambienteItemComposicaoId || "",
-      "ambiente x obra": line.ambienteItemComposicaoId ? "" : line.ambienteId || "",
+      "ambiente x obra": line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
       ...previousFields,
       ...activityResponsibleFields(line),
