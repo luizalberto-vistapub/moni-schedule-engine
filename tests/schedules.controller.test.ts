@@ -951,7 +951,7 @@ describe("schedule controllers", () => {
         versao_cronograma_unique_id: "versao_2",
         previous_version_id: "versao_1",
         mode: "recalculate",
-        events_json: [{ type: "work_start_delayed" }],
+        events_json: [{ type: "work_start_delayed", new_start_date: "" }],
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
@@ -959,6 +959,8 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.error_message).toBe("work_start_delayed events must include new_start_date");
+    expect(response.body.message).toBe("Invalid payload");
     expect(response.body.validations.errors).toContain("work_start_delayed events must include new_start_date");
   });
 

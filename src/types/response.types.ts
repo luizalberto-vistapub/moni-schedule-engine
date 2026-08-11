@@ -27,6 +27,8 @@ export interface ScheduleErrorResponse {
   serverVersionId: null;
   version: null;
   metrics: null;
+  message: string;
+  error_message: string;
   error: {
     message: string;
     code: string;

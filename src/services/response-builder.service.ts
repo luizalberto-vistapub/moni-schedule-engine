@@ -26,11 +26,15 @@ export function buildScheduleResponse(result: EngineResult, startedAt: Date, pre
 }
 
 export function buildScheduleErrorResponse(message: string, code: string, details: unknown = {}, errors: string[] = [message]): ScheduleErrorResponse {
+  const errorMessage = errors[0] || message;
+
   return {
     ok: false,
     serverVersionId: null,
     version: null,
     metrics: null,
+    message,
+    error_message: errorMessage,
     error: {
       message,
       code,
