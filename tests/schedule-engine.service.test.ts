@@ -276,7 +276,7 @@ describe("schedule engine", () => {
     ]);
   });
 
-  it("normaliza ancora somente para compras", () => {
+  it("normaliza ancora para compras e projetos, mas nao para servicos", () => {
     const payload = normalizePayload(basePayload({
       atividades_json: [
         { id: "servico", nome: "Servico", tipo: "Servico", atividadeServicoAncoraId: "não" },
@@ -287,7 +287,7 @@ describe("schedule engine", () => {
 
     expect(payload.atividades_json.map((activity) => activity.atividadeServicoAncoraId)).toEqual([
       null,
-      null,
+      "não",
       "prod_compra"
     ]);
   });
@@ -1501,6 +1501,45 @@ describe("schedule engine", () => {
       produtoId: "prod_2",
       produto: "Produto 2",
       anchor_service_name: "Servico 2"
+    });
+  });
+
+  it("links direct project activities through their service anchor and carries project metadata", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_produto_json: [
+        { id: "oap_1", ambienteId: "amb_1", produtoId: "prod_1", produtoNome: "Produto 1", quantidade: 1 }
+      ],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", produto: "prod_1", ordem: 1, duracao: 1 },
+        {
+          id: "proj_1",
+          nome: "Projeto direto",
+          tipo: "Projeto",
+          ordem: 1,
+          duracao: 1,
+          produto: "prod_1",
+          atividadeServicoAncoraId: "serv_1",
+          diasAntecedencia: 4,
+          projetoId: "projeto_biblioteca_1",
+          tipoProjeto: "Executivo",
+          projetoResponsavel: "user_projeto_1",
+          projetoStatus: "Pendente"
+        }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+    const projectLine = result.lines.find((line) => line.tipo === "Projeto");
+
+    expect(projectLine).toMatchObject({
+      atividadeId: "proj_1",
+      atividadeServicoAncoraId: "serv_1",
+      projetoId: "projeto_biblioteca_1",
+      tipoProjeto: "Executivo",
+      diasAntecedencia: 4,
+      projetoResponsavel: "user_projeto_1",
+      projetoStatus: "Pendente",
+      anchor_service_name: "Servico 1"
     });
   });
 

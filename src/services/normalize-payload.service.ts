@@ -79,6 +79,14 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function nullableString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = optionalString(value);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
 function field(record: Record<string, unknown>, ...keys: string[]): unknown {
   for (const key of keys) {
     if (record[key] !== undefined) return record[key];
@@ -94,6 +102,10 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
   const rawEquipe = activity.equipe || field(activity, "tipo equipe");
   const rawFamilia = activity.familia || field(activity, "família", "familia atividade", "família atividade");
   const rawNomeFamilia = activity.nomeFamilia || field(activity, "nome familia", "nome família", "nomeFamilia") || rawFamilia;
+  const projetoId = nullableString(activity.projetoId, field(activity, "projeto", "Projeto", "id projeto"));
+  const tipoProjeto = nullableString(activity.tipoProjeto, field(activity, "tipo projeto", "tipo_projeto"));
+  const projetoResponsavel = nullableString(activity.projetoResponsavel, field(activity, "responsavelFranqueado", "responsávelFranqueado", "responsavel projeto", "responsável projeto"));
+  const projetoStatus = nullableString(activity.projetoStatus, field(activity, "statusProjeto", "status projeto", "status_projeto"));
 
   return {
     ...activity,
@@ -109,7 +121,11 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     equipe: typeof rawEquipe === "string" && rawEquipe ? rawEquipe : null,
     familia: typeof rawFamilia === "string" && rawFamilia ? rawFamilia : null,
     nomeFamilia: typeof rawNomeFamilia === "string" && rawNomeFamilia ? rawNomeFamilia : null,
-    atividadeServicoAncoraId: tipo === "Compra" ? activity.atividadeServicoAncoraId || null : null,
+    projetoId,
+    tipoProjeto,
+    projetoResponsavel,
+    projetoStatus,
+    atividadeServicoAncoraId: tipo === "Compra" || tipo === "Projeto" ? activity.atividadeServicoAncoraId || null : null,
     interdependenciasMasterIds: Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [],
     offsetDias: rawOffset === undefined || rawOffset === null || rawOffset === "" ? undefined : Number(rawOffset),
     raw: { ...activity }
@@ -124,6 +140,10 @@ function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActi
     .map((project, index): NormalizedActivity => {
       const id = asString(field(project, "idAtividadeProjeto", "id", "unique_id", "unique id"), `${activity.id}_projeto_${index + 1}`);
       const nome = asString(field(project, "nomeAtividadeProjeto", "nome", "name"), id);
+      const projetoId = nullableString(field(project, "projetoId", "projeto", "Projeto", "id projeto"));
+      const tipoProjeto = nullableString(field(project, "tipoProjeto", "tipo projeto", "tipo_projeto"));
+      const projetoResponsavel = nullableString(field(project, "projetoResponsavel", "responsavelFranqueado", "responsávelFranqueado", "responsavel projeto", "responsável projeto"));
+      const projetoStatus = nullableString(field(project, "projetoStatus", "statusProjeto", "status projeto", "status_projeto"));
 
       return {
         id,
@@ -138,6 +158,10 @@ function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActi
         equipe: null,
         familia: null,
         nomeFamilia: null,
+        projetoId,
+        tipoProjeto,
+        projetoResponsavel,
+        projetoStatus,
         offsetDias: project.diasAntecedencia === undefined || project.diasAntecedencia === null || project.diasAntecedencia === "" ? undefined : Number(project.diasAntecedencia),
         atividadeServicoAncoraId: activity.id,
         interdependenciasMasterIds: [],
@@ -156,6 +180,10 @@ function mergeDirectProjectWithReference(directProject: NormalizedActivity, link
     atividadeServicoAncoraId: linkedProject.atividadeServicoAncoraId,
     produto: directProject.produto || linkedProject.produto,
     produtoId: directProject.produtoId || linkedProject.produtoId,
+    projetoId: directProject.projetoId || linkedProject.projetoId,
+    tipoProjeto: directProject.tipoProjeto || linkedProject.tipoProjeto,
+    projetoResponsavel: directProject.projetoResponsavel || linkedProject.projetoResponsavel,
+    projetoStatus: directProject.projetoStatus || linkedProject.projetoStatus,
     raw: {
       ...directProject.raw,
       atividadeProjetoLink: linkedProject.raw,

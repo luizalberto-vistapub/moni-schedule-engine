@@ -22,6 +22,11 @@ export interface ScheduleLine {
   equipe: string | null;
   familia: string | null;
   nomeFamilia: string | null;
+  projetoId: string | null;
+  tipoProjeto: string | null;
+  diasAntecedencia: number | null;
+  projetoResponsavel: string | null;
+  projetoStatus: string | null;
   peso: number;
   ambiente: string | null;
   produto: string | null;

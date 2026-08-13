@@ -737,7 +737,15 @@ describe("Bubble bulk persistence", () => {
           produto: "prod_1",
           ordem: 1,
           duracao: 1,
-          atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "pj 2p1 - 03/06", diasAntecedencia: 2 }]
+          atividadeProjeto: [{
+            idAtividadeProjeto: "proj_1",
+            nomeAtividadeProjeto: "pj 2p1 - 03/06",
+            diasAntecedencia: 2,
+            projetoId: "projeto_biblioteca_1",
+            tipoProjeto: "Executivo",
+            projetoResponsavel: "user_projeto_1",
+            projetoStatus: "Aguardando"
+          }]
         },
         { id: "compra_1", nome: "Compra", tipo: "Compra", produto: "prod_1", ordem: 1, etapaCompra: "Recebimento", diasAntecedencia: 1, atividadeServicoAncoraId: "serv_1" },
         { id: "proj_1", nome: "pj 2p1 - 03/06 - ", tipo: "Projeto", ordem: 1, duracao: 1, produto: "", atividadeServicoAncoraId: "" }
@@ -753,6 +761,11 @@ describe("Bubble bulk persistence", () => {
       nomeAtividade: "pj 2p1 - 03/06 - Produto simples Vivi 1 - Serviço",
       nomeProduto: "Produto simples Vivi 1 - Serviço",
       "Produto (raiz)": "prod_1",
+      projeto: "projeto_biblioteca_1",
+      tipoProjeto: "Executivo",
+      diasAntecedencia: 2,
+      responsavelFranqueado: "user_projeto_1",
+      statusProjeto: "Aguardando",
       tipo: "Projeto"
     });
     expect(cronogramaRecord).toMatchObject({

@@ -67,6 +67,10 @@ export interface ActivityPayload {
   equipe?: string | null;
   familia?: string | null;
   nomeFamilia?: string | null;
+  projetoId?: string | null;
+  tipoProjeto?: string | null;
+  projetoResponsavel?: string | null;
+  projetoStatus?: string | null;
   offsetDias?: number;
   [key: string]: unknown;
 }
@@ -84,8 +88,13 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
   equipe: string | null;
   familia: string | null;
   nomeFamilia: string | null;
+  projetoId: string | null;
+  tipoProjeto: string | null;
+  projetoResponsavel: string | null;
+  projetoStatus: string | null;
   atividadeServicoAncoraId: string | null;
   interdependenciasMasterIds: string[];
+  offsetDias?: number;
   raw: Record<string, unknown>;
 }
 
