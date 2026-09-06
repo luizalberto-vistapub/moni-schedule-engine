@@ -8,8 +8,8 @@ import { stableLineId } from "../utils/ids.js";
 interface PlacementContext {
   payload: NormalizedSchedulePayload;
   obraStart: Date;
-  productsByProductId: Map<string, ObraAmbienteProdutoPayload>;
-  productsByProductAndCompositeId: Map<string, ObraAmbienteProdutoPayload>;
+  productsByProductId: Map<string, ObraAmbienteProdutoPayload[]>;
+  productsByProductAndCompositeId: Map<string, ObraAmbienteProdutoPayload[]>;
   productsByProductCompositeAndContextId: Map<string, ObraAmbienteProdutoPayload>;
   compositeIdsByProductId: Map<string, string[]>;
   fallbackProduct: ObraAmbienteProdutoPayload | null;
@@ -17,12 +17,25 @@ interface PlacementContext {
   serviceStarts: Map<string, Date>;
   serviceEnds: Map<string, Date>;
   serviceCloneDates: Map<string, Date[]>;
-  servicesByCompositeId: Map<string, NormalizedActivity[]>;
+  servicePlacements: ServicePlacement[];
+  servicePlacementsById: Map<string, ServicePlacement[]>;
+  servicePlacementsByCompositeId: Map<string, ServicePlacement[]>;
   lines: ScheduleLine[];
   lineExternalIndexCounters: Map<string, number>;
   teamWeightByDay: Map<string, number>;
   activityDays: Map<string, Set<string>>;
   warnings: string[];
+}
+
+interface ServicePlacement {
+  service: NormalizedActivity;
+  product: ObraAmbienteProdutoPayload | null;
+  key: string;
+  compositeId: string | null;
+  contextId: string | null;
+  firstDate: Date;
+  lastDate: Date;
+  cloneDates: Date[];
 }
 
 function getObraStart(payload: NormalizedSchedulePayload): Date {
@@ -58,9 +71,9 @@ function getActivityProductId(activity: NormalizedActivity): string | null {
   return String(activity.produto || activity.produtoId || "") || null;
 }
 
-function productForActivityFrom(productsByProductId: Map<string, ObraAmbienteProdutoPayload>, fallbackProduct: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
+function firstProductForActivityFrom(productsByProductId: Map<string, ObraAmbienteProdutoPayload[]>, fallbackProduct: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity): ObraAmbienteProdutoPayload | null {
   const productId = getActivityProductId(activity);
-  if (productId) return productsByProductId.get(productId) || null;
+  if (productId) return productsByProductId.get(productId)?.[0] || null;
   return fallbackProduct;
 }
 
@@ -68,10 +81,16 @@ function productForActivity(ctx: PlacementContext, activity: NormalizedActivity)
   const productId = getActivityProductId(activity);
   const compositeId = activity.atividadeServicoAncoraId || "";
   if (productId && compositeId) {
-    const contextualProduct = ctx.productsByProductAndCompositeId.get(productCompositeKey(productId, compositeId));
+    const contextualProduct = ctx.productsByProductAndCompositeId.get(productCompositeKey(productId, compositeId))?.[0];
     if (contextualProduct) return contextualProduct;
   }
-  return productForActivityFrom(ctx.productsByProductId, ctx.fallbackProduct, activity);
+  return firstProductForActivityFrom(ctx.productsByProductId, ctx.fallbackProduct, activity);
+}
+
+function productsForService(ctx: PlacementContext, activity: NormalizedActivity): (ObraAmbienteProdutoPayload | null)[] {
+  const productId = getActivityProductId(activity);
+  if (!productId) return [ctx.fallbackProduct];
+  return ctx.productsByProductId.get(productId) || [null];
 }
 
 function stringValue(value: unknown): string {
@@ -127,10 +146,10 @@ function productContextId(product: ObraAmbienteProdutoPayload | null): string | 
   return getAmbienteItemComposicaoId(product) || getAmbienteLookupId(product) || getProdutoAmbienteXObraId(product);
 }
 
-function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedActivity, anchor: NormalizedActivity, anchorCompositeId?: string | null): ObraAmbienteProdutoPayload | null {
+function productForAnchoredActivity(ctx: PlacementContext, activity: NormalizedActivity, anchor: ServicePlacement, anchorCompositeId?: string | null): ObraAmbienteProdutoPayload | null {
   const productId = getActivityProductId(activity);
-  const compositeId = anchorCompositeId || activity.atividadeServicoAncoraId || getCompositeProductId(productForActivity(ctx, anchor)) || "";
-  const contextId = productContextId(productForActivity(ctx, anchor));
+  const compositeId = anchorCompositeId || activity.atividadeServicoAncoraId || anchor.compositeId || "";
+  const contextId = anchor.contextId;
   if (productId && compositeId && contextId) {
     const contextualProduct = ctx.productsByProductCompositeAndContextId.get(productCompositeContextKey(productId, compositeId, contextId));
     if (contextualProduct) return contextualProduct;
@@ -211,20 +230,25 @@ function weightKey(activity: NormalizedActivity, dateOnly: string): string {
   return `${dateOnly}:${teamKey(activity)}`;
 }
 
-function canPlaceService(ctx: PlacementContext, activity: NormalizedActivity, date: Date): boolean {
+function servicePlacementKey(service: NormalizedActivity, product: ObraAmbienteProdutoPayload | null): string {
+  return `${service.id}:${productContextId(product) || "sem_contexto"}:${product ? String(product.id || product.unique_id || product["unique id"] || "") : "sem_produto"}`;
+}
+
+function canPlaceService(ctx: PlacementContext, activity: NormalizedActivity, product: ObraAmbienteProdutoPayload | null, date: Date): boolean {
   const dateOnly = formatDateOnly(date);
   const currentWeight = ctx.teamWeightByDay.get(weightKey(activity, dateOnly)) || 0;
-  const activityDates = ctx.activityDays.get(activity.id) || new Set<string>();
+  const activityDates = ctx.activityDays.get(servicePlacementKey(activity, product)) || new Set<string>();
   return currentWeight + activity.peso <= 10 && !activityDates.has(dateOnly);
 }
 
-function reserveServiceDate(ctx: PlacementContext, activity: NormalizedActivity, date: Date): void {
+function reserveServiceDate(ctx: PlacementContext, activity: NormalizedActivity, product: ObraAmbienteProdutoPayload | null, date: Date): void {
   const dateOnly = formatDateOnly(date);
   const key = weightKey(activity, dateOnly);
   ctx.teamWeightByDay.set(key, (ctx.teamWeightByDay.get(key) || 0) + activity.peso);
-  const activityDates = ctx.activityDays.get(activity.id) || new Set<string>();
+  const activityKey = servicePlacementKey(activity, product);
+  const activityDates = ctx.activityDays.get(activityKey) || new Set<string>();
   activityDates.add(dateOnly);
-  ctx.activityDays.set(activity.id, activityDates);
+  ctx.activityDays.set(activityKey, activityDates);
 }
 
 function latestDependencyEndDate(ctx: PlacementContext, service: NormalizedActivity): Date | null {
@@ -289,12 +313,11 @@ function purchaseChainKey(anchorId: string, activity: NormalizedActivity): strin
   return `${anchorId}:${purchaseItemId || "__default__"}`;
 }
 
-function placeService(ctx: PlacementContext, service: NormalizedActivity, earliestStart: Date): void {
+function placeService(ctx: PlacementContext, service: NormalizedActivity, product: ObraAmbienteProdutoPayload | null, earliestStart: Date): void {
   const dependencyEnd = latestDependencyEndDate(ctx, service);
   let cursor = dependencyEnd ? laterDate(earliestStart, addBusinessDays(dependencyEnd, 1, ctx.payload.dias_trabalho_semana)) : earliestStart;
   const forcedStart = forcedActivityStart(service);
   if (forcedStart) cursor = laterDate(cursor, forcedStart);
-  const product = productForActivity(ctx, service);
   const totalClones = cloneCountFor(service, product);
   let firstDate: Date | null = null;
   let lastDate: Date | null = null;
@@ -302,18 +325,37 @@ function placeService(ctx: PlacementContext, service: NormalizedActivity, earlie
 
   for (let cloneIndex = 1; cloneIndex <= totalClones; cloneIndex += 1) {
     cursor = nextBusinessDay(cursor, ctx.payload.dias_trabalho_semana);
-    while (!canPlaceService(ctx, service, cursor)) cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
+    while (!canPlaceService(ctx, service, product, cursor)) cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
     if (!firstDate) firstDate = cursor;
     lastDate = cursor;
     cloneDates.push(cursor);
     ctx.lines.push(buildLine(ctx, product, service, cursor, cloneIndex));
-    reserveServiceDate(ctx, service, cursor);
+    reserveServiceDate(ctx, service, product, cursor);
     cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
   }
 
-  if (firstDate) ctx.serviceStarts.set(service.id, firstDate);
-  if (lastDate) ctx.serviceEnds.set(service.id, lastDate);
-  if (cloneDates.length) ctx.serviceCloneDates.set(service.id, cloneDates);
+  if (firstDate && lastDate) {
+    const placement: ServicePlacement = {
+      service,
+      product,
+      key: servicePlacementKey(service, product),
+      compositeId: getCompositeProductId(product),
+      contextId: productContextId(product),
+      firstDate,
+      lastDate,
+      cloneDates
+    };
+    ctx.servicePlacements.push(placement);
+    ctx.servicePlacementsById.set(service.id, [...(ctx.servicePlacementsById.get(service.id) || []), placement]);
+    if (placement.compositeId) {
+      ctx.servicePlacementsByCompositeId.set(placement.compositeId, [...(ctx.servicePlacementsByCompositeId.get(placement.compositeId) || []), placement]);
+    }
+    const currentStart = ctx.serviceStarts.get(service.id);
+    if (!currentStart || firstDate < currentStart) ctx.serviceStarts.set(service.id, firstDate);
+    const currentEnd = ctx.serviceEnds.get(service.id);
+    if (!currentEnd || lastDate > currentEnd) ctx.serviceEnds.set(service.id, lastDate);
+    ctx.serviceCloneDates.set(service.id, [...(ctx.serviceCloneDates.get(service.id) || []), ...cloneDates]);
+  }
 }
 
 function hasUnplacedDependencyInSameOrder(service: NormalizedActivity, sameOrderIds: Set<string>, ctx: PlacementContext): boolean {
@@ -336,7 +378,9 @@ function placeServices(ctx: PlacementContext, services: NormalizedActivity[]): v
     while (pending.length) {
       const index = pending.findIndex((service) => !hasUnplacedDependencyInSameOrder(service, sameOrderIds, ctx));
       const [service] = pending.splice(index >= 0 ? index : 0, 1);
-      placeService(ctx, service, groupEarliestStart);
+      for (const product of productsForService(ctx, service)) {
+        placeService(ctx, service, product, groupEarliestStart);
+      }
     }
 
     const groupEnd = group.reduce<Date | null>((latest, service) => {
@@ -371,112 +415,119 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
   };
 
   const compareAnchorCandidates = (
-    a: { anchor: NormalizedActivity; compositeId: string | null },
-    b: { anchor: NormalizedActivity; compositeId: string | null }
+    a: { anchor: ServicePlacement; compositeId: string | null },
+    b: { anchor: ServicePlacement; compositeId: string | null }
   ): number => (
-    compareAnchorPriority(a.anchor, ctx.serviceStarts.get(a.anchor.id)!, b.anchor, ctx.serviceStarts.get(b.anchor.id)!)
+    compareAnchorPriority(a.anchor.service, a.anchor.firstDate, b.anchor.service, b.anchor.firstDate)
     || String(a.compositeId || "").localeCompare(String(b.compositeId || ""))
+    || String(a.anchor.contextId || "").localeCompare(String(b.anchor.contextId || ""))
   );
 
-  const preferredServiceForComposite = (compositeId: string): { anchor: NormalizedActivity; compositeId: string } | null => {
-    const services = ctx.servicesByCompositeId.get(compositeId);
-    if (!services?.length) return null;
-    const [preferred] = services
+  const preferredServicesForComposite = (compositeId: string): { anchor: ServicePlacement; compositeId: string }[] => {
+    const services = ctx.servicePlacementsByCompositeId.get(compositeId);
+    if (!services?.length) return [];
+    const preferredByContext = new Map<string, { anchor: ServicePlacement; compositeId: string }>();
+    for (const candidate of services
       .map((anchor) => ({ anchor, compositeId }))
-      .sort(compareAnchorCandidates);
-    return preferred;
+      .sort(compareAnchorCandidates)) {
+      const key = candidate.anchor.contextId || "__sem_contexto__";
+      if (!preferredByContext.has(key)) preferredByContext.set(key, candidate);
+    }
+    return [...preferredByContext.values()].sort(compareAnchorCandidates);
   };
 
-  const resolveAnchor = (activity: NormalizedActivity): { anchor: NormalizedActivity; compositeId: string | null } | null => {
+  const resolveAnchors = (activity: NormalizedActivity): { anchor: ServicePlacement; compositeId: string | null }[] => {
     if (activity.tipo === "Compra") {
       const productId = getActivityProductId(activity);
       const productCandidates = (productId ? ctx.compositeIdsByProductId.get(productId) : null) || [];
       const candidates = productCandidates
-        .flatMap((compositeId) => {
-          const preferred = preferredServiceForComposite(compositeId);
-          return preferred ? [preferred] : [];
-        })
+        .flatMap((compositeId) => preferredServicesForComposite(compositeId))
         .sort(compareAnchorCandidates);
-      if (candidates.length) return candidates[0];
+      if (candidates.length) return candidates;
     }
     if (activity.atividadeServicoAncoraId) {
+      const explicitServicePlacements = ctx.servicePlacementsById.get(activity.atividadeServicoAncoraId);
       const explicitService = servicesById.get(activity.atividadeServicoAncoraId);
       if (explicitService) {
-        const explicitCompositeId = getCompositeProductId(productForActivity(ctx, explicitService));
-        return explicitCompositeId
-          ? preferredServiceForComposite(explicitCompositeId) || { anchor: explicitService, compositeId: explicitCompositeId }
-          : { anchor: explicitService, compositeId: null };
+        return (explicitServicePlacements || [])
+          .map((anchor) => ({ anchor, compositeId: anchor.compositeId }))
+          .sort(compareAnchorCandidates);
       }
-      const anchorProduct = ctx.productsByProductId.get(activity.atividadeServicoAncoraId);
+      const anchorProduct = ctx.productsByProductId.get(activity.atividadeServicoAncoraId)?.[0];
       const anchorCompositeId = getCompositeProductId(anchorProduct || null);
       if (anchorCompositeId) {
-        const serviceByAnchorProduct = preferredServiceForComposite(anchorCompositeId);
-        if (serviceByAnchorProduct) return serviceByAnchorProduct;
+        const servicesByAnchorProduct = preferredServicesForComposite(anchorCompositeId);
+        if (servicesByAnchorProduct.length) return servicesByAnchorProduct;
       }
-      const serviceByComposite = preferredServiceForComposite(activity.atividadeServicoAncoraId);
-      if (serviceByComposite) return serviceByComposite;
+      const servicesByComposite = preferredServicesForComposite(activity.atividadeServicoAncoraId);
+      if (servicesByComposite.length) return servicesByComposite;
     }
     const compositeId = getCompositeProductId(productForActivity(ctx, activity));
-    return compositeId ? preferredServiceForComposite(compositeId) : null;
+    return compositeId ? preferredServicesForComposite(compositeId) : [];
   };
 
-  const purchasesByChain = new Map<string, { anchorId: string; activity: NormalizedActivity; anchor: NormalizedActivity; compositeId: string | null }[]>();
+  const purchasesByChain = new Map<string, { anchorId: string; activity: NormalizedActivity; anchor: ServicePlacement; compositeId: string | null }[]>();
   for (const activity of purchases) {
-    const resolvedAnchor = resolveAnchor(activity);
-    if (!resolvedAnchor) {
+    const resolvedAnchors = resolveAnchors(activity);
+    if (!resolvedAnchors.length) {
       recordSkippedAnchor(activity, "sem servico ancora gerado");
       continue;
     }
-    const { anchor, compositeId } = resolvedAnchor;
-    const anchorId = anchor.id;
-    const chainKey = purchaseChainKey(anchorId, activity);
-    purchasesByChain.set(chainKey, [...(purchasesByChain.get(chainKey) || []), { anchorId, activity, anchor, compositeId }]);
+    for (const { anchor, compositeId } of resolvedAnchors) {
+      const anchorId = anchor.key;
+      const chainKey = `${purchaseChainKey(anchorId, activity)}:${anchor.contextId || "__sem_contexto__"}`;
+      purchasesByChain.set(chainKey, [...(purchasesByChain.get(chainKey) || []), { anchorId, activity, anchor, compositeId }]);
+    }
   }
 
   for (const purchaseEntries of purchasesByChain.values()) {
     const anchorId = purchaseEntries[0].anchorId;
-    const anchorStart = ctx.serviceStarts.get(anchorId)!;
+    const anchorStart = purchaseEntries[0].anchor.firstDate;
     const orderedEntries = [...purchaseEntries].sort((a, b) => comparePurchaseChainOrder(a.activity, b.activity));
 
     for (const { activity, anchor, compositeId } of orderedEntries.reverse()) {
       let product = productForAnchoredActivity(ctx, activity, anchor, compositeId);
-      if (!product) product = productForActivity(ctx, anchor);
+      if (!product) product = anchor.product;
       const counterKey = `${anchorId}:${activity.tipo}`;
       const currentCounter = anchorCounters.get(counterKey) || 0;
       const defaultOffset = currentCounter + 1;
       const offset = Number(activity.offsetDias ?? defaultOffset);
       const forcedStart = forcedActivityStart(activity);
       const date = forcedStart || addDays(anchorStart, -offset);
-      const line = buildLine(ctx, product, activity, date, 1, anchor);
+      const line = buildLine(ctx, product, activity, date, 1, anchor.service);
       ctx.lines.push(line);
       purchaseLinesByAnchor.set(anchorId, [...(purchaseLinesByAnchor.get(anchorId) || []), line]);
       anchorCounters.set(counterKey, currentCounter + 1);
     }
   }
 
-  const projectEntriesById = new Map<string, { activity: NormalizedActivity; anchor: NormalizedActivity }[]>();
+  const projectEntriesById = new Map<string, { activity: NormalizedActivity; anchor: ServicePlacement }[]>();
   for (const activity of projects) {
-    const anchor = resolveAnchor(activity)?.anchor;
-    if (!anchor) {
+    const anchors = resolveAnchors(activity);
+    if (!anchors.length) {
       recordSkippedAnchor(activity, "sem servico ancora gerado");
       continue;
     }
-    projectEntriesById.set(activity.id, [...(projectEntriesById.get(activity.id) || []), { activity, anchor }]);
+    projectEntriesById.set(activity.id, [
+      ...(projectEntriesById.get(activity.id) || []),
+      ...anchors.map(({ anchor }) => ({ activity, anchor }))
+    ]);
   }
 
   const selectedProjects = [...projectEntriesById.values()]
     .map((entries) => entries.sort((a, b) => (
-      ctx.serviceStarts.get(a.anchor.id)!.getTime() - ctx.serviceStarts.get(b.anchor.id)!.getTime()
+      a.anchor.firstDate.getTime() - b.anchor.firstDate.getTime()
       || compareAnchoredActivityOrder(a.activity, b.activity)
-      || a.anchor.id.localeCompare(b.anchor.id)
+      || a.anchor.service.id.localeCompare(b.anchor.service.id)
+      || String(a.anchor.contextId || "").localeCompare(String(b.anchor.contextId || ""))
     ))[0]!)
     .sort((a, b) => compareAnchoredActivityOrder(a.activity, b.activity));
 
   for (const { activity, anchor } of selectedProjects) {
-    const anchorId = anchor.id;
-    const anchorStart = ctx.serviceStarts.get(anchorId)!;
+    const anchorId = anchor.key;
+    const anchorStart = anchor.firstDate;
     let product = productForAnchoredActivity(ctx, activity, anchor);
-    if (!product) product = productForActivity(ctx, anchor);
+    if (!product) product = anchor.product;
     const earliestPurchase = [...(purchaseLinesByAnchor.get(anchorId) || [])].sort((a, b) => a.data_programada.localeCompare(b.data_programada))[0];
     const counterKey = `${anchorId}:${activity.tipo}`;
     const currentCounter = anchorCounters.get(counterKey) || 0;
@@ -485,7 +536,7 @@ function placeAnchoredActivities(ctx: PlacementContext, activities: NormalizedAc
     const forcedStart = forcedActivityStart(activity);
     const referenceStart = earliestPurchase ? parseDateOnly(earliestPurchase.data_programada) : anchorStart;
     const date = forcedStart || addDays(referenceStart, -offset);
-    ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor));
+    ctx.lines.push(buildLine(ctx, product, activity, date, 1, anchor.service));
     anchorCounters.set(counterKey, currentCounter + 1);
   }
 
@@ -535,19 +586,19 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const obraStart = getObraStart(payload);
   const orderedProducts = [...payload.obra_ambiente_produto_json].sort(compareProductOrder);
   const fallbackProduct = orderedProducts[0] || null;
-  const productsByProductId = new Map<string, ObraAmbienteProdutoPayload>();
-  const productsByProductAndCompositeId = new Map<string, ObraAmbienteProdutoPayload>();
+  const productsByProductId = new Map<string, ObraAmbienteProdutoPayload[]>();
+  const productsByProductAndCompositeId = new Map<string, ObraAmbienteProdutoPayload[]>();
   const productsByProductCompositeAndContextId = new Map<string, ObraAmbienteProdutoPayload>();
   const compositeIdsByProductId = new Map<string, string[]>();
   for (const product of orderedProducts) {
     const productId = getProductId(product);
-    if (productId && !productsByProductId.has(productId)) productsByProductId.set(productId, product);
+    if (productId) productsByProductId.set(productId, [...(productsByProductId.get(productId) || []), product]);
     const compositeId = getCompositeProductId(product);
     if (productId && compositeId) {
       const compositeIds = compositeIdsByProductId.get(productId) || [];
       if (!compositeIds.includes(compositeId)) compositeIdsByProductId.set(productId, [...compositeIds, compositeId]);
       const key = productCompositeKey(productId, compositeId);
-      if (!productsByProductAndCompositeId.has(key)) productsByProductAndCompositeId.set(key, product);
+      productsByProductAndCompositeId.set(key, [...(productsByProductAndCompositeId.get(key) || []), product]);
       const contextId = productContextId(product);
       if (contextId) {
         const contextKey = productCompositeContextKey(productId, compositeId, contextId);
@@ -567,24 +618,6 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
   const services = payload.atividades_json.filter((activity) => activity.tipo === "Servi\u00e7o").sort(compareServiceOrder);
   const anchored = payload.atividades_json.filter((activity) => activity.tipo === "Projeto" || activity.tipo === "Compra");
   const servicesById = new Map(services.map((service) => [service.id, service]));
-  const servicesByCompositeId = new Map<string, NormalizedActivity[]>();
-  for (const service of services) {
-    const serviceProductId = getActivityProductId(service);
-    const compositeIds = new Set(
-      orderedProducts
-        .filter((product) => serviceProductId && getProductId(product) === serviceProductId)
-        .map((product) => getCompositeProductId(product))
-        .filter((compositeId): compositeId is string => Boolean(compositeId))
-    );
-    if (!compositeIds.size) {
-      const compositeId = getCompositeProductId(productForActivityFrom(productsByProductId, fallbackProduct, service));
-      if (compositeId) compositeIds.add(compositeId);
-    }
-    for (const compositeId of compositeIds) {
-      const current = servicesByCompositeId.get(compositeId) || [];
-      if (!current.some((currentService) => currentService.id === service.id)) servicesByCompositeId.set(compositeId, [...current, service]);
-    }
-  }
   const ctx: PlacementContext = {
     payload,
     obraStart,
@@ -597,7 +630,9 @@ export function runScheduleEngine(payload: NormalizedSchedulePayload): EngineRes
     serviceStarts: new Map(),
     serviceEnds: new Map(),
     serviceCloneDates: new Map(),
-    servicesByCompositeId,
+    servicePlacements: [],
+    servicePlacementsById: new Map(),
+    servicePlacementsByCompositeId: new Map(),
     lines: [],
     lineExternalIndexCounters: new Map(),
     teamWeightByDay: new Map(),

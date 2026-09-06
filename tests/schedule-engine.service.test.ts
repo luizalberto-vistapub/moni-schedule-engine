@@ -107,7 +107,7 @@ describe("schedule engine", () => {
     });
   });
 
-  it("usa produto canonico quando o mesmo produto aparece em ordens diferentes", () => {
+  it("gera todos os contextos quando o mesmo produto aparece em ambientes diferentes", () => {
     const payloadBody = {
       obra_ambiente_json: [
         { id: "amb_a", nome: "Ambiente A" },
@@ -142,11 +142,64 @@ describe("schedule engine", () => {
     expect(forwardResult.lines.map((line) => line.atividade_obra_id_externo)).toEqual(
       reversedResult.lines.map((line) => line.atividade_obra_id_externo)
     );
-    expect(forwardResult.lines).toHaveLength(1);
-    expect(forwardResult.lines[0]).toMatchObject({
-      obraAmbienteProdutoId: "oap_a",
-      ambiente: "Ambiente A"
-    });
+    expect(forwardResult.lines.map((line) => ({
+      obraAmbienteProdutoId: line.obraAmbienteProdutoId,
+      ambiente: line.ambiente,
+      cloneIndex: line.clone_index
+    }))).toEqual([
+      { obraAmbienteProdutoId: "oap_a", ambiente: "Ambiente A", cloneIndex: 1 },
+      { obraAmbienteProdutoId: "oap_b", ambiente: "Ambiente B", cloneIndex: 1 },
+      { obraAmbienteProdutoId: "oap_b", ambiente: "Ambiente B", cloneIndex: 2 },
+      { obraAmbienteProdutoId: "oap_b", ambiente: "Ambiente B", cloneIndex: 3 }
+    ]);
+  });
+
+  it("preserva ambientes x item composicao distintos mesmo com id ambiente repetido", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [
+        {
+          "unique id": "amb_item_a",
+          "id ambiente": "amb_catalogo_repetido",
+          "nome ambiente": "Teste Cap 1",
+          "id ambiente x obra": "amb_obra_1"
+        },
+        {
+          "unique id": "amb_item_b",
+          "id ambiente": "amb_catalogo_repetido",
+          "nome ambiente": "Teste Cap 1",
+          "id ambiente x obra": "amb_obra_1"
+        }
+      ],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        {
+          "unique id": "servico_item_a",
+          "id ambiente item composicao": "amb_item_a",
+          "id ambiente x obra": "amb_obra_1",
+          "id produto composto": "comp_a",
+          "id produto simples": "prod_servico",
+          "nome produto simples": "Servico A"
+        },
+        {
+          "unique id": "servico_item_b",
+          "id ambiente item composicao": "amb_item_b",
+          "id ambiente x obra": "amb_obra_1",
+          "id produto composto": "comp_b",
+          "id produto simples": "prod_servico",
+          "nome produto simples": "Servico B"
+        }
+      ],
+      atividades_json: [
+        { id: "servico", nome: "Servico", tipo: "Servico", produto: "prod_servico", ordem: 1, duracao: 1 }
+      ]
+    }));
+
+    const result = runScheduleEngine(payload);
+
+    expect(result.lines.map((line) => line.ambienteItemComposicaoId).sort()).toEqual([
+      "amb_item_a",
+      "amb_item_b"
+    ]);
   });
 
   it("ignora o produto composto informado quando outro contexto do produto tem servico de menor ordem", () => {
@@ -1040,7 +1093,7 @@ describe("schedule engine", () => {
     });
   });
 
-  it("consolida compras repetidas no servico de menor ordem independentemente da ancora e da ordem do payload", () => {
+  it("gera compras por contexto e mantem ordem deterministica independentemente da ordem do payload", () => {
     const purchaseStages = [
       { suffix: "aviso", nome: "Aviso", etapaCompra: "Aviso de orçamento", diasAntecedencia: 30 },
       { suffix: "limite_orcamento", nome: "Limite orçamento", etapaCompra: "Limite de orçamento", diasAntecedencia: 28 },
@@ -1132,9 +1185,13 @@ describe("schedule engine", () => {
 
     expect(anchoredInLateComposite).toEqual([
       { atividadeId: "aviso_primeira", etapa: "AVISO_ORCAMENTO", ancora: "servico_ordem_1", data: "2026-04-04", produtoContextual: "compra_ordem_1" },
+      { atividadeId: "aviso_primeira", etapa: "AVISO_ORCAMENTO", ancora: "servico_ordem_5", data: "2026-04-05", produtoContextual: "compra_ordem_5" },
       { atividadeId: "limite_orcamento_primeira", etapa: "LIMITE_ORCAMENTO", ancora: "servico_ordem_1", data: "2026-04-06", produtoContextual: "compra_ordem_1" },
+      { atividadeId: "limite_orcamento_primeira", etapa: "LIMITE_ORCAMENTO", ancora: "servico_ordem_5", data: "2026-04-07", produtoContextual: "compra_ordem_5" },
       { atividadeId: "limite_compra_primeira", etapa: "LIMITE_COMPRA", ancora: "servico_ordem_1", data: "2026-04-20", produtoContextual: "compra_ordem_1" },
-      { atividadeId: "recebimento_primeira", etapa: "RECEBIMENTO", ancora: "servico_ordem_1", data: "2026-05-02", produtoContextual: "compra_ordem_1" }
+      { atividadeId: "limite_compra_primeira", etapa: "LIMITE_COMPRA", ancora: "servico_ordem_5", data: "2026-04-21", produtoContextual: "compra_ordem_5" },
+      { atividadeId: "recebimento_primeira", etapa: "RECEBIMENTO", ancora: "servico_ordem_1", data: "2026-05-02", produtoContextual: "compra_ordem_1" },
+      { atividadeId: "recebimento_primeira", etapa: "RECEBIMENTO", ancora: "servico_ordem_5", data: "2026-05-03", produtoContextual: "compra_ordem_5" }
     ]);
     expect(anchoredInEarlyCompositeAndReversed).toEqual(anchoredInLateComposite);
   });
