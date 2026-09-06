@@ -564,6 +564,68 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("maps service localAtuacao to the Bubble option-set slug in Atividade x Obra records", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }]
+    });
+
+    const [line] = lines;
+    const [record] = buildAtividadeObraRecords(payload, lines);
+
+    expect(line?.localAtuacao).toBe("Indoor");
+    expect(record).toMatchObject({
+      atividade: "serv_1",
+      localatuacao_option_os_localatua__o: "indoor"
+    });
+  });
+
+  it("omits Bubble localAtuacao option-set field when payload localAtuacao is blank", () => {
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      obra_ambiente_produto_json: [
+        { id: "serv_prod", ambienteId: "amb_1", produtoId: "prod_serv", produtoNome: "Servico", quantidade: 1, "id produto composto": "composto_1" },
+        { id: "compra_prod", ambienteId: "amb_1", produtoId: "prod_compra", produtoNome: "Compra", quantidade: 1, "id produto composto": "composto_1" }
+      ],
+      atividades_json: [
+        { id: "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_serv", ordem: 1, duracao: 1, localAtuacao: "" },
+        { id: "compra_1", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "composto_1", localAtuacao: "" },
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1", localAtuacao: "" }
+      ]
+    }));
+    const result = runScheduleEngine(payload);
+
+    const records = buildAtividadeObraRecords(payload, result.lines);
+
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ atividade: "serv_1" }),
+      expect.objectContaining({ atividade: "compra_1" }),
+      expect.objectContaining({ atividade: "projeto_1" })
+    ]));
+    expect(records.every((record) => !Object.prototype.hasOwnProperty.call(record, "localatuacao_option_os_localatua__o"))).toBe(true);
+  });
+
+  it("uses recalculate atividade_obra_json localAtuacao when present before falling back to catalog activity", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }],
+      atividade_obra_json: [{
+        atividade: "serv_1",
+        indice_clone: 1,
+        id_atividade_obra_externo: "serv_1_2026-05-04_1",
+        localAtuacao: "Outdoor"
+      }]
+    });
+
+    const [record] = buildAtividadeObraRecords(payload, lines);
+
+    expect(record).toMatchObject({
+      atividade: "serv_1",
+      localatuacao_option_os_localatua__o: "outdoor"
+    });
+    expect(record).not.toHaveProperty("localAtuacao");
+  });
+
   it("uses activity responsible when previous Atividade x Obra record has blank responsible", () => {
     const { payload, lines } = payloadWithOneLine({
       atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, responsavel: "Loja Moní" }],

@@ -24,6 +24,7 @@ export interface ScheduleLine {
   nomeFamilia: string | null;
   projetoId: string | null;
   tipoProjeto: string | null;
+  localAtuacao: string | null;
   diasAntecedencia: number | null;
   projetoResponsavel: string | null;
   projetoStatus: string | null;

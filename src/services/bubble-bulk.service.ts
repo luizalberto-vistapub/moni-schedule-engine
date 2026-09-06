@@ -10,6 +10,7 @@ const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
 const ATIVIDADE_OBRA_MASTER_FIELD = "Atividade x Obra Master";
+const LOCAL_ATUACAO_FIELD = "localatuacao_option_os_localatua__o";
 const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "responsavel",
   "responsavelFranqueado",
@@ -24,7 +25,8 @@ const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "dataExecu\u00e7\u00e3o",
   "dataAprovacao",
   "dataReprovacao",
-  "observacao"
+  "observacao",
+  "localAtuacao"
 ] as const;
 
 interface BubbleBulkConfig {
@@ -270,6 +272,18 @@ function atividadeObraNomeAtividade(line: ScheduleLine): string {
 function activityResponsibleFields(line: ScheduleLine): Record<string, unknown> {
   const responsavel = stringValue(recordValue(line.raw, "responsavel", "respons\u00e1vel"));
   return responsavel ? { responsavel } : {};
+}
+
+function localAtuacaoSlug(value: unknown): "indoor" | "outdoor" | null {
+  const normalized = stringValue(value)?.toLowerCase();
+  if (normalized === "indoor") return "indoor";
+  if (normalized === "outdoor") return "outdoor";
+  return null;
+}
+
+function atividadeObraLocalAtuacaoFields(line: ScheduleLine, previousFields: Record<string, unknown>): Record<string, unknown> {
+  const slug = localAtuacaoSlug(recordValue(previousFields, "localAtuacao") ?? line.localAtuacao);
+  return slug ? { [LOCAL_ATUACAO_FIELD]: slug } : {};
 }
 
 function numberValue(value: unknown): number {
@@ -651,6 +665,7 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
     const previousFields = previousFieldsByLine.get(activityLineEquivalentKey(line))
       || previousFieldsByLine.get(activityLineKey(line.atividadeId, line.clone_index))
       || {};
+    const { localAtuacao: _localAtuacao, ...bubblePreviousFields } = previousFields;
 
     return {
       copyDuracao: line.clone_index > 1,
@@ -684,8 +699,9 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "ambiente x obra": line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
       master: false,
-      ...previousFields,
+      ...bubblePreviousFields,
       ...activityResponsibleFields(line),
+      ...atividadeObraLocalAtuacaoFields(line, previousFields),
       valorRaiz: valorRaizForLine(line, values, copyCounts)
     };
   });

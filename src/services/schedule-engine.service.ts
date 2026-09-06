@@ -207,6 +207,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     nomeFamilia: activity.nomeFamilia,
     projetoId: activity.projetoId,
     tipoProjeto: activity.tipoProjeto,
+    localAtuacao: activity.localAtuacao,
     diasAntecedencia: activity.offsetDias ?? null,
     projetoResponsavel: activity.projetoResponsavel,
     projetoStatus: activity.projetoStatus,
