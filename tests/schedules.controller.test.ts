@@ -975,6 +975,20 @@ describe("schedule controllers", () => {
     expect(response.body.validations.errors.length).toBeGreaterThan(0);
   });
 
+  it("returns structured JSON when the request body is malformed JSON", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .set("Content-Type", "application/json")
+      .send("{\"mode\":\"recalculate\"}{");
+
+    expect(response.status).toBe(400);
+    expect(response.body.ok).toBe(false);
+    expect(response.body.metrics).toBeNull();
+    expect(response.body.error.code).toBe("INVALID_JSON_BODY");
+    expect(response.body.error.message).toBe("Invalid JSON request body");
+    expect(response.body.validations.errors).toEqual(["Invalid JSON request body"]);
+  });
+
   it("returns 500 when schedule calculation fails", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/generate")
