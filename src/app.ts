@@ -15,7 +15,7 @@ const jsonBodyErrorHandler: ErrorRequestHandler = (error, req, res, next) => {
   }
 
   const message = typedError.type === "entity.too.large"
-    ? "Request body exceeds the 10mb JSON limit"
+    ? "Request body exceeds the 25mb JSON limit"
     : "Invalid JSON request body";
 
   req.log?.warn({
@@ -31,7 +31,7 @@ export const app = express();
 
 app.use(requestLogger);
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "25mb" }));
 app.use(jsonBodyErrorHandler);
 
 app.use("/health", healthRoutes);
