@@ -47,6 +47,29 @@ describe("schedule controllers", () => {
     return String((call![1] as { body?: string }).body);
   }
 
+  async function waitForFetchCall(predicate: (call: unknown[]) => boolean): Promise<unknown[]> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+      const call = calls.find(predicate);
+      if (call) return call;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error("Expected fetch call was not made");
+  }
+
+  async function waitForWebhookCall(status: string): Promise<unknown[]> {
+    return waitForFetchCall(([url, init]) => {
+      const body = String((init as RequestInit | undefined)?.body || "");
+      return String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")
+        && body.includes(`"status":"${status}"`);
+    });
+  }
+
+  async function waitForWebhookBody(status: string): Promise<Record<string, unknown>> {
+    const call = await waitForWebhookCall(status);
+    return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
+  }
+
   it("returns health status", async () => {
     const response = await request(app).get("/health");
 
@@ -85,7 +108,7 @@ describe("schedule controllers", () => {
     expect(response.body.error.code).toBe("ROUTE_NOT_FOUND");
   });
 
-  it("generates a schedule response", async () => {
+  it("accepts a schedule job immediately", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/generate")
       .send(basePayload({
@@ -97,22 +120,24 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
-    expect(response.body.serverVersionId).toMatch(/^schedule_version_/);
-    expect(response.body.version.id).toBe(response.body.serverVersionId);
-    expect(response.body.metrics).toMatchObject({
-      linesCount: 3,
-      servicesCount: 1,
-      purchasesCount: 1,
-      projectsCount: 1
+    expect(response.body).toMatchObject({
+      status: "accepted",
+      cronograma_unique_id: "cronograma_test",
+      versao_cronograma_unique_id: "versao_1",
+      message: "Schedule recalculation accepted"
     });
-    expect(Date.parse(response.body.metrics.startedAt)).not.toBeNaN();
-    expect(Date.parse(response.body.metrics.finishedAt)).not.toBeNaN();
-    expect(typeof response.body.metrics.durationMs).toBe("number");
-    expect(response.body.validations).toEqual({ warnings: [], errors: [] });
-    expect(response.body.lines).toBeUndefined();
-    expect(response.body.cronograma).toBeUndefined();
+    expect(response.body.job_id).toMatch(/^schedule_job_/);
+    expect(response.body.metrics).toBeUndefined();
+    expect(response.body.validations).toBeUndefined();
+
+    const webhookCall = await waitForWebhookCall("done");
+    expect(webhookCall[0]).toBe("https://moni-29694.bubbleapps.io/version-test/api/1.1/wf/api_cronograma__webhook_v1");
+    expect((webhookCall[1] as RequestInit).headers).toMatchObject({
+      Authorization: "Bearer test_token",
+      "Content-Type": "application/json"
+    });
   });
 
   it("ignores recalculate events on generate mode", async () => {
@@ -125,7 +150,7 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     expect(JSON.parse(atividadeObraBody.split("\n")[0]!)).toMatchObject({
@@ -144,9 +169,10 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
-    expect(response.body.previous_version_id).toBe("versao_1");
+    expect(response.body.status).toBe("accepted");
+    expect(response.body.versao_cronograma_unique_id).toBe("versao_2");
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     expect(JSON.parse(atividadeObraBody.split("\n")[0]!)).toMatchObject({
@@ -173,7 +199,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -225,7 +251,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -281,7 +307,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -333,7 +359,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -407,7 +433,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -434,7 +460,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -460,7 +486,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -486,7 +512,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -511,7 +537,7 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
   });
 
   it("sorts recalculated paralysis lines with date and order ties", async () => {
@@ -533,7 +559,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -565,7 +591,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -603,7 +629,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -633,7 +659,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -708,7 +734,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -762,7 +788,7 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -808,7 +834,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
     expect(response.body.ok).toBe(true);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
@@ -847,7 +873,7 @@ describe("schedule controllers", () => {
         ]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
 
     const atividadeObraBody = persistedBulkBody("atividadexobra");
     const records = atividadeObraBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -989,15 +1015,21 @@ describe("schedule controllers", () => {
     expect(response.body.validations.errors).toEqual(["Invalid JSON request body"]);
   });
 
-  it("returns 500 when schedule calculation fails", async () => {
+  it("accepts and sends an error webhook when schedule calculation fails", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/generate")
       .send(basePayload({ obra_json: [{}], atividades_json: [] }));
 
-    expect(response.status).toBe(500);
-    expect(response.body.ok).toBe(false);
-    expect(response.body.metrics).toBeNull();
-    expect(response.body.error.code).toBe("SCHEDULE_ENGINE_ERROR");
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const webhookBody = await waitForWebhookBody("error");
+    expect(webhookBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "error",
+      error_code: "SCHEDULE_ENGINE_ERROR",
+      failed_step: "calculate"
+    });
   });
 
   it("uses route mode when request mode is empty", async () => {
@@ -1009,29 +1041,47 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
   });
 
-  it("returns 400 when Bubble ids required for bulk persistence are missing", async () => {
+  it("accepts and sends an error webhook when Bubble ids required for bulk persistence are missing", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/generate")
       .send(basePayload({
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(400);
-    expect(response.body.ok).toBe(false);
-    expect(response.body.metrics).toBeNull();
-    expect(response.body.error.code).toBe("BUBBLE_BULK_PAYLOAD_ERROR");
-    expect(response.body.validations.errors[0]).toContain("versao_cronograma_unique_id");
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const webhookBody = await waitForWebhookBody("error");
+    expect(webhookBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "error",
+      error_code: "BUBBLE_BULK_PAYLOAD_ERROR",
+      failed_step: "bulk_create"
+    });
+    expect(String(webhookBody.error_message)).toContain("versao_cronograma_unique_id");
   });
 
-  it("returns 502 when Bubble bulk persistence fails", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: false,
-      status: 401,
-      text: async () => "Unauthorized"
-    })));
+  it("accepts and sends an error webhook when Bubble bulk persistence fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/wf/api_cronograma__webhook_v1")) {
+        return { ok: true, status: 200, text: async () => "" };
+      }
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
+      return {
+        ok: false,
+        status: 401,
+        text: async () => "Unauthorized"
+      };
+    }));
 
     const response = await request(app)
       .post("/api/v1/schedules/generate")
@@ -1040,13 +1090,19 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(502);
-    expect(response.body.ok).toBe(false);
-    expect(response.body.metrics).toBeNull();
-    expect(response.body.error.code).toBe("BUBBLE_BULK_REQUEST_ERROR");
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const webhookBody = await waitForWebhookBody("error");
+    expect(webhookBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "error",
+      error_code: "BUBBLE_BULK_REQUEST_ERROR",
+      failed_step: "bulk_create"
+    });
   });
 
-  it("returns 500 when Bubble API token is not configured", async () => {
+  it("accepts and sends an error webhook when Bubble API token is not configured", async () => {
     delete process.env.BUBBLE_API_TOKEN;
 
     const response = await request(app)
@@ -1056,10 +1112,16 @@ describe("schedule controllers", () => {
         atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
       }));
 
-    expect(response.status).toBe(500);
-    expect(response.body.ok).toBe(false);
-    expect(response.body.metrics).toBeNull();
-    expect(response.body.error.code).toBe("BUBBLE_BULK_CONFIG_ERROR");
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const webhookBody = await waitForWebhookBody("error");
+    expect(webhookBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "error",
+      error_code: "BUBBLE_BULK_CONFIG_ERROR",
+      failed_step: "bulk_create"
+    });
   });
 
   it("builds Bubble bulk records for cronograma lines and atividade x obra", () => {
@@ -1115,3 +1177,4 @@ describe("schedule controllers", () => {
     });
   });
 });
+

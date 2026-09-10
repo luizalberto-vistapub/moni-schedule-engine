@@ -4,11 +4,13 @@ import { ZodError } from "zod";
 import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
 import { addBusinessDays } from "../services/business-days.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
-import { buildScheduleErrorResponse, buildScheduleResponse } from "../services/response-builder.service.js";
+import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
+import { sendScheduleWebhook, webhookBaseFields } from "../services/schedule-webhook.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
-import type { ScheduleMode, SchedulePayload } from "../types/payload.types.js";
+import type { NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
 import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
+import { makeId } from "../utils/ids.js";
 
 const RECALCULATE_EVENT_TYPES = new Set([
   "work_start_delayed",
@@ -37,6 +39,14 @@ function errorLogFields(error: unknown): Record<string, unknown> {
     errorName: typeof error,
     errorMessage: String(error)
   };
+}
+
+function scheduleErrorCode(error: unknown): string {
+  if (error instanceof BubbleBulkPayloadError) return "BUBBLE_BULK_PAYLOAD_ERROR";
+  if (error instanceof BubbleBulkConfigError) return "BUBBLE_BULK_CONFIG_ERROR";
+  if (error instanceof BubbleBulkRequestError) return "BUBBLE_BULK_REQUEST_ERROR";
+  if (error instanceof ZodError) return "INVALID_PAYLOAD";
+  return "SCHEDULE_ENGINE_ERROR";
 }
 
 function requestLog(req: ObservedRequest): Logger | undefined {
@@ -625,9 +635,91 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
   return { ...result, lines: refreshLineDependencies(payload, lines) };
 }
 
+async function processScheduleJob(
+  jobId: string,
+  payload: NormalizedSchedulePayload,
+  options: { requestId?: string | number | object; log?: Logger } = {}
+): Promise<void> {
+  const startedAt = new Date();
+  let failedStep = "calculate";
+  let lastProgress: { progress: 2 | 3 | 4; progress_percent: number } = { progress: 2, progress_percent: 0 };
+  const baseFields = webhookBaseFields(jobId, payload);
+
+  try {
+    const result = applyActivityDateChangeRecalculation(payload, applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload))));
+
+    options.log?.info({
+      requestId: options.requestId,
+      jobId,
+      cronogramaUniqueId: payload.cronograma_unique_id,
+      mode: payload.mode,
+      linesCount: result.lines.length,
+      warningsCount: result.validations.warnings.length,
+      errorsCount: result.validations.errors.length
+    }, "schedule job calculation finished");
+
+    failedStep = "bulk_create";
+    await persistScheduleBulks(payload, result.lines, {
+      requestId: options.requestId,
+      log: options.log,
+      onStep: (step) => {
+        failedStep = step;
+      },
+      onProgress: async (progress) => {
+        lastProgress = {
+          progress: progress.progress,
+          progress_percent: progress.progress_percent
+        };
+        await sendScheduleWebhook({
+          ...baseFields,
+          status: "processing",
+          ...progress
+        }, options);
+      }
+    });
+
+    failedStep = "finalizing";
+    const durationMs = new Date().getTime() - startedAt.getTime();
+    await sendScheduleWebhook({
+      ...baseFields,
+      status: "done",
+      progress: 4,
+      progress_percent: 100,
+      metrics: {
+        linesCount: result.lines.length,
+        durationMs
+      }
+    }, options);
+
+    options.log?.info({
+      requestId: options.requestId,
+      jobId,
+      cronogramaUniqueId: payload.cronograma_unique_id,
+      mode: payload.mode,
+      linesCount: result.lines.length,
+      durationMs
+    }, "schedule job finished");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected error";
+    options.log?.error({ requestId: options.requestId, jobId, failedStep, ...errorLogFields(error) }, "schedule job failed");
+    try {
+      await sendScheduleWebhook({
+        ...baseFields,
+        status: "error",
+        progress: lastProgress.progress,
+        progress_percent: lastProgress.progress_percent,
+        error_code: scheduleErrorCode(error),
+        error_message: message,
+        failed_step: failedStep
+      }, options);
+    } catch (webhookError) {
+      options.log?.error({ requestId: options.requestId, jobId, ...errorLogFields(webhookError) }, "schedule error webhook failed");
+    }
+  }
+}
+
 async function handleSchedule(req: ObservedRequest, res: Response, mode: ScheduleMode) {
   const log = requestLog(req);
-  const startedAt = new Date();
 
   try {
     const parsedPayload = payloadSchema.parse(req.body);
@@ -640,39 +732,21 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     validateRecalculateEventFields(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateContract(requestMode, parsedPayload);
     const payload = normalizePayload(applyRecalculateEvents({ ...parsedPayload, mode: requestMode }));
+    const jobId = makeId("schedule_job");
+    const acceptedResponse = buildScheduleAcceptedResponse(jobId, payload.cronograma_unique_id, versionId(payload));
 
     log?.info({
       requestId: req.id,
+      jobId,
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
       activitiesCount: payload.atividades_json.length,
       eventsCount: payload.events_json.length,
       oldEventsCount: payload.events_old.length
-    }, "schedule calculation started");
+    }, "schedule job accepted");
 
-    const result = applyActivityDateChangeRecalculation(payload, applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload))));
-    const response = buildScheduleResponse(result, startedAt, payload.previous_version_id || null);
-
-    log?.info({
-      requestId: req.id,
-      cronogramaUniqueId: payload.cronograma_unique_id,
-      mode: payload.mode,
-      linesCount: response.metrics.linesCount,
-      durationMs: response.metrics.durationMs,
-      warningsCount: response.validations.warnings.length,
-      errorsCount: response.validations.errors.length
-    }, "schedule calculation finished");
-
-    await persistScheduleBulks(payload, result.lines, { requestId: req.id, log });
-
-    log?.info({
-      requestId: req.id,
-      cronogramaUniqueId: payload.cronograma_unique_id,
-      mode: payload.mode,
-      linesCount: result.lines.length
-    }, "schedule bulk persistence finished");
-
-    res.status(201).json(response);
+    res.status(202).json(acceptedResponse);
+    void processScheduleJob(jobId, payload, { requestId: req.id, log });
   } catch (error) {
     if (error instanceof ZodError) {
       log?.warn({ requestId: req.id, issues: error.issues, ...errorLogFields(error) }, "schedule payload validation failed");

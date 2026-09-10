@@ -1,4 +1,4 @@
-import type { ScheduleErrorResponse, ScheduleSuccessResponse } from "../types/response.types.js";
+import type { ScheduleAcceptedResponse, ScheduleErrorResponse, ScheduleSuccessResponse } from "../types/response.types.js";
 import type { EngineResult } from "../types/schedule.types.js";
 import { makeId } from "../utils/ids.js";
 
@@ -22,6 +22,21 @@ export function buildScheduleResponse(result: EngineResult, startedAt: Date, pre
       durationMs: finishedAt.getTime() - startedAt.getTime()
     },
     validations: result.validations
+  };
+}
+
+export function buildScheduleAcceptedResponse(
+  jobId: string,
+  cronogramaUniqueId: string,
+  versaoCronogramaUniqueId: string
+): ScheduleAcceptedResponse {
+  return {
+    ok: true,
+    status: "accepted",
+    job_id: jobId,
+    cronograma_unique_id: cronogramaUniqueId,
+    versao_cronograma_unique_id: versaoCronogramaUniqueId,
+    message: "Schedule recalculation accepted"
   };
 }
 

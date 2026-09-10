@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { NormalizedSchedulePayload, ObraAmbientePayload, ObraAmbienteProdutoPayload, ObraPayload } from "../types/payload.types.js";
 import type { ScheduleLine } from "../types/schedule.types.js";
+import type { ScheduleJobProgress } from "./schedule-webhook.service.js";
 
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
@@ -42,6 +43,19 @@ interface BubbleBulkConfig {
 interface PersistScheduleOptions {
   requestId?: string | number | object;
   log?: Logger;
+  onProgress?: (progress: {
+    progress: ScheduleJobProgress;
+    progress_percent: number;
+    message: string;
+  }) => void | Promise<void>;
+  onStep?: (step: "bulk_create" | "patch_dependencies") => void;
+  phase2Progress?: PersistencePhaseProgress;
+  phase3Progress?: PersistencePhaseProgress;
+}
+
+interface PersistencePhaseProgress {
+  completed: number;
+  report: (completed: number) => Promise<void>;
 }
 
 interface PersistedBulkRecord {
@@ -475,6 +489,36 @@ function chunks<T>(items: T[], size: number): T[][] {
     result.push(items.slice(index, index + size));
   }
   return result;
+}
+
+function createProgressReporter(
+  options: PersistScheduleOptions,
+  progress: ScheduleJobProgress,
+  total: number,
+  message: string
+): (completed: number) => Promise<void> {
+  let lastPercent = 0;
+
+  return async (completed: number) => {
+    if (!options.onProgress || total <= 0) return;
+
+    const percent = Math.min(100, Math.floor((completed / total) * 100));
+    const roundedPercent = Math.floor(percent / 10) * 10;
+    if (roundedPercent <= lastPercent) return;
+
+    lastPercent = roundedPercent;
+    await options.onProgress({
+      progress,
+      progress_percent: roundedPercent,
+      message
+    });
+  };
+}
+
+async function reportPersistenceProgress(progress: PersistencePhaseProgress | undefined, completedCount: number): Promise<void> {
+  if (!progress || completedCount <= 0) return;
+  progress.completed += completedCount;
+  await progress.report(progress.completed);
 }
 
 function assertBulkBodySucceeded(typeName: string, responseText: string): void {
@@ -938,6 +982,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
           assertBulkBodySucceeded(typeName, retryResponseText);
           const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
           persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
+          await reportPersistenceProgress(options.phase2Progress, batch.length);
           options.log?.info({
             requestId: options.requestId,
             typeName,
@@ -963,6 +1008,7 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
     assertBulkBodySucceeded(typeName, responseText);
     const createdIds = parseBulkCreatedIds(responseText, batch.length);
     persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
+    await reportPersistenceProgress(options.phase2Progress, batch.length);
 
     options.log?.info({
       requestId: options.requestId,
@@ -1017,6 +1063,7 @@ async function patchExistingAtividadeObraRecords(
         const retryResponseText = await retryResponse.text();
         if (retryResponse.ok) {
           persistedRecords.push({ record: update.record, bubbleId: update.id });
+          await reportPersistenceProgress(options.phase2Progress, 1);
           options.log?.info({
             requestId: options.requestId,
             typeName: config.atividadeObraType,
@@ -1049,6 +1096,7 @@ async function patchExistingAtividadeObraRecords(
     }
 
     persistedRecords.push({ record: update.record, bubbleId: update.id });
+    await reportPersistenceProgress(options.phase2Progress, 1);
     options.log?.info({
       requestId: options.requestId,
       typeName: config.atividadeObraType,
@@ -1136,6 +1184,7 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
       url,
       patchIndex: index
     }, "atividade obra dependency patch persisted");
+    await reportPersistenceProgress(options.phase3Progress, 1);
   }
 }
 
@@ -1188,13 +1237,30 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`, invalidFields);
   }
 
-  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, config, options);
+  options.onStep?.("bulk_create");
+  const phase2Options: PersistScheduleOptions = {
+    ...options,
+    phase2Progress: {
+      completed: 0,
+      report: createProgressReporter(options, 2, atividadeObraRecords.length + eventoCronogramaRecords.length, "Criando registros em bulk")
+    }
+  };
+
+  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, config, phase2Options);
   if (eventoCronogramaRecords.length) {
-    await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, options);
+    await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, phase2Options);
   }
   const postPersistPatches = mergeAtividadeObraPatches([
     ...buildAtividadeObraDependencyPatches(lines, persistedAtividadeObraRecords),
     ...buildAtividadeObraMasterPatches(lines, persistedAtividadeObraRecords)
   ]);
-  await patchAtividadeObraDependencies(postPersistPatches, config, options);
+  const phase3Options: PersistScheduleOptions = {
+    ...options,
+    phase3Progress: {
+      completed: 0,
+      report: createProgressReporter(options, 3, postPersistPatches.length, "Atualizando vínculos/dependências")
+    }
+  };
+  options.onStep?.("patch_dependencies");
+  await patchAtividadeObraDependencies(postPersistPatches, config, phase3Options);
 }

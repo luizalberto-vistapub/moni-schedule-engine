@@ -22,6 +22,15 @@ export interface ScheduleSuccessResponse {
   validations: ScheduleValidations;
 }
 
+export interface ScheduleAcceptedResponse {
+  ok: true;
+  status: "accepted";
+  job_id: string;
+  cronograma_unique_id: string;
+  versao_cronograma_unique_id: string;
+  message: "Schedule recalculation accepted";
+}
+
 export interface ScheduleErrorResponse {
   ok: false;
   serverVersionId: null;

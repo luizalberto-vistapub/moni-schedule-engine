@@ -100,6 +100,31 @@ describe("Bubble bulk persistence", () => {
     expect(Array.isArray(JSON.parse(String(bulkCall?.[1]?.body)))).toBe(false);
   });
 
+  it("reports phase 2 and phase 3 persistence progress in 10 percent increments", async () => {
+    const fetchMock = successfulBubbleFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const activities = Array.from({ length: 10 }, (_, index) => ({
+      id: `serv_${index + 1}`,
+      nome: `Servico ${index + 1}`,
+      tipo: "Servico",
+      ordem: index + 1,
+      duracao: 1
+    }));
+    const { payload, lines } = payloadWithOneLine({ atividades_json: activities });
+    const progressEvents: Array<{ progress: number; progress_percent: number; message: string }> = [];
+
+    await persistScheduleBulks(payload, lines, {
+      onProgress: (progress) => {
+        progressEvents.push(progress);
+      }
+    });
+
+    expect(progressEvents.filter((event) => event.progress === 2).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(progressEvents.filter((event) => event.progress === 3).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(progressEvents.find((event) => event.progress === 2)?.message).toBe("Criando registros em bulk");
+    expect(progressEvents.find((event) => event.progress === 3)?.message).toBe("Atualizando vínculos/dependências");
+  });
+
   it("uses Bubble API version from the request body", async () => {
     const fetchMock = successfulBubbleFetchMock();
     vi.stubGlobal("fetch", fetchMock);
