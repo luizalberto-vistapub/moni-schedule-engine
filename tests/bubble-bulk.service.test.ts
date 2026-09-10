@@ -100,6 +100,31 @@ describe("Bubble bulk persistence", () => {
     expect(Array.isArray(JSON.parse(String(bulkCall?.[1]?.body)))).toBe(false);
   });
 
+  it("reports phase 2 and phase 3 persistence progress in 10 percent increments", async () => {
+    const fetchMock = successfulBubbleFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const activities = Array.from({ length: 10 }, (_, index) => ({
+      id: `serv_${index + 1}`,
+      nome: `Servico ${index + 1}`,
+      tipo: "Servico",
+      ordem: index + 1,
+      duracao: 1
+    }));
+    const { payload, lines } = payloadWithOneLine({ atividades_json: activities });
+    const progressEvents: Array<{ progress: number; progress_percent: number; message: string }> = [];
+
+    await persistScheduleBulks(payload, lines, {
+      onProgress: (progress) => {
+        progressEvents.push(progress);
+      }
+    });
+
+    expect(progressEvents.filter((event) => event.progress === 2).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(progressEvents.filter((event) => event.progress === 3).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(progressEvents.find((event) => event.progress === 2)?.message).toBe("Criando registros em bulk");
+    expect(progressEvents.find((event) => event.progress === 3)?.message).toBe("Atualizando vínculos/dependências");
+  });
+
   it("uses Bubble API version from the request body", async () => {
     const fetchMock = successfulBubbleFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -294,6 +319,47 @@ describe("Bubble bulk persistence", () => {
       requestId: "req_retry",
       statusCode: 400
     }), "retrying atividade obra bulk without ambiente x obra reference");
+  });
+
+  it("retries Atividade x Obra without local atuacao when Bubble rejects the field", async () => {
+    const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
+    let atividadeObraPostAttempts = 0;
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      if (_init?.method === "GET") return atividadeObraLookupResponse();
+      if (_init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      atividadeObraPostAttempts += 1;
+      if (atividadeObraPostAttempts === 1) {
+        return {
+          ok: false,
+          status: 400,
+          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Unrecognized field: localatuacao_option_os_localatua__o\"}\n"
+        };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => "{\"id\":\"bubble_retry_1\"}\n"
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }]
+    });
+
+    await persistScheduleBulks(payload, lines, { requestId: "req_local_atuacao_retry", log });
+
+    const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"localatuacao_option_os_localatua__o\"");
+    expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"localatuacao_option_os_localatua__o\"");
+    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_local_atuacao_retry",
+      statusCode: 400
+    }), "retrying atividade obra bulk without local atuacao field");
   });
 
   it("updates existing Atividade x Obra records by external id instead of creating duplicates", async () => {

@@ -56,7 +56,9 @@ SWAGGER_BRANCH=codex/bubble-bulk-persistence
 SWAGGER_ENVIRONMENT=Development
 ```
 
-Sem `BUBBLE_API_TOKEN`, o servidor retorna erro de configuracao e nao responde `201`, porque `201 Created` so deve acontecer depois da persistencia no Bubble.
+Sem `BUBBLE_API_TOKEN`, o servidor aceita o job quando o payload inicial e valido, mas envia webhook final com `status: "error"` e `error_code: "BUBBLE_BULK_CONFIG_ERROR"`.
+
+Quando `BUBBLE_SCHEDULE_WEBHOOK_URL` nao estiver definido, o webhook usa `BUBBLE_API_BASE_URL` e a `bubble_api_version` do payload. Use `BUBBLE_SCHEDULE_WEBHOOK_URL` apenas para forcar uma URL especifica.
 
 `SWAGGER_BRANCH` e `SWAGGER_ENVIRONMENT` sao opcionais, mas devem ser configuradas no Render para deixar a documentacao distinta por ambiente. Use `main` / `Live` no servico de producao e `codex/bubble-bulk-persistence` / `Development` no servico de desenvolvimento.
 
@@ -167,9 +169,73 @@ O payload precisa incluir o `unique id` da `VersaoCronograma` em `versao_cronogr
 
 ## Recalcular Cronograma
 
-`POST /api/v1/schedules/recalculate` recalcula o cronograma completo e persiste os novos registros por bulk create, usando `versao_cronograma_unique_id` como a nova `VersaoCronograma`. O payload tambem deve enviar `previous_version_id` com a versao anterior; os dois ids precisam ser diferentes.
+`POST /api/v1/schedules/recalculate` aceita um job assincrono de recalculo, usando `versao_cronograma_unique_id` como a nova `VersaoCronograma`. O payload tambem deve enviar `previous_version_id` com a versao anterior; os dois ids precisam ser diferentes.
 
-O servidor so responde `ok: true` depois que os bulks de `cronogramalinha`, `atividadexobra` e, quando houver eventos ativos, `eventocronograma` terminam com sucesso. No Bubble, apague os registros antigos apenas depois desse `ok: true`.
+Quando o payload inicial e valido, o servidor responde imediatamente `202 Accepted` com `job_id` antes da persistencia pesada. O Bubble deve gravar esse `job_id` na Versao do Cronograma e aguardar webhook final `done` antes de apagar registros antigos ou liberar a tela.
+
+Resposta de aceite:
+
+```json
+{
+  "ok": true,
+  "status": "accepted",
+  "job_id": "schedule_job_...",
+  "cronograma_unique_id": "...",
+  "versao_cronograma_unique_id": "...",
+  "message": "Schedule recalculation accepted"
+}
+```
+
+Webhooks intermediarios usam `status: "processing"` e atualizam progresso visual:
+
+```json
+{
+  "job_id": "schedule_job_...",
+  "status": "processing",
+  "progress": 2,
+  "progress_percent": 30,
+  "message": "Criando registros em bulk"
+}
+```
+
+Regras de progresso:
+
+```yaml
+progress 2: bulk create, enviar 10% em 10%
+progress 3: vinculos/dependencias, enviar 10% em 10%
+progress 4: finalizando, enviar 100% somente
+```
+
+Webhook final de sucesso:
+
+```json
+{
+  "job_id": "schedule_job_...",
+  "status": "done",
+  "progress": 4,
+  "progress_percent": 100,
+  "cronograma_unique_id": "...",
+  "versao_cronograma_unique_id": "...",
+  "previous_version_id": "...",
+  "metrics": { "linesCount": 4676, "durationMs": 123456 }
+}
+```
+
+Webhook final de erro:
+
+```json
+{
+  "job_id": "schedule_job_...",
+  "status": "error",
+  "progress": 3,
+  "progress_percent": 60,
+  "error_code": "BUBBLE_BULK_REQUEST_ERROR",
+  "error_message": "...",
+  "failed_step": "patch_dependencies"
+}
+```
+
+O Bubble usa guardrail de 10 minutos: se o webhook final nao chegar nesse prazo, encerra a versao como falha `EXECUCAO_DEFEITUOSA`.
 
 Para recalculos sucessivos, envie:
 
@@ -495,11 +561,11 @@ Se faltar qualquer item abaixo, a persistencia falha:
 - `versao_cronograma_unique_id` ou alias equivalente
 - `obra_json[0].unique id` ou `id`
 
-Retornos esperados:
+Erros de payload inicial continuam sendo retornados imediatamente sem `job_id`. Erros de calculo ou persistencia depois do aceite sao enviados no webhook final:
 
-- erro de configuracao: `500 BUBBLE_BULK_CONFIG_ERROR`
-- erro de payload para bulk: `400 BUBBLE_BULK_PAYLOAD_ERROR`
-- erro de chamada Bubble: `502 BUBBLE_BULK_REQUEST_ERROR`
+- erro de configuracao: `BUBBLE_BULK_CONFIG_ERROR`
+- erro de payload para bulk: `BUBBLE_BULK_PAYLOAD_ERROR`
+- erro de chamada Bubble: `BUBBLE_BULK_REQUEST_ERROR`
 
 ### Regras De `Atividade x Obra`
 
