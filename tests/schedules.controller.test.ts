@@ -138,6 +138,18 @@ describe("schedule controllers", () => {
       Authorization: "Bearer test_token",
       "Content-Type": "application/json"
     });
+    const webhookBody = JSON.parse(String((webhookCall[1] as RequestInit).body)) as Record<string, unknown>;
+    expect(webhookBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "done",
+      progress: 4,
+      progress_percent: 100,
+      cronograma_unique_id: "cronograma_test",
+      versao_cronograma_unique_id: "versao_1",
+      previous_version_id: null
+    });
+    expect(webhookBody.metrics).toMatchObject({ linesCount: 3 });
+    expect(typeof (webhookBody.metrics as { durationMs?: unknown }).durationMs).toBe("number");
   });
 
   it("ignores recalculate events on generate mode", async () => {
@@ -896,6 +908,7 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(400);
     expect(response.body.ok).toBe(false);
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.validations.errors).toContain("versao_cronograma_unique_id must be different from previous_version_id for recalculate");
   });
 
@@ -911,6 +924,7 @@ describe("schedule controllers", () => {
       }));
 
     expect(response.status).toBe(400);
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.validations.errors).toEqual(expect.arrayContaining([
       "versao_cronograma_unique_id is required for recalculate and must be the new version id",
       "previous_version_id is required for recalculate"
@@ -932,6 +946,7 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.validations.errors).toContain("events_json items must include a non-empty type when mode is recalculate");
   });
 
@@ -950,6 +965,7 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.job_id).toBeUndefined();
   });
 
   it("validates unsupported recalculate event types", async () => {
@@ -967,6 +983,7 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.validations.errors).toContain("Unsupported recalculate event type: activity_duration_changed");
   });
 
@@ -985,6 +1002,7 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.error.message).toBe("work_start_delayed events must include new_start_date");
     expect(response.body.error_message).toBe("work_start_delayed events must include new_start_date");
     expect(response.body.message).toBe("work_start_delayed events must include new_start_date");
@@ -998,6 +1016,7 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.validations.errors.length).toBeGreaterThan(0);
   });
 
@@ -1011,6 +1030,7 @@ describe("schedule controllers", () => {
     expect(response.body.ok).toBe(false);
     expect(response.body.metrics).toBeNull();
     expect(response.body.error.code).toBe("INVALID_JSON_BODY");
+    expect(response.body.job_id).toBeUndefined();
     expect(response.body.error.message).toBe("Invalid JSON request body");
     expect(response.body.validations.errors).toEqual(["Invalid JSON request body"]);
   });
@@ -1028,6 +1048,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "SCHEDULE_ENGINE_ERROR",
+      error_message: "obra_json[0].dataInicio e obrigatorio",
       failed_step: "calculate"
     });
   });
@@ -1059,6 +1080,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "BUBBLE_BULK_PAYLOAD_ERROR",
+      error_message: "Missing required Bubble id(s): versao_cronograma_unique_id",
       failed_step: "bulk_create"
     });
     expect(String(webhookBody.error_message)).toContain("versao_cronograma_unique_id");
@@ -1098,6 +1120,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "BUBBLE_BULK_REQUEST_ERROR",
+      error_message: "Bubble bulk atividadexobra failed with 401: Unauthorized",
       failed_step: "bulk_create"
     });
   });
@@ -1120,6 +1143,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "BUBBLE_BULK_CONFIG_ERROR",
+      error_message: "BUBBLE_API_TOKEN is required to persist schedule bulks",
       failed_step: "bulk_create"
     });
   });
