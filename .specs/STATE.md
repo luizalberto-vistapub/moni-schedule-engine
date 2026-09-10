@@ -58,14 +58,46 @@
 - **Date**: 2026-08-21
 - **Status**: active
 
+### AD-008
+- **Decision**: Schedule generation and recalculation endpoints must return HTTP 202 with `job_id` after synchronous payload validation, then continue processing asynchronously and report completion by webhook.
+- **Reason**: Bubble API Connector calls can time out on long schedule jobs; the app needs a quick accepted response while the screen remains locked by the recorded job state.
+- **Trade-off**: The Bubble app must track job state and handle delayed or repeated webhooks instead of relying on the original POST response for final success/failure.
+- **Scope**: `POST /api/v1/schedules/generate`, `POST /api/v1/schedules/recalculate`, response contract, Bubble workflow integration.
+- **Date**: 2026-09-10
+- **Status**: active
+
+### AD-009
+- **Decision**: Schedule job progress is reported by intermediate webhooks using `status: "processing"`, with final webhooks restricted to `status: "done"` or `status: "error"`.
+- **Reason**: Bubble uses processing webhooks only to update the locked-screen progress UI, while final webhooks close the job lifecycle.
+- **Trade-off**: Consumers must distinguish lifecycle status from progress stage and ignore non-final `processing` updates for completion logic.
+- **Scope**: Schedule webhook payloads and Bubble progress UI.
+- **Date**: 2026-09-10
+- **Status**: active
+
+### AD-010
+- **Decision**: Webhook URLs must be derived from the same Bubble API version sent in the payload unless `BUBBLE_SCHEDULE_WEBHOOK_URL` explicitly overrides it.
+- **Reason**: A fixed `version-test` webhook URL returned 404 when the real test branch payload used `version-63jmi`, even though Data API bulk calls targeted the correct version.
+- **Trade-off**: Payloads must keep carrying the correct `bubble_api_version`; manual URL override should be reserved for exceptional deployments.
+- **Scope**: `src/services/schedule-webhook.service.ts` and Bubble environment routing.
+- **Date**: 2026-09-10
+- **Status**: active
+
+### AD-011
+- **Decision**: Optional Bubble fields rejected as unrecognized by the Data API may be retried without that field when the omission preserves the core schedule record.
+- **Reason**: `localatuacao_option_os_localatua__o` was rejected by Bubble in Atividade x Obra bulk writes; failing the full job for that optional field blocked schedule creation.
+- **Trade-off**: Optional metadata may be omitted in that environment until the Bubble field exists, but schedule persistence continues.
+- **Scope**: Bubble Atividade x Obra create/patch persistence and retry handling.
+- **Date**: 2026-09-10
+- **Status**: active
+
 ## Handoff
 
-- **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: Pause after branch sync and contract fixes; next chat should continue from commit `4fae4ec`.
-- **Completed**: fixed `ambiente x obra` source, preserved `sem_ambiente`, surfaced validation messages, created Atividade x Obra records on recalculation, deduped shared project lines by earliest service date, sent `familia`/`nomeFamilia`, returned project metadata and service anchors in bulk.
+- **Feature**: Async Bubble schedule job contract and webhook progress flow.
+- **Phase / Task**: Pause after merging test branch into `main`; current `main` head is merge commit `8cd1f8c`.
+- **Completed**: increased JSON body limit, added malformed JSON responses, implemented HTTP 202 accepted responses with `job_id`, moved schedule processing behind `setImmediate`, added progress/final webhooks, derived webhook URL from `bubble_api_version`, retried Atividade x Obra writes without rejected optional `localatuacao_option_os_localatua__o`, merged `codex/bubble-bulk-persistence` into `main`, verified `npm.cmd test` and `npm.cmd run build`.
 - **In-progress** (file:line): none.
-- **Next step**: Validate the next real Bubble payload after Bubble starts sending direct project identity fields (`projetoId`, `tipoProjeto`, responsible/status) and confirm the created Atividade x Obra records receive those values.
-- **Blockers**: none in the engine; Bubble payload `bb9a4c20...` still had some direct project metadata absent, so empty fields there are payload-driven.
-- **Uncommitted files**: `.specs/STATE.md`, `.specs/LESSONS.md`.
-- **Branch**: `codex/bubble-bulk-persistence` at `4fae4ec`, equal to `main`, `origin/main`, and `origin/codex/bubble-bulk-persistence` at the last check.
+- **Next step**: Start the next chat by deciding whether to push `main` to `origin/main` for production deploy, or first optimize Etapa 3 by reducing/parallelizing the 4,676 Atividade x Obra dependency/master patches seen in the large generate payload.
+- **Blockers**: none in code; `main` is intentionally ahead of `origin/main` and not pushed yet.
+- **Uncommitted files**: none.
+- **Branch**: `main` at `8cd1f8c`, ahead of `origin/main` by 4 commits; `codex/bubble-bulk-persistence` remains at `88ef609` and has already been merged.
 

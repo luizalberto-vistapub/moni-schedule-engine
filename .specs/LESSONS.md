@@ -29,3 +29,23 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Grounding**: Skill upload rejected a ZIP whose entries used backslash paths such as `agents\openai.yaml`.
 - **Scope**: Skill packaging and release artifacts.
 
+### L-006
+- **Lesson**: Route Bubble webhooks with the same Bubble version used by the Data API request.
+- **Grounding**: The schedule engine sent bulk writes to `version-63jmi` but webhooks to fixed `version-test`, causing Bubble to return `404 Workflow not found`.
+- **Scope**: Schedule webhooks and Bubble environment routing.
+
+### L-007
+- **Lesson**: Emit a progress webhook before a long persistence phase starts, not only after a successful batch finishes.
+- **Grounding**: A first Atividade x Obra bulk failure prevented any progress webhook from reaching Bubble before the error path.
+- **Scope**: Schedule job progress reporting.
+
+### L-008
+- **Lesson**: Treat rejected optional Bubble metadata fields as retryable omissions when the core record remains valid.
+- **Grounding**: Bubble rejected `localatuacao_option_os_localatua__o` as an unrecognized Atividade x Obra field; retrying without it preserves schedule creation.
+- **Scope**: Bubble bulk and idempotent patch persistence.
+
+### L-009
+- **Lesson**: New schedule creation can still require post-create relation patches when Bubble IDs are needed for self-references.
+- **Grounding**: A `generate` payload for a new obra produced 4,676 Atividade x Obra records and still needed Etapa 3 to patch master/dependency fields after IDs were returned by bulk create.
+- **Scope**: Schedule persistence flow and progress UI expectations.
+
