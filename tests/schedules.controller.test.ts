@@ -132,6 +132,15 @@ describe("schedule controllers", () => {
     expect(response.body.metrics).toBeUndefined();
     expect(response.body.validations).toBeUndefined();
 
+    const processingBody = await waitForWebhookBody("processing");
+    expect(processingBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "processing",
+      progress: 2,
+      progress_percent: 0,
+      message: "Criando registros em bulk"
+    });
+
     const webhookCall = await waitForWebhookCall("done");
     expect(webhookCall[0]).toBe("https://moni-29694.bubbleapps.io/version-test/api/1.1/wf/api_cronograma__webhook_v1");
     expect((webhookCall[1] as RequestInit).headers).toMatchObject({
@@ -150,6 +159,21 @@ describe("schedule controllers", () => {
     });
     expect(webhookBody.metrics).toMatchObject({ linesCount: 3 });
     expect(typeof (webhookBody.metrics as { durationMs?: unknown }).durationMs).toBe("number");
+  });
+
+  it("sends schedule webhooks to the Bubble API version from the payload", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        bubble_api_version: "version-63jmi",
+        versao_cronograma_unique_id: "versao_63jmi",
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(202);
+
+    const webhookCall = await waitForWebhookCall("done");
+    expect(webhookCall[0]).toBe("https://moni-29694.bubbleapps.io/version-63jmi/api/1.1/wf/api_cronograma__webhook_v1");
   });
 
   it("ignores recalculate events on generate mode", async () => {

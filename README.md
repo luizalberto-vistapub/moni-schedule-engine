@@ -48,7 +48,6 @@ PORT=3000
 NODE_ENV=development
 BUBBLE_API_TOKEN=seu_token
 BUBBLE_API_BASE_URL=https://moni-29694.bubbleapps.io
-BUBBLE_SCHEDULE_WEBHOOK_URL=https://moni-29694.bubbleapps.io/version-test/api/1.1/wf/api_cronograma__webhook_v1
 BUBBLE_BULK_BATCH_SIZE=500
 BUBBLE_CRONOGRAMA_LINHA_TYPE=cronogramalinha
 BUBBLE_ATIVIDADE_OBRA_TYPE=atividadexobra
@@ -58,6 +57,8 @@ SWAGGER_ENVIRONMENT=Development
 ```
 
 Sem `BUBBLE_API_TOKEN`, o servidor aceita o job quando o payload inicial e valido, mas envia webhook final com `status: "error"` e `error_code: "BUBBLE_BULK_CONFIG_ERROR"`.
+
+Quando `BUBBLE_SCHEDULE_WEBHOOK_URL` nao estiver definido, o webhook usa `BUBBLE_API_BASE_URL` e a `bubble_api_version` do payload. Use `BUBBLE_SCHEDULE_WEBHOOK_URL` apenas para forcar uma URL especifica.
 
 `SWAGGER_BRANCH` e `SWAGGER_ENVIRONMENT` sao opcionais, mas devem ser configuradas no Render para deixar a documentacao distinta por ambiente. Use `main` / `Live` no servico de producao e `codex/bubble-bulk-persistence` / `Development` no servico de desenvolvimento.
 

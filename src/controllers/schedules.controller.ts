@@ -5,7 +5,7 @@ import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, 
 import { addBusinessDays } from "../services/business-days.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
-import { sendScheduleWebhook, webhookBaseFields } from "../services/schedule-webhook.service.js";
+import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
@@ -644,6 +644,7 @@ async function processScheduleJob(
   let failedStep = "calculate";
   let lastProgress: { progress: 2 | 3 | 4; progress_percent: number } = { progress: 2, progress_percent: 0 };
   const baseFields = webhookBaseFields(jobId, payload);
+  const webhookOptions = { ...options, bubbleApiVersion: webhookBubbleApiVersion(payload) };
 
   try {
     const result = applyActivityDateChangeRecalculation(payload, applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload))));
@@ -659,6 +660,14 @@ async function processScheduleJob(
     }, "schedule job calculation finished");
 
     failedStep = "bulk_create";
+    await sendScheduleWebhook({
+      ...baseFields,
+      status: "processing",
+      progress: 2,
+      progress_percent: 0,
+      message: "Criando registros em bulk"
+    }, webhookOptions);
+
     await persistScheduleBulks(payload, result.lines, {
       requestId: options.requestId,
       log: options.log,
@@ -674,7 +683,7 @@ async function processScheduleJob(
           ...baseFields,
           status: "processing",
           ...progress
-        }, options);
+        }, webhookOptions);
       }
     });
 
@@ -689,7 +698,7 @@ async function processScheduleJob(
         linesCount: result.lines.length,
         durationMs
       }
-    }, options);
+    }, webhookOptions);
 
     options.log?.info({
       requestId: options.requestId,
@@ -711,7 +720,7 @@ async function processScheduleJob(
         error_code: scheduleErrorCode(error),
         error_message: message,
         failed_step: failedStep
-      }, options);
+      }, webhookOptions);
     } catch (webhookError) {
       options.log?.error({ requestId: options.requestId, jobId, ...errorLogFields(webhookError) }, "schedule error webhook failed");
     }
@@ -746,7 +755,9 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }, "schedule job accepted");
 
     res.status(202).json(acceptedResponse);
-    void processScheduleJob(jobId, payload, { requestId: req.id, log });
+    setImmediate(() => {
+      void processScheduleJob(jobId, payload, { requestId: req.id, log });
+    });
   } catch (error) {
     if (error instanceof ZodError) {
       log?.warn({ requestId: req.id, issues: error.issues, ...errorLogFields(error) }, "schedule payload validation failed");

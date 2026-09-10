@@ -321,6 +321,47 @@ describe("Bubble bulk persistence", () => {
     }), "retrying atividade obra bulk without ambiente x obra reference");
   });
 
+  it("retries Atividade x Obra without local atuacao when Bubble rejects the field", async () => {
+    const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
+    let atividadeObraPostAttempts = 0;
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      if (_init?.method === "GET") return atividadeObraLookupResponse();
+      if (_init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      atividadeObraPostAttempts += 1;
+      if (atividadeObraPostAttempts === 1) {
+        return {
+          ok: false,
+          status: 400,
+          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Unrecognized field: localatuacao_option_os_localatua__o\"}\n"
+        };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => "{\"id\":\"bubble_retry_1\"}\n"
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }]
+    });
+
+    await persistScheduleBulks(payload, lines, { requestId: "req_local_atuacao_retry", log });
+
+    const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"localatuacao_option_os_localatua__o\"");
+    expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"localatuacao_option_os_localatua__o\"");
+    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_local_atuacao_retry",
+      statusCode: 400
+    }), "retrying atividade obra bulk without local atuacao field");
+  });
+
   it("updates existing Atividade x Obra records by external id instead of creating duplicates", async () => {
     const { payload, lines } = payloadWithOneLine();
     const externalId = lines[0]!.atividade_obra_id_externo;

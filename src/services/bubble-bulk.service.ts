@@ -569,6 +569,17 @@ function omitAmbienteXObra(records: Record<string, unknown>[]): Record<string, u
   });
 }
 
+function isUnrecognizedLocalAtuacaoField(responseText: string): boolean {
+  return responseText.includes(`Unrecognized field: ${LOCAL_ATUACAO_FIELD}`);
+}
+
+function omitLocalAtuacao(records: Record<string, unknown>[]): Record<string, unknown>[] {
+  return records.map((record) => {
+    const { [LOCAL_ATUACAO_FIELD]: _localAtuacao, ...rest } = record;
+    return rest;
+  });
+}
+
 function atividadeObraLookupUrl(config: BubbleBulkConfig, versionId: string, cursor: number): string {
   const constraints = encodeURIComponent(JSON.stringify([
     { key: "versaoCronograma", constraint_type: "equals", value: versionId }
@@ -994,6 +1005,57 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
         }
       }
 
+      if (
+        typeName === config.atividadeObraType
+        && isUnrecognizedLocalAtuacaoField(responseText)
+        && batch.some((record) => Object.prototype.hasOwnProperty.call(record, LOCAL_ATUACAO_FIELD))
+      ) {
+        options.log?.warn({
+          requestId: options.requestId,
+          typeName,
+          url,
+          batchIndex,
+          recordsCount: batch.length,
+          statusCode: response.status,
+          responseText
+        }, "retrying atividade obra bulk without local atuacao field");
+
+        const retryResponse = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "text/plain"
+          },
+          body: ndjson(omitLocalAtuacao(batch))
+        });
+        const retryResponseText = await retryResponse.text();
+        if (retryResponse.ok) {
+          assertBulkBodySucceeded(typeName, retryResponseText);
+          const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
+          persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
+          await reportPersistenceProgress(options.phase2Progress, batch.length);
+          options.log?.info({
+            requestId: options.requestId,
+            typeName,
+            url,
+            batchIndex,
+            recordsCount: batch.length
+          }, "bubble bulk batch persisted without local atuacao field");
+          continue;
+        }
+
+        options.log?.error({
+          requestId: options.requestId,
+          typeName,
+          url,
+          batchIndex,
+          recordsCount: batch.length,
+          statusCode: retryResponse.status,
+          responseText: retryResponseText
+        }, "bubble bulk batch failed");
+        throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${retryResponse.status}: ${retryResponseText}`);
+      }
+
       options.log?.error({
         requestId: options.requestId,
         typeName,
@@ -1070,6 +1132,43 @@ async function patchExistingAtividadeObraRecords(
             url,
             patchIndex: index
           }, "atividade obra idempotent patch persisted without ambiente x obra reference");
+          continue;
+        }
+
+        options.log?.error({
+          requestId: options.requestId,
+          typeName: config.atividadeObraType,
+          url,
+          patchIndex: index,
+          statusCode: retryResponse.status,
+          responseText: retryResponseText
+        }, "atividade obra idempotent patch failed");
+        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponseText}`);
+      }
+
+      if (
+        isUnrecognizedLocalAtuacaoField(responseText)
+        && Object.prototype.hasOwnProperty.call(update.record, LOCAL_ATUACAO_FIELD)
+      ) {
+        const retryRecord = omitLocalAtuacao([update.record])[0]!;
+        const retryResponse = await fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(retryRecord)
+        });
+        const retryResponseText = await retryResponse.text();
+        if (retryResponse.ok) {
+          persistedRecords.push({ record: update.record, bubbleId: update.id });
+          await reportPersistenceProgress(options.phase2Progress, 1);
+          options.log?.info({
+            requestId: options.requestId,
+            typeName: config.atividadeObraType,
+            url,
+            patchIndex: index
+          }, "atividade obra idempotent patch persisted without local atuacao field");
           continue;
         }
 
