@@ -1307,6 +1307,14 @@ function atividadeObraSnapshotByExternalId(payload: NormalizedSchedulePayload): 
   return recordsByExternalId;
 }
 
+function snapshotScopeRole(record: Record<string, unknown>): string {
+  return stringValue(recordValue(record, "scopeRole", "scope_role", "scope role")) || "";
+}
+
+function isScopeAnchor(record: Record<string, unknown>): boolean {
+  return snapshotScopeRole(record) === "anchor";
+}
+
 function snapshotBubbleId(record: Record<string, unknown>): string | null {
   return bubbleId(record);
 }
@@ -1360,6 +1368,7 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
   const updates = lines.flatMap((line) => {
     const snapshot = snapshotByExternalId.get(line.atividade_obra_id_externo);
     if (!snapshot) return [];
+    if (isScopeAnchor(snapshot)) return [];
     const id = snapshotBubbleId(snapshot);
     if (!id) return [];
     const record = buildAtividadeObraDatePatchFields(line, snapshot);

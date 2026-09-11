@@ -26,6 +26,7 @@ export interface ScheduleWebhookPayload {
   };
   error_code?: string;
   error_message?: string;
+  error_details?: unknown;
   failed_step?: string;
 }
 

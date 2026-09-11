@@ -42,6 +42,7 @@ function errorLogFields(error: unknown): Record<string, unknown> {
 }
 
 function scheduleErrorCode(error: unknown): string {
+  if (error instanceof ScopeInsufficientError) return "SCOPE_INSUFFICIENT";
   if (error instanceof BubbleBulkPayloadError) return "BUBBLE_BULK_PAYLOAD_ERROR";
   if (error instanceof BubbleBulkConfigError) return "BUBBLE_BULK_CONFIG_ERROR";
   if (error instanceof BubbleBulkRequestError) return "BUBBLE_BULK_REQUEST_ERROR";
@@ -89,6 +90,20 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
     if (record[key] !== undefined) return record[key];
   }
   return undefined;
+}
+
+class ScopeInsufficientError extends Error {
+  constructor(public readonly details: ScopeInsufficientDetails) {
+    super("Delta scope is missing required schedule lines");
+    this.name = "ScopeInsufficientError";
+  }
+}
+
+interface ScopeInsufficientDetails {
+  missingActivityIds: string[];
+  missingExternalIds: string[];
+  anchorWouldMoveIds: string[];
+  unsupportedEventTypes?: string[];
 }
 
 function zodIssuePath(path: Array<string | number>): string {
@@ -486,8 +501,25 @@ function movableSnapshotStatus(status: unknown): boolean {
   return !normalized || normalized === "nao iniciada" || normalized === "recalculada";
 }
 
+function scopeType(payload: SchedulePayload): string {
+  return normalizeText(field(payload.scope || {}, "tipo", "type"));
+}
+
+function isDeltaScope(payload: SchedulePayload): boolean {
+  return scopeType(payload) === "delta";
+}
+
+function snapshotScopeRole(record: Record<string, unknown>): string {
+  return normalizeText(field(record, "scopeRole", "scope_role", "scope role"));
+}
+
+function isSnapshotAnchor(record: Record<string, unknown>): boolean {
+  return snapshotScopeRole(record) === "anchor";
+}
+
 function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
   if (!isSnapshotRecalculate(payload)) return true;
+  if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
   return movableSnapshotStatus(field(line.raw, "status"));
 }
 
@@ -743,6 +775,100 @@ function activityDependencyClosureForRecalculate(payload: SchedulePayload, rootA
   return dependents;
 }
 
+function uniqueSorted(values: Iterable<string>): string[] {
+  return [...new Set([...values].filter(Boolean))].sort();
+}
+
+function validateDeltaScope(payload: SchedulePayload): void {
+  if (!isDeltaScope(payload)) return;
+
+  const details: ScopeInsufficientDetails = {
+    missingActivityIds: [],
+    missingExternalIds: [],
+    anchorWouldMoveIds: []
+  };
+  const unsupportedEventTypes = new Set<string>();
+
+  if (!isSnapshotRecalculate(payload)) {
+    throw new ScopeInsufficientError({
+      ...details,
+      unsupportedEventTypes: ["delta scope requires recalculate with estrutura_inalterada=true"]
+    });
+  }
+
+  const snapshot = atividadeObraSnapshot(payload);
+  const recordsByExternalId = new Map<string, Record<string, unknown>>();
+  const recordsByActivity = new Map<string, Record<string, unknown>[]>();
+  const editableActivityIds = new Set<string>();
+  const snapshotActivityIds = new Set<string>();
+  const snapshotExternalIds = new Set<string>();
+
+  for (const record of snapshot) {
+    const externalId = snapshotRecordExternalId(record);
+    const activityId = snapshotRecordActivityId(record);
+    if (externalId) {
+      recordsByExternalId.set(externalId, record);
+      snapshotExternalIds.add(externalId);
+    }
+    if (activityId) {
+      snapshotActivityIds.add(activityId);
+      recordsByActivity.set(activityId, [...(recordsByActivity.get(activityId) || []), record]);
+      if (!isSnapshotAnchor(record)) editableActivityIds.add(activityId);
+    }
+  }
+
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
+
+  for (const event of payload.events_json) {
+    const type = eventType(event);
+    if (type !== "activity_date_changed_cascade" && type !== "activity_date_changed_only") {
+      if (type) unsupportedEventTypes.add(type);
+      continue;
+    }
+
+    const activityId = activityStartEventActivityId(event);
+    const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+    const targetRecord = externalId ? recordsByExternalId.get(externalId) : undefined;
+    const targetIsEditable = targetRecord ? !isSnapshotAnchor(targetRecord) : false;
+
+    if (externalId && (!snapshotExternalIds.has(externalId) || !targetIsEditable)) details.missingExternalIds.push(externalId);
+    if (!activityId || !editableActivityIds.has(activityId)) details.missingActivityIds.push(activityId);
+
+    const affectedActivityIds = type === "activity_date_changed_cascade"
+      ? activityDependencyClosureForRecalculate(payload, activityId)
+      : new Set<string>([activityId]);
+
+    for (const affectedActivityId of affectedActivityIds) {
+      if (!affectedActivityId) continue;
+      if (!editableActivityIds.has(affectedActivityId)) details.missingActivityIds.push(affectedActivityId);
+
+      for (const record of recordsByActivity.get(affectedActivityId) || []) {
+        if (isSnapshotAnchor(record)) details.anchorWouldMoveIds.push(snapshotRecordExternalId(record));
+      }
+
+      for (const dependencyId of dependenciesByActivity.get(affectedActivityId) || []) {
+        if (!snapshotActivityIds.has(String(dependencyId))) details.missingActivityIds.push(String(dependencyId));
+      }
+    }
+  }
+
+  const normalizedDetails: ScopeInsufficientDetails = {
+    missingActivityIds: uniqueSorted(details.missingActivityIds),
+    missingExternalIds: uniqueSorted(details.missingExternalIds),
+    anchorWouldMoveIds: uniqueSorted(details.anchorWouldMoveIds)
+  };
+  if (unsupportedEventTypes.size) normalizedDetails.unsupportedEventTypes = uniqueSorted(unsupportedEventTypes);
+
+  if (
+    normalizedDetails.missingActivityIds.length
+    || normalizedDetails.missingExternalIds.length
+    || normalizedDetails.anchorWouldMoveIds.length
+    || normalizedDetails.unsupportedEventTypes?.length
+  ) {
+    throw new ScopeInsufficientError(normalizedDetails);
+  }
+}
+
 function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
   if (payload.mode !== "recalculate") return result;
 
@@ -976,6 +1102,8 @@ function applyWorkStartSnapshotRecalculation(payload: SchedulePayload, result: E
 }
 
 function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
+  validateDeltaScope(payload);
+
   const initialResult = isSnapshotRecalculate(payload)
     ? snapshotEngineResult(payload)
     : runScheduleEngine(payload);
@@ -1083,6 +1211,7 @@ async function processScheduleJob(
         progress_percent: lastProgress.progress_percent,
         error_code: scheduleErrorCode(error),
         error_message: message,
+        error_details: error instanceof ScopeInsufficientError ? error.details : undefined,
         failed_step: failedStep
       }, webhookOptions);
     } catch (webhookError) {

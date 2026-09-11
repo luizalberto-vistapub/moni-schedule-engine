@@ -105,6 +105,7 @@ export interface SchedulePayload {
   estrutura_inalterada?: boolean;
   estrutura_id?: string;
   structure_version_id?: string;
+  scope?: Record<string, unknown>;
   cronograma_unique_id: string;
   versao_cronograma_unique_id?: string;
   versao_cronograma_id?: string;

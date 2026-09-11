@@ -14,6 +14,7 @@ const payloadShape = {
   estrutura_inalterada: z.boolean().optional(),
   estrutura_id: z.string().optional(),
   structure_version_id: z.string().optional(),
+  scope: z.record(z.unknown()).optional(),
   cronograma_unique_id: z.string().min(1),
   mode: z.string().default("generate"),
   dias_trabalho_semana: z.union([z.literal(5), z.literal(6)]).default(5),

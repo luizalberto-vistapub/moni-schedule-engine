@@ -384,6 +384,13 @@ describe("schedule controllers", () => {
       versao_cronograma_unique_id: "versao_2",
       previous_version_id: "versao_1",
       mode: "recalculate",
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-06",
+        descendentes_count: 1,
+        ancoras_count: 0
+      },
       obra_ambiente_json: [],
       obra_ambiente_produto_json: [],
       obra_ambiente_item_composicao_json: [],
@@ -404,7 +411,8 @@ describe("schedule controllers", () => {
           quantidadeBase: null,
           dataInicioPrevista: "2026-05-04",
           dataFimPrevista: "2026-05-04",
-          status: "N\u00e3o iniciada"
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
         },
         {
           "unique id": "axo_2",
@@ -421,7 +429,8 @@ describe("schedule controllers", () => {
           quantidadeBase: null,
           dataInicioPrevista: "2026-05-05",
           dataFimPrevista: "2026-05-05",
-          status: ""
+          status: "",
+          scopeRole: "editable"
         }
       ],
       master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
@@ -464,6 +473,69 @@ describe("schedule controllers", () => {
       patchedCount: 2,
       eventCount: 0,
       dependencyPatchCount: 0
+    });
+  });
+
+  it("reports scope insufficient when delta dependencies are outside the snapshot", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_delta",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      scope: { tipo: "delta", atividade_alvo_id: "serv_1", nova_data: "2026-05-06" },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          duracaoVariavel: false,
+          quantidadeBase: null,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_1", deps: ["missing_anchor"] }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const errorBody = await waitForWebhookBody("error");
+    expect(errorBody).toMatchObject({
+      status: "error",
+      error_code: "SCOPE_INSUFFICIENT",
+      error_message: "Delta scope is missing required schedule lines",
+      failed_step: "calculate",
+      error_details: {
+        missingActivityIds: ["missing_anchor"],
+        missingExternalIds: [],
+        anchorWouldMoveIds: []
+      }
     });
   });
 
