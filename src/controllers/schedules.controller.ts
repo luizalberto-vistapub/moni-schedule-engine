@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
-import { ZodError } from "zod";
+import { ZodError, type ZodIssue } from "zod";
 import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches } from "../services/bubble-bulk.service.js";
 import { addBusinessDays } from "../services/business-days.service.js";
-import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
+import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
@@ -89,6 +89,30 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
     if (record[key] !== undefined) return record[key];
   }
   return undefined;
+}
+
+function zodIssuePath(path: Array<string | number>): string {
+  return path.reduce<string>((text, part) => {
+    if (typeof part === "number") return `${text}[${part}]`;
+    return text ? `${text}.${part}` : String(part);
+  }, "");
+}
+
+function zodIssueMessage(issue: ZodIssue): string {
+  const path = zodIssuePath(issue.path);
+  if (!path || issue.code === "custom") return issue.message;
+  return `${path}: ${issue.message}`;
+}
+
+function zodErrorDetails(error: ZodError): Record<string, unknown> {
+  return {
+    ...error.flatten(),
+    issues: error.issues.map((issue) => ({
+      code: issue.code,
+      path: issue.path,
+      message: issue.message
+    }))
+  };
 }
 
 function numberValue(value: unknown, fallback = 0): number {
@@ -1065,8 +1089,8 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
   const log = requestLog(req);
 
   try {
-    const parsedPayload = payloadSchema.parse(req.body);
     const requestMode = modeFromRequest(req, mode);
+    const parsedPayload = parseSchedulePayload(req.body, requestMode);
     validateRecalculateEvents(requestMode, parsedPayload.events_json);
     validateRecalculateEvents(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateEventTypes(requestMode, parsedPayload.events_json);
@@ -1096,7 +1120,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
   } catch (error) {
     if (error instanceof ZodError) {
       log?.warn({ requestId: req.id, issues: error.issues, ...errorLogFields(error) }, "schedule payload validation failed");
-      res.status(400).json(buildScheduleErrorResponse("Invalid payload", "INVALID_PAYLOAD", error.flatten(), error.issues.map((issue) => issue.message)));
+      res.status(400).json(buildScheduleErrorResponse("Invalid payload", "INVALID_PAYLOAD", zodErrorDetails(error), error.issues.map(zodIssueMessage)));
       return;
     }
 

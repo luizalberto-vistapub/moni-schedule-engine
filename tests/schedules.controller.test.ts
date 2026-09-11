@@ -433,6 +433,11 @@ describe("schedule controllers", () => {
       }]
     });
     delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).obra_ambiente_json;
+    delete (payload as unknown as Record<string, unknown>).obra_ambiente_produto_json;
+    delete (payload as unknown as Record<string, unknown>).obra_ambiente_item_composicao_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
 
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
@@ -1187,6 +1192,25 @@ describe("schedule controllers", () => {
     expect(response.body.error.code).toBe("INVALID_PAYLOAD");
     expect(response.body.job_id).toBeUndefined();
     expect(response.body.validations.errors.length).toBeGreaterThan(0);
+  });
+
+  it("includes Zod issue paths in validation error responses", async () => {
+    const payload = basePayload({
+      cronograma_unique_id: "cronograma_test",
+      mode: "generate",
+      atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(payload);
+
+    expect(response.status).toBe(400);
+    expect(response.body.validations.errors).toContain("obra_json: Required");
+    expect(response.body.error.details.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: ["obra_json"], message: "Required" })
+    ]));
   });
 
   it("returns structured JSON when the request body is malformed JSON", async () => {

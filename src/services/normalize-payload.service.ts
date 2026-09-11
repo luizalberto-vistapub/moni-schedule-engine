@@ -1,9 +1,15 @@
 import { z } from "zod";
-import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, PurchaseStage, SchedulePayload } from "../types/payload.types.js";
+import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, PurchaseStage, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 
 const recordArray = z.array(z.record(z.unknown())).default([]);
 
-export const payloadSchema = z.object({
+const payloadEnvelopeSchema = z.object({
+  payload_version: z.union([z.number(), z.string()]).optional(),
+  estrutura_inalterada: z.boolean().optional(),
+  mode: z.string().optional()
+}).passthrough();
+
+const payloadShape = {
   payload_version: z.union([z.number(), z.string()]).optional(),
   estrutura_inalterada: z.boolean().optional(),
   estrutura_id: z.string().optional(),
@@ -31,7 +37,29 @@ export const payloadSchema = z.object({
   master_anchors: recordArray,
   events_old: recordArray,
   events_json: recordArray
+};
+
+export const payloadSchema = z.object({
+  ...payloadShape,
+  obra_json: z.array(z.record(z.unknown())).min(1)
 }).passthrough() as unknown as z.ZodType<SchedulePayload>;
+
+const payloadV2SnapshotRecalculateSchema = z.object({
+  ...payloadShape,
+  obra_json: recordArray
+}).passthrough() as unknown as z.ZodType<SchedulePayload>;
+
+export function parseSchedulePayload(input: unknown, routeMode: ScheduleMode): SchedulePayload {
+  const envelope = payloadEnvelopeSchema.safeParse(input);
+  if (!envelope.success) return payloadSchema.parse(input);
+
+  const bodyMode = envelope.data.mode?.trim() || routeMode;
+  const isV2SnapshotRecalculate = String(envelope.data.payload_version) === "2"
+    && bodyMode === "recalculate"
+    && envelope.data.estrutura_inalterada === true;
+
+  return (isV2SnapshotRecalculate ? payloadV2SnapshotRecalculateSchema : payloadSchema).parse(input);
+}
 
 function normalizeActivityType(value: unknown): NormalizedActivity["tipo"] {
   const text = String(value || "")
