@@ -461,6 +461,32 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("accepts v2 snapshot recalculation probes without obra_json when there are no events", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "1-1-20260911000000",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      atividade_obra_snapshot: [],
+      master_dependencies: [],
+      master_anchors: [],
+      events_json: [],
+      events_old: []
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+  });
+
   it("does not move snapshot lines with started status", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

@@ -205,7 +205,7 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
       });
     }
 
-    if (!snapshot.length) {
+    if (!snapshot.length && activeRecalculateEvents(payload).length) {
       issues.push({
         code: "custom" as const,
         path: ["atividade_obra_snapshot"],
