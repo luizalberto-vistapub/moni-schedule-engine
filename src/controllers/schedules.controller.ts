@@ -218,13 +218,6 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
           message: "snapshot items must include dataInicioPrevista when estrutura_inalterada=true"
         });
       }
-      if (!stringValue(field(record, "status"))) {
-        issues.push({
-          code: "custom" as const,
-          path: ["atividade_obra_snapshot", index, "status"],
-          message: "snapshot items must include status when estrutura_inalterada=true"
-        });
-      }
     });
   }
 
@@ -466,7 +459,7 @@ function snapshotRecordCloneIndex(record: Record<string, unknown>): number {
 
 function movableSnapshotStatus(status: unknown): boolean {
   const normalized = normalizeText(status);
-  return normalized === "nao iniciada" || normalized === "recalculada";
+  return !normalized || normalized === "nao iniciada" || normalized === "recalculada";
 }
 
 function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
@@ -557,9 +550,14 @@ function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string)
 
 function obraStartDate(payload: SchedulePayload): Date | null {
   const obra = payload.obra_json[0];
-  const date = stringValue(field(obra, "dataInicio", "data_inicio", "startDate"));
-  /* v8 ignore next -- payload validation requires obra_json[0].dataInicio before scheduling. */
-  return date ? parseDateOnly(eventDateOnly(date)) : null;
+  const date = obra ? stringValue(field(obra, "dataInicio", "data_inicio", "startDate")) : "";
+  if (date) return parseDateOnly(eventDateOnly(date));
+
+  const snapshotStart = atividadeObraSnapshot(payload)
+    .map(recordDateOnly)
+    .filter(Boolean)
+    .sort()[0];
+  return snapshotStart ? parseDateOnly(snapshotStart) : null;
 }
 
 function formatCodigoD(daysFromStart: number): string {

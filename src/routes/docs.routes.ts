@@ -234,8 +234,11 @@ export function buildOpenApiDocument() {
         },
         SchedulePayload: {
           type: "object",
-          required: ["cronograma_unique_id", "dias_trabalho_semana", "obra_json", "atividades_json"],
+          required: ["cronograma_unique_id", "dias_trabalho_semana"],
           properties: {
+            payload_version: { type: "integer", enum: [2], description: "Versao do contrato enxuto de recalculo. O generate continua aceitando o payload legado." },
+            estrutura_inalterada: { type: "boolean", description: "Quando true no recalculate, o motor usa atividade_obra_snapshot e nao recria linhas nem vinculos." },
+            estrutura_id: { type: "string", description: "Identidade estrutural usada pelo Bubble para garantir que o snapshot representa a estrutura atual." },
             cronograma_unique_id: { type: "string" },
             versao_cronograma_unique_id: { type: "string", description: "Nova versao do cronograma." },
             previous_version_id: { type: "string", nullable: true, description: "Versao anterior, obrigatoria em recalculo." },
@@ -266,6 +269,18 @@ export function buildOpenApiDocument() {
             atividade_obra_json: {
               type: "array",
               items: jsonObject("Snapshot anterior de Atividade x Obra.")
+            },
+            atividade_obra_snapshot: {
+              type: "array",
+              items: jsonObject("Snapshot enxuto de Atividade x Obra para recalculate com estrutura_inalterada=true.")
+            },
+            master_dependencies: {
+              type: "array",
+              items: jsonObject("Grafo de dependencias em nivel de atividade master para payload v2.")
+            },
+            master_anchors: {
+              type: "array",
+              items: jsonObject("Ancoras e metadados master, incluindo tipo e etapaCompra para compras, no payload v2.")
             },
             events_old: {
               type: "array",

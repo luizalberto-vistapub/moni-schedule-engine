@@ -20,7 +20,7 @@ export const payloadSchema = z.object({
   request_date: z.string().nullable().optional(),
   requisicao_data: z.string().nullable().optional(),
   data_requisicao: z.string().nullable().optional(),
-  obra_json: z.array(z.record(z.unknown())).min(1),
+  obra_json: recordArray,
   obra_ambiente_json: recordArray,
   obra_ambiente_produto_json: recordArray,
   obra_ambiente_item_composicao_json: recordArray,

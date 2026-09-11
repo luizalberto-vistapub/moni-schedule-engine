@@ -377,64 +377,66 @@ describe("schedule controllers", () => {
   });
 
   it("uses snapshot-driven recalculation to patch only changed dates when estrutura is unchanged", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      obra_ambiente_json: [],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [],
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          duracaoVariavel: false,
+          quantidadeBase: null,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada"
+        },
+        {
+          "unique id": "axo_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          atividade: "serv_2",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 2,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          duracaoVariavel: false,
+          quantidadeBase: null,
+          dataInicioPrevista: "2026-05-05",
+          dataFimPrevista: "2026-05-05",
+          status: ""
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
-      .send(basePayload({
-        payload_version: 2,
-        estrutura_inalterada: true,
-        estrutura_id: "estrutura_1",
-        versao_cronograma_unique_id: "versao_2",
-        previous_version_id: "versao_1",
-        mode: "recalculate",
-        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
-        obra_ambiente_json: [],
-        obra_ambiente_produto_json: [],
-        obra_ambiente_item_composicao_json: [],
-        atividades_json: [],
-        atividade_obra_snapshot: [
-          {
-            "unique id": "axo_1",
-            id_atividade_obra_externo: "serv_1|amb_1|1",
-            atividade: "serv_1",
-            ambiente_id: "amb_1",
-            tipo: "Servico",
-            ordem: 1,
-            peso: 1,
-            equipe: "",
-            diasAntecedencia: 0,
-            duracao: 1,
-            duracaoVariavel: false,
-            quantidadeBase: null,
-            dataInicioPrevista: "2026-05-04",
-            dataFimPrevista: "2026-05-04",
-            status: "N\u00e3o iniciada"
-          },
-          {
-            "unique id": "axo_2",
-            id_atividade_obra_externo: "serv_2|amb_1|1",
-            atividade: "serv_2",
-            ambiente_id: "amb_1",
-            tipo: "Servico",
-            ordem: 2,
-            peso: 1,
-            equipe: "",
-            diasAntecedencia: 0,
-            duracao: 1,
-            duracaoVariavel: false,
-            quantidadeBase: null,
-            dataInicioPrevista: "2026-05-05",
-            dataFimPrevista: "2026-05-05",
-            status: "N\u00e3o iniciada"
-          }
-        ],
-        master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
-        events_json: [{
-          type: "activity_date_changed_cascade",
-          atividade_id: "serv_1",
-          id_atividade_obra_externo: "serv_1|amb_1|1",
-          new_start_date: "2026-05-06"
-        }]
-      }));
+      .send(payload);
 
     expect(response.status).toBe(202);
     expect(response.body.status).toBe("accepted");
