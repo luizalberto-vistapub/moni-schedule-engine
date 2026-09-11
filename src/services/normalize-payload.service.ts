@@ -4,6 +4,10 @@ import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, Ob
 const recordArray = z.array(z.record(z.unknown())).default([]);
 
 export const payloadSchema = z.object({
+  payload_version: z.union([z.number(), z.string()]).optional(),
+  estrutura_inalterada: z.boolean().optional(),
+  estrutura_id: z.string().optional(),
+  structure_version_id: z.string().optional(),
   cronograma_unique_id: z.string().min(1),
   mode: z.string().default("generate"),
   dias_trabalho_semana: z.union([z.literal(5), z.literal(6)]).default(5),
@@ -22,6 +26,9 @@ export const payloadSchema = z.object({
   obra_ambiente_item_composicao_json: recordArray,
   atividades_json: z.array(z.record(z.unknown())).default([]),
   atividade_obra_json: recordArray,
+  atividade_obra_snapshot: recordArray,
+  master_dependencies: recordArray,
+  master_anchors: recordArray,
   events_old: recordArray,
   events_json: recordArray
 }).passthrough() as unknown as z.ZodType<SchedulePayload>;

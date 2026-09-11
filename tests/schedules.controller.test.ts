@@ -47,6 +47,24 @@ describe("schedule controllers", () => {
     return String((call![1] as { body?: string }).body);
   }
 
+  function fetchCalls(path: string, method: string): unknown[][] {
+    return (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((call) => {
+      const init = call[1] as RequestInit | undefined;
+      return String(call[0]).includes(path) && init?.method === method;
+    });
+  }
+
+  async function waitForDoneWebhook(): Promise<void> {
+    await waitForFetchCall((call) => {
+      if (!String(call[0]).includes("/api/1.1/wf/api_cronograma__webhook_v1")) return false;
+      try {
+        return JSON.parse(String((call[1] as RequestInit | undefined)?.body || "{}")).status === "done";
+      } catch {
+        return false;
+      }
+    });
+  }
+
   async function waitForFetchCall(predicate: (call: unknown[]) => boolean): Promise<unknown[]> {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
@@ -356,6 +374,131 @@ describe("schedule controllers", () => {
       atividade: "serv_2",
       data: "2026-05-10T12:00:00.000Z"
     });
+  });
+
+  it("uses snapshot-driven recalculation to patch only changed dates when estrutura is unchanged", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        estrutura_inalterada: true,
+        estrutura_id: "estrutura_1",
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+        obra_ambiente_json: [],
+        obra_ambiente_produto_json: [],
+        obra_ambiente_item_composicao_json: [],
+        atividades_json: [],
+        atividade_obra_snapshot: [
+          {
+            "unique id": "axo_1",
+            id_atividade_obra_externo: "serv_1|amb_1|1",
+            atividade: "serv_1",
+            ambiente_id: "amb_1",
+            tipo: "Servico",
+            ordem: 1,
+            peso: 1,
+            equipe: "",
+            diasAntecedencia: 0,
+            duracao: 1,
+            duracaoVariavel: false,
+            quantidadeBase: null,
+            dataInicioPrevista: "2026-05-04",
+            dataFimPrevista: "2026-05-04",
+            status: "N\u00e3o iniciada"
+          },
+          {
+            "unique id": "axo_2",
+            id_atividade_obra_externo: "serv_2|amb_1|1",
+            atividade: "serv_2",
+            ambiente_id: "amb_1",
+            tipo: "Servico",
+            ordem: 2,
+            peso: 1,
+            equipe: "",
+            diasAntecedencia: 0,
+            duracao: 1,
+            duracaoVariavel: false,
+            quantidadeBase: null,
+            dataInicioPrevista: "2026-05-05",
+            dataFimPrevista: "2026-05-05",
+            status: "N\u00e3o iniciada"
+          }
+        ],
+        master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+        events_json: [{
+          type: "activity_date_changed_cascade",
+          atividade_id: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          new_start_date: "2026-05-06"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    await waitForDoneWebhook();
+
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(0);
+    expect(patchCalls).toHaveLength(2);
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toEqual({
+      dataInicioPrevista: "2026-05-06T12:00:00.000Z",
+      dataFimPrevista: "2026-05-06T12:00:00.000Z"
+    });
+    expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toEqual({
+      dataInicioPrevista: "2026-05-07T12:00:00.000Z",
+      dataFimPrevista: "2026-05-07T12:00:00.000Z"
+    });
+  });
+
+  it("does not move snapshot lines with started status", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        estrutura_inalterada: true,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+        atividades_json: [],
+        atividade_obra_snapshot: [
+          {
+            "unique id": "axo_started",
+            id_atividade_obra_externo: "serv_started|amb_1|1",
+            atividade: "serv_started",
+            ambiente_id: "amb_1",
+            tipo: "Servico",
+            ordem: 1,
+            peso: 1,
+            equipe: "",
+            diasAntecedencia: 0,
+            duracao: 1,
+            duracaoVariavel: false,
+            quantidadeBase: null,
+            dataInicioPrevista: "2026-05-04",
+            dataFimPrevista: "2026-05-04",
+            status: "Iniciada"
+          }
+        ],
+        events_json: [{
+          type: "activity_date_changed_only",
+          atividade_id: "serv_started",
+          id_atividade_obra_externo: "serv_started|amb_1|1",
+          new_start_date: "2026-05-10"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    await waitForDoneWebhook();
+
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(0);
   });
 
   it("changes selected atividade obra date and dependent activities without event date cutoff", async () => {

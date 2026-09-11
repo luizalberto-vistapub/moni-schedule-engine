@@ -101,6 +101,10 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
 }
 
 export interface SchedulePayload {
+  payload_version?: number | string;
+  estrutura_inalterada?: boolean;
+  estrutura_id?: string;
+  structure_version_id?: string;
   cronograma_unique_id: string;
   versao_cronograma_unique_id?: string;
   versao_cronograma_id?: string;
@@ -126,6 +130,9 @@ export interface SchedulePayload {
   obra_ambiente_item_composicao_json?: ObraAmbienteItemComposicaoPayload[];
   atividades_json: ActivityPayload[];
   atividade_obra_json: Record<string, unknown>[];
+  atividade_obra_snapshot?: Record<string, unknown>[];
+  master_dependencies?: Record<string, unknown>[];
+  master_anchors?: Record<string, unknown>[];
   events_old: Record<string, unknown>[];
   events_json: Record<string, unknown>[];
 }

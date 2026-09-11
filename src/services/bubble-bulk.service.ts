@@ -48,7 +48,7 @@ interface PersistScheduleOptions {
     progress_percent: number;
     message: string;
   }) => void | Promise<void>;
-  onStep?: (step: "bulk_create" | "patch_dependencies") => void;
+  onStep?: (step: "bulk_create" | "patch_dependencies" | "patch_dates") => void;
   phase2Progress?: PersistencePhaseProgress;
   phase3Progress?: PersistencePhaseProgress;
 }
@@ -1284,6 +1284,94 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
       patchIndex: index
     }, "atividade obra dependency patch persisted");
     await reportPersistenceProgress(options.phase3Progress, 1);
+  }
+}
+
+function atividadeObraSnapshot(payload: NormalizedSchedulePayload): Record<string, unknown>[] {
+  if (payload.mode === "recalculate" && payload.estrutura_inalterada === true) return payload.atividade_obra_snapshot || [];
+  return payload.atividade_obra_snapshot?.length ? payload.atividade_obra_snapshot : payload.atividade_obra_json;
+}
+
+function atividadeObraSnapshotByExternalId(payload: NormalizedSchedulePayload): Map<string, Record<string, unknown>> {
+  const recordsByExternalId = new Map<string, Record<string, unknown>>();
+  for (const record of atividadeObraSnapshot(payload)) {
+    const externalId = stringValue(recordValue(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+    if (externalId) recordsByExternalId.set(externalId, record);
+  }
+  return recordsByExternalId;
+}
+
+function snapshotBubbleId(record: Record<string, unknown>): string | null {
+  return bubbleId(record);
+}
+
+function snapshotDate(record: Record<string, unknown>, ...keys: string[]): string | null {
+  const value = stringValue(recordValue(record, ...keys));
+  return value ? toBubbleDate(value) : null;
+}
+
+function snapshotNumber(record: Record<string, unknown>, ...keys: string[]): number | null {
+  const raw = recordValue(record, ...keys);
+  if (raw === undefined || raw === null || raw === "") return null;
+  const value = typeof raw === "number" ? raw : Number(stringValue(raw));
+  return Number.isFinite(value) ? value : null;
+}
+
+function buildAtividadeObraDatePatchFields(line: ScheduleLine, snapshot: Record<string, unknown>): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  const nextStart = toBubbleDate(line.data_programada);
+  const nextEnd = toBubbleDate(line.data_programada);
+  const currentStart = snapshotDate(snapshot, "dataInicioPrevista", "data_inicio_prevista", "data_programada");
+  const currentEnd = snapshotDate(snapshot, "dataFimPrevista", "data_fim_prevista", "data_programada");
+
+  if (currentStart !== nextStart) fields.dataInicioPrevista = nextStart;
+  if (currentEnd !== nextEnd) fields.dataFimPrevista = nextEnd;
+
+  const nextDuration = snapshotNumber(line.raw, "duracao") ?? 1;
+  const currentDuration = snapshotNumber(snapshot, "duracao");
+  if (currentDuration !== null && currentDuration !== nextDuration) fields.duracao = nextDuration;
+
+  return fields;
+}
+
+export async function persistScheduleDatePatches(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
+  const requestedBubbleApiVersion = bubbleApiVersion(payload);
+  const config = { ...readConfig(), version: requestedBubbleApiVersion || DEFAULT_BUBBLE_API_VERSION };
+  if (!config.apiToken) {
+    throw new BubbleBulkConfigError("BUBBLE_API_TOKEN is required to persist schedule bulks");
+  }
+  if (!requestedBubbleApiVersion) {
+    throw new BubbleBulkPayloadError("Missing required Bubble id(s): bubble_api_version", [
+      requiredFieldDiagnostic(
+        "bubble_api_version",
+        rawRecordValue(payload as unknown as Record<string, unknown>, "bubble_api_version", "bubble_version", "version"),
+        requestedBubbleApiVersion
+      )
+    ].filter((field): field is BubbleFieldDiagnostic => Boolean(field)));
+  }
+
+  const snapshotByExternalId = atividadeObraSnapshotByExternalId(payload);
+  const updates = lines.flatMap((line) => {
+    const snapshot = snapshotByExternalId.get(line.atividade_obra_id_externo);
+    if (!snapshot) return [];
+    const id = snapshotBubbleId(snapshot);
+    if (!id) return [];
+    const record = buildAtividadeObraDatePatchFields(line, snapshot);
+    return Object.keys(record).length ? [{ id, record }] : [];
+  });
+  const eventoCronogramaRecords = buildEventoCronogramaRecords(payload);
+  const phase2Options: PersistScheduleOptions = {
+    ...options,
+    phase2Progress: {
+      completed: 0,
+      report: createProgressReporter(options, 2, updates.length + eventoCronogramaRecords.length, "Atualizando datas recalculadas")
+    }
+  };
+
+  options.onStep?.("patch_dates");
+  await patchExistingAtividadeObraRecords(updates, config, phase2Options);
+  if (eventoCronogramaRecords.length) {
+    await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, phase2Options);
   }
 }
 

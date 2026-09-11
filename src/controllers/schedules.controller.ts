@@ -1,13 +1,13 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError } from "zod";
-import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
+import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches } from "../services/bubble-bulk.service.js";
 import { addBusinessDays } from "../services/business-days.service.js";
 import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
-import type { NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
+import type { NormalizedActivityType, NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
 import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 import { makeId } from "../utils/ids.js";
@@ -91,6 +91,50 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
   return undefined;
 }
 
+function numberValue(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const numeric = Number(stringValue(value));
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function nullableNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const numeric = numberValue(value, Number.NaN);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeText(value: unknown): string {
+  return stringValue(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function snapshotActivityType(value: unknown): NormalizedActivityType {
+  const normalized = normalizeText(value);
+  if (normalized === "compra") return "Compra";
+  if (normalized === "projeto") return "Projeto";
+  return "Servi\u00e7o";
+}
+
+function purchaseStage(value: unknown): string | null {
+  const normalized = normalizeText(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!normalized) return null;
+  if (normalized.includes("AVISO_ORCAMENTO") || normalized.includes("AVISO_DE_ORCAMENTO")) return "AVISO_ORCAMENTO";
+  if (normalized.includes("LIMITE_ORCAMENTO") || normalized.includes("LIMITE_DE_ORCAMENTO")) return "LIMITE_ORCAMENTO";
+  if (normalized.includes("LIMITE_COMPRA") || normalized.includes("LIMITE_DE_COMPRA")) return "LIMITE_COMPRA";
+  if (normalized.includes("RECEBIMENTO")) return "RECEBIMENTO";
+  return null;
+}
+
+function isSnapshotRecalculate(payload: SchedulePayload): boolean {
+  return payload.mode === "recalculate" && payload.estrutura_inalterada === true;
+}
+
 function versionId(payload: SchedulePayload): string {
   return stringValue(field(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
 }
@@ -101,6 +145,7 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
   const newVersionId = versionId(payload);
   const previousVersionId = stringValue(payload.previous_version_id);
   const issues = [];
+  const snapshot = atividadeObraSnapshot(payload);
 
   if (!newVersionId) {
     issues.push({
@@ -123,6 +168,63 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
       code: "custom" as const,
       path: ["versao_cronograma_unique_id"],
       message: "versao_cronograma_unique_id must be different from previous_version_id for recalculate"
+    });
+  }
+
+  if (payload.estrutura_inalterada === true) {
+    const insertedEventIndex = payload.events_json.findIndex((event) => eventType(event) === "activity_inserted");
+    if (insertedEventIndex !== -1) {
+      issues.push({
+        code: "custom" as const,
+        path: ["events_json", insertedEventIndex, "type"],
+        message: "activity_inserted cannot use estrutura_inalterada=true"
+      });
+    }
+
+    if (!snapshot.length) {
+      issues.push({
+        code: "custom" as const,
+        path: ["atividade_obra_snapshot"],
+        message: "atividade_obra_snapshot is required when estrutura_inalterada=true"
+      });
+    }
+
+    snapshot.forEach((record, index) => {
+      if (!stringValue(field(record, "unique id", "unique_id", "id", "_id"))) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "unique id"],
+          message: "snapshot items must include Bubble unique id when estrutura_inalterada=true"
+        });
+      }
+      if (!snapshotRecordExternalId(record)) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "id_atividade_obra_externo"],
+          message: "snapshot items must include id_atividade_obra_externo when estrutura_inalterada=true"
+        });
+      }
+      if (!snapshotRecordActivityId(record)) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "atividade"],
+          message: "snapshot items must include atividade when estrutura_inalterada=true"
+        });
+      }
+      if (!snapshotRecordDate(record)) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "dataInicioPrevista"],
+          message: "snapshot items must include dataInicioPrevista when estrutura_inalterada=true"
+        });
+      }
+      if (!stringValue(field(record, "status"))) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "status"],
+          message: "snapshot items must include status when estrutura_inalterada=true"
+        });
+      }
     });
   }
 
@@ -340,6 +442,86 @@ function activityLineKey(activityId: string, cloneIndex: number): string {
   return `${activityId}:${cloneIndex}`;
 }
 
+function atividadeObraSnapshot(payload: SchedulePayload): Record<string, unknown>[] {
+  if (isSnapshotRecalculate(payload)) return payload.atividade_obra_snapshot || [];
+  return payload.atividade_obra_snapshot?.length ? payload.atividade_obra_snapshot : payload.atividade_obra_json;
+}
+
+function snapshotRecordExternalId(record: Record<string, unknown>): string {
+  return stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+}
+
+function snapshotRecordActivityId(record: Record<string, unknown>): string {
+  return stringValue(field(record, "atividade", "atividade_id", "activity_id", "atividadeId"));
+}
+
+function snapshotRecordDate(record: Record<string, unknown>): string {
+  return recordDateOnly(record);
+}
+
+function snapshotRecordCloneIndex(record: Record<string, unknown>): number {
+  const external = snapshotRecordExternalId(record);
+  return externalActivityParts(external)?.cloneIndex || 1;
+}
+
+function movableSnapshotStatus(status: unknown): boolean {
+  const normalized = normalizeText(status);
+  return normalized === "nao iniciada" || normalized === "recalculada";
+}
+
+function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
+  if (!isSnapshotRecalculate(payload)) return true;
+  return movableSnapshotStatus(field(line.raw, "status"));
+}
+
+function masterDependencyEntries(payload: SchedulePayload): Array<{ activityId: string; deps: string[] }> {
+  return (payload.master_dependencies || []).flatMap((record) => {
+    const activityId = stringValue(field(record, "atividade", "atividade_id", "activity_id", "id"));
+    const rawDeps = field(record, "deps", "dependencias", "dependencies", "interdependenciasMasterIds");
+    const deps = Array.isArray(rawDeps) ? rawDeps.map(String).filter(Boolean) : [];
+    return activityId ? [{ activityId, deps }] : [];
+  });
+}
+
+function dependencyIdsByActivity(payload: SchedulePayload): Map<string, string[]> {
+  const dependenciesByActivity = new Map<string, string[]>();
+  for (const activity of payload.atividades_json) {
+    const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+    const dependencyIds = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds.map(String) : [];
+    if (activityId) dependenciesByActivity.set(activityId, dependencyIds);
+  }
+  for (const entry of masterDependencyEntries(payload)) {
+    dependenciesByActivity.set(entry.activityId, entry.deps);
+  }
+  return dependenciesByActivity;
+}
+
+function activityTypesById(payload: SchedulePayload): Map<string, NormalizedActivityType> {
+  const typesByActivity = new Map<string, NormalizedActivityType>();
+  for (const activity of payload.atividades_json) {
+    const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+    if (activityId) typesByActivity.set(activityId, snapshotActivityType(activity.tipo));
+  }
+  for (const record of atividadeObraSnapshot(payload)) {
+    const activityId = snapshotRecordActivityId(record);
+    if (activityId) typesByActivity.set(activityId, snapshotActivityType(field(record, "tipo")));
+  }
+  for (const anchor of payload.master_anchors || []) {
+    const activityId = stringValue(field(anchor, "atividade", "atividade_id", "activity_id", "id"));
+    if (activityId) typesByActivity.set(activityId, snapshotActivityType(field(anchor, "tipo")));
+  }
+  return typesByActivity;
+}
+
+function masterAnchorsByActivity(payload: SchedulePayload): Map<string, Record<string, unknown>> {
+  const anchorsByActivity = new Map<string, Record<string, unknown>>();
+  for (const anchor of payload.master_anchors || []) {
+    const activityId = stringValue(field(anchor, "atividade", "atividade_id", "activity_id", "id"));
+    if (activityId) anchorsByActivity.set(activityId, anchor);
+  }
+  return anchorsByActivity;
+}
+
 function eventActivityLineKey(event: Record<string, unknown>): string {
   return activityLineKey(activityStartEventActivityId(event), activityRecordCloneIndex(event));
 }
@@ -347,7 +529,7 @@ function eventActivityLineKey(event: Record<string, unknown>): string {
 function previousActivityDates(payload: SchedulePayload): Map<string, string> {
   const datesByActivity = new Map<string, string>();
 
-  for (const record of payload.atividade_obra_json) {
+  for (const record of atividadeObraSnapshot(payload)) {
     const external = stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
     const date = recordDateOnly(record) || externalActivityDate(external);
     if (!date) continue;
@@ -362,7 +544,7 @@ function previousActivityDates(payload: SchedulePayload): Map<string, string> {
 function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string): Map<string, string> {
   const datesByActivity = new Map<string, string>();
 
-  for (const record of payload.atividade_obra_json) {
+  for (const record of atividadeObraSnapshot(payload)) {
     const date = recordDateOnly(record);
     if (!date || date >= fromDate) continue;
     const activityId = activityRecordId(record);
@@ -403,14 +585,7 @@ function refreshLineDependencies(payload: SchedulePayload, lines: ScheduleLine[]
     lineIdsByActivity.set(line.atividadeId, [...(lineIdsByActivity.get(line.atividadeId) || []), line.atividade_obra_id_externo]);
   }
 
-  const dependenciesByActivity = new Map(
-    payload.atividades_json.map((activity) => {
-      const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
-      /* v8 ignore next -- normalized activities always carry dependency arrays. */
-      const dependencyIds = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [];
-      return [activityId, dependencyIds] as const;
-    })
-  );
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
 
   return lines.map((line) => ({
     ...line,
@@ -437,6 +612,7 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
   const days = eventDays(scheduleStartEvent);
   const lines = result.lines
     .map((line) => {
+      if (!lineCanMove(payload, line)) return line;
       const previousDate = previousDates.get(activityLineKey(line.atividadeId, line.clone_index));
       if (previousDate) return withLineDate(line, previousDate, payload);
       if (line.data_programada < fromDate || days === 0) return line;
@@ -503,6 +679,48 @@ function activityDependencyClosure(payload: SchedulePayload, rootActivityId: str
   return dependents;
 }
 
+function serviceDependencyClosureForRecalculate(payload: SchedulePayload, rootServiceId: string): Set<string> {
+  if (!isSnapshotRecalculate(payload)) return serviceDependencyClosure(payload, rootServiceId);
+  const dependents = new Set<string>([rootServiceId]);
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
+  const typesByActivity = activityTypesById(payload);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const activityId of dependenciesByActivity.keys()) {
+      if (!activityId || dependents.has(activityId)) continue;
+      if (typesByActivity.get(activityId) !== "Servi\u00e7o") continue;
+      const dependencies = dependenciesByActivity.get(activityId) || [];
+      if (!dependencies.some((dependencyId) => dependents.has(String(dependencyId)))) continue;
+      dependents.add(activityId);
+      changed = true;
+    }
+  }
+
+  return dependents;
+}
+
+function activityDependencyClosureForRecalculate(payload: SchedulePayload, rootActivityId: string): Set<string> {
+  if (!isSnapshotRecalculate(payload)) return activityDependencyClosure(payload, rootActivityId);
+  const dependents = new Set<string>([rootActivityId]);
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const activityId of dependenciesByActivity.keys()) {
+      if (!activityId || dependents.has(activityId)) continue;
+      const dependencies = dependenciesByActivity.get(activityId) || [];
+      if (!dependencies.some((dependencyId) => dependents.has(String(dependencyId)))) continue;
+      dependents.add(activityId);
+      changed = true;
+    }
+  }
+
+  return dependents;
+}
+
 function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
   if (payload.mode !== "recalculate") return result;
 
@@ -533,15 +751,16 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
 
     const deltaDays = differenceInCalendarDays(parseDateOnly(originalTargetDate), parseDateOnly(newDate));
     const affectedActivityIds = type === "activity_date_changed_cascade"
-      ? activityDependencyClosure(payload, targetLine.atividadeId)
+      ? activityDependencyClosureForRecalculate(payload, targetLine.atividadeId)
       : new Set<string>([targetLine.atividadeId]);
     if (type === "activity_date_changed_cascade" && targetLine.tipo === "Compra" && targetLine.atividadeServicoAncoraId) {
-      for (const serviceId of serviceDependencyClosure(payload, targetLine.atividadeServicoAncoraId)) {
+      for (const serviceId of serviceDependencyClosureForRecalculate(payload, targetLine.atividadeServicoAncoraId)) {
         affectedActivityIds.add(serviceId);
       }
     }
 
     lines = lines.map((line) => {
+      if (!lineCanMove(payload, line)) return line;
       const lineKey = activityLineKey(line.atividadeId, line.clone_index);
       if (type === "activity_date_changed_only") {
         return lineKey === targetKey ? withLineDate(line, newDate, payload) : line;
@@ -589,7 +808,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
     if (deltaDays === 0) continue;
 
     const anchorServiceId = changedLine.atividadeServicoAncoraId;
-    const affectedServiceIds = serviceDependencyClosure(payload, anchorServiceId);
+    const affectedServiceIds = serviceDependencyClosureForRecalculate(payload, anchorServiceId);
     const purchaseChain = lines.filter((line) => (
       line.tipo === "Compra"
       && line.produtoId === changedLine.produtoId
@@ -602,6 +821,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
     );
 
     lines = lines.map((line) => {
+      if (!lineCanMove(payload, line)) return line;
       const lineOriginalDate = originalLineDate(line, previousDates);
       if (!lineOriginalDate) return line;
 
@@ -635,6 +855,121 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
   return { ...result, lines: refreshLineDependencies(payload, lines) };
 }
 
+function snapshotAnchorValue(anchor: Record<string, unknown> | undefined, ...keys: string[]): string | null {
+  return anchor ? stringValue(field(anchor, ...keys)) || null : null;
+}
+
+function snapshotLineFromRecord(
+  record: Record<string, unknown>,
+  payload: SchedulePayload,
+  anchorsByActivity: Map<string, Record<string, unknown>>
+): ScheduleLine | null {
+  const externalId = snapshotRecordExternalId(record);
+  const activityId = snapshotRecordActivityId(record);
+  const date = snapshotRecordDate(record);
+  if (!externalId || !activityId || !date) return null;
+
+  const anchor = anchorsByActivity.get(activityId);
+  const tipo = snapshotActivityType(field(record, "tipo") || field(anchor || {}, "tipo"));
+  const anchorServiceId = snapshotAnchorValue(anchor, "atividadeServicoAncoraId", "atividade_servico_ancora_id", "servico_ancora");
+  const produtoId = snapshotAnchorValue(anchor, "produtoId", "produto_id", "produto", "chainId", "purchaseChainId")
+    || (tipo === "Compra" ? anchorServiceId : null);
+  const cloneIndex = snapshotRecordCloneIndex(record);
+
+  return {
+    atividade_obra_id_externo: externalId,
+    atividadeId: activityId,
+    atividadeNome: activityId,
+    atividadeTipo: tipo,
+    atividadeServicoAncoraId: anchorServiceId,
+    atividadeServicoAncoraNome: null,
+    atividadeServicoAncoraExternoId: null,
+    obraAmbienteProdutoId: null,
+    produtoId,
+    ambienteId: stringValue(field(record, "ambiente_id", "ambiente", "ambienteId")) || null,
+    ambienteItemComposicaoId: null,
+    external_index: cloneIndex,
+    data_programada: date,
+    codigo_d: formatCodigoD(differenceInCalendarDays(obraStartDate(payload)!, parseDateOnly(date)) + 1),
+    dia_semana: weekdayName(parseDateOnly(date)),
+    tipo,
+    subtipo_compra: tipo === "Compra" ? purchaseStage(field(anchor || {}, "etapaCompra", "etapa_compra")) : null,
+    nome_atividade: activityId,
+    equipe: stringValue(field(record, "equipe")) || null,
+    familia: null,
+    nomeFamilia: null,
+    projetoId: null,
+    tipoProjeto: null,
+    localAtuacao: null,
+    diasAntecedencia: nullableNumber(field(record, "diasAntecedencia", "dias_antecedencia"))
+      ?? nullableNumber(field(anchor || {}, "diasAntecedencia", "dias_antecedencia")),
+    projetoResponsavel: null,
+    projetoStatus: null,
+    peso: numberValue(field(record, "peso"), 1),
+    ambiente: stringValue(field(record, "ambiente_id", "ambiente", "ambienteId")) || null,
+    produto: null,
+    ordem: numberValue(field(record, "ordem"), 0),
+    ordemCronograma: numberValue(field(record, "ordemCronograma", "ordem_cronograma", "ordem"), 0),
+    clone_index: cloneIndex,
+    anchor_service_name: null,
+    interdependenciasMasterIds: [],
+    raw: record
+  };
+}
+
+function snapshotEngineResult(payload: SchedulePayload): EngineResult {
+  const anchorsByActivity = masterAnchorsByActivity(payload);
+  const lines = atividadeObraSnapshot(payload)
+    .map((record) => snapshotLineFromRecord(record, payload, anchorsByActivity))
+    .filter((line): line is ScheduleLine => Boolean(line));
+
+  return {
+    lines: refreshLineDependencies(payload, lines),
+    validations: {
+      warnings: [],
+      errors: []
+    }
+  };
+}
+
+function applyWorkStartSnapshotRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
+  if (!isSnapshotRecalculate(payload)) return result;
+  const event = lastEventOfType(activeRecalculateEvents(payload), "work_start_delayed");
+  if (!event) return result;
+
+  const startDate = obraStartDate(payload);
+  const newStartDate = recalculatedStartDate(event);
+  if (!startDate || !newStartDate) return result;
+
+  const deltaDays = differenceInCalendarDays(startDate, parseDateOnly(newStartDate));
+  if (deltaDays === 0) return result;
+
+  const lines = result.lines
+    .map((line) => lineCanMove(payload, line)
+      ? withLineDate(line, formatDateOnly(addDays(parseDateOnly(line.data_programada), deltaDays)), payload)
+      : line)
+    .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
+
+  return { ...result, lines: refreshLineDependencies(payload, lines) };
+}
+
+function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
+  const initialResult = isSnapshotRecalculate(payload)
+    ? snapshotEngineResult(payload)
+    : runScheduleEngine(payload);
+
+  return applyActivityDateChangeRecalculation(
+    payload,
+    applyPurchaseChainRecalculation(
+      payload,
+      applyFromDateDelayedRecalculation(
+        payload,
+        applyWorkStartSnapshotRecalculation(payload, initialResult)
+      )
+    )
+  );
+}
+
 async function processScheduleJob(
   jobId: string,
   payload: NormalizedSchedulePayload,
@@ -647,7 +982,7 @@ async function processScheduleJob(
   const webhookOptions = { ...options, bubbleApiVersion: webhookBubbleApiVersion(payload) };
 
   try {
-    const result = applyActivityDateChangeRecalculation(payload, applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload))));
+    const result = calculateScheduleResult(payload);
 
     options.log?.info({
       requestId: options.requestId,
@@ -659,16 +994,17 @@ async function processScheduleJob(
       errorsCount: result.validations.errors.length
     }, "schedule job calculation finished");
 
-    failedStep = "bulk_create";
+    failedStep = isSnapshotRecalculate(payload) ? "patch_dates" : "bulk_create";
     await sendScheduleWebhook({
       ...baseFields,
       status: "processing",
       progress: 2,
       progress_percent: 0,
-      message: "Criando registros em bulk"
+      message: isSnapshotRecalculate(payload) ? "Atualizando datas recalculadas" : "Criando registros em bulk"
     }, webhookOptions);
 
-    await persistScheduleBulks(payload, result.lines, {
+    const persist = isSnapshotRecalculate(payload) ? persistScheduleDatePatches : persistScheduleBulks;
+    await persist(payload, result.lines, {
       requestId: options.requestId,
       log: options.log,
       onStep: (step) => {
@@ -740,7 +1076,8 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     validateRecalculateEventFields(requestMode, parsedPayload.events_json);
     validateRecalculateEventFields(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateContract(requestMode, parsedPayload);
-    const payload = normalizePayload(applyRecalculateEvents({ ...parsedPayload, mode: requestMode }));
+    const payloadInput = { ...parsedPayload, mode: requestMode };
+    const payload = normalizePayload(isSnapshotRecalculate(payloadInput) ? payloadInput : applyRecalculateEvents(payloadInput));
     const jobId = makeId("schedule_job");
     const acceptedResponse = buildScheduleAcceptedResponse(jobId, payload.cronograma_unique_id, versionId(payload));
 
