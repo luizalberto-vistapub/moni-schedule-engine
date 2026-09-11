@@ -1026,7 +1026,7 @@ async function processScheduleJob(
     }, webhookOptions);
 
     const persist = isSnapshotRecalculate(payload) ? persistScheduleDatePatches : persistScheduleBulks;
-    await persist(payload, result.lines, {
+    const persistenceSummary = await persist(payload, result.lines, {
       requestId: options.requestId,
       log: options.log,
       onStep: (step) => {
@@ -1054,6 +1054,9 @@ async function processScheduleJob(
       progress_percent: 100,
       metrics: {
         linesCount: result.lines.length,
+        patchedCount: persistenceSummary.patchedCount,
+        eventCount: persistenceSummary.eventCount,
+        dependencyPatchCount: persistenceSummary.dependencyPatchCount,
         durationMs
       }
     }, webhookOptions);
@@ -1064,6 +1067,9 @@ async function processScheduleJob(
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
       linesCount: result.lines.length,
+      patchedCount: persistenceSummary.patchedCount,
+      eventCount: persistenceSummary.eventCount,
+      dependencyPatchCount: persistenceSummary.dependencyPatchCount,
       durationMs
     }, "schedule job finished");
   } catch (error) {

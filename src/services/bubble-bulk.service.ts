@@ -63,6 +63,12 @@ interface PersistedBulkRecord {
   bubbleId: string | null;
 }
 
+export interface PersistenceSummary {
+  patchedCount: number;
+  eventCount: number;
+  dependencyPatchCount: number;
+}
+
 interface AtividadeObraPatch {
   id: string;
   fields: Record<string, unknown>;
@@ -1334,7 +1340,7 @@ function buildAtividadeObraDatePatchFields(line: ScheduleLine, snapshot: Record<
   return fields;
 }
 
-export async function persistScheduleDatePatches(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
+export async function persistScheduleDatePatches(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<PersistenceSummary> {
   const requestedBubbleApiVersion = bubbleApiVersion(payload);
   const config = { ...readConfig(), version: requestedBubbleApiVersion || DEFAULT_BUBBLE_API_VERSION };
   if (!config.apiToken) {
@@ -1373,9 +1379,15 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, phase2Options);
   }
+
+  return {
+    patchedCount: updates.length,
+    eventCount: eventoCronogramaRecords.length,
+    dependencyPatchCount: 0
+  };
 }
 
-export async function persistScheduleBulks(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<void> {
+export async function persistScheduleBulks(payload: NormalizedSchedulePayload, lines: ScheduleLine[], options: PersistScheduleOptions = {}): Promise<PersistenceSummary> {
   const requestedBubbleApiVersion = bubbleApiVersion(payload);
   const requestedVersaoCronogramaId = versaoCronogramaId(payload);
   const requestedObraId = obraId(payload);
@@ -1450,4 +1462,10 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   };
   options.onStep?.("patch_dependencies");
   await patchAtividadeObraDependencies(postPersistPatches, config, phase3Options);
+
+  return {
+    patchedCount: 0,
+    eventCount: eventoCronogramaRecords.length,
+    dependencyPatchCount: postPersistPatches.length
+  };
 }

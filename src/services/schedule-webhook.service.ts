@@ -20,6 +20,9 @@ export interface ScheduleWebhookPayload {
   metrics?: {
     linesCount: number;
     durationMs: number;
+    patchedCount?: number;
+    eventCount?: number;
+    dependencyPatchCount?: number;
   };
   error_code?: string;
   error_message?: string;

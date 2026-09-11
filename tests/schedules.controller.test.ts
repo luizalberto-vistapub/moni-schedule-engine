@@ -446,7 +446,7 @@ describe("schedule controllers", () => {
     expect(response.status).toBe(202);
     expect(response.body.status).toBe("accepted");
 
-    await waitForDoneWebhook();
+    const doneBody = await waitForWebhookBody("done");
 
     const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
     expect(fetchCalls("/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(0);
@@ -458,6 +458,12 @@ describe("schedule controllers", () => {
     expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toEqual({
       dataInicioPrevista: "2026-05-07T12:00:00.000Z",
       dataFimPrevista: "2026-05-07T12:00:00.000Z"
+    });
+    expect(doneBody.metrics).toMatchObject({
+      linesCount: 2,
+      patchedCount: 2,
+      eventCount: 0,
+      dependencyPatchCount: 0
     });
   });
 
