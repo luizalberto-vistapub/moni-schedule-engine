@@ -729,6 +729,63 @@ describe("schedule controllers", () => {
     expect(response.body.status).toBe("accepted");
   });
 
+  it("accepts v2 structural recalculation without obra_json using the snapshot as previous structure", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: false,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "serv_2", nome: "Servico novo", tipo: "Servico", ordem: 2, duracao: 1 }
+      ],
+      atividade_obra_snapshot: [{
+        "unique id": "previous_axo_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        atividade: "serv_1",
+        ambienteId: "amb_1",
+        obra: "obra_1",
+        indice_clone: 1,
+        dataInicioPrevista: "2026-05-04",
+        status: "Concluida",
+        observacao: "Preservar do snapshot"
+      }],
+      events_json: [{ type: "activity_inserted", atividade_id: "serv_2" }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const doneBody = await waitForWebhookBody("done");
+    const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records).toEqual([
+      expect.objectContaining({
+        atividade: "serv_1",
+        obra: "obra_1",
+        versaoCronograma: "versao_2",
+        status: "Concluida",
+        observacao: "Preservar do snapshot"
+      }),
+      expect.objectContaining({
+        atividade: "serv_2",
+        obra: "obra_1",
+        versaoCronograma: "versao_2"
+      })
+    ]);
+    expect(doneBody.metrics).toMatchObject({
+      linesCount: 2,
+      patchedCount: 0
+    });
+  });
+
   it("does not move snapshot lines with started status", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

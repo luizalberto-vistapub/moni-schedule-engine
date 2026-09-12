@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, PurchaseStage, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
+import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, ObraPayload, PurchaseStage, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 
 const recordArray = z.array(z.record(z.unknown())).default([]);
 
@@ -55,11 +55,10 @@ export function parseSchedulePayload(input: unknown, routeMode: ScheduleMode): S
   if (!envelope.success) return payloadSchema.parse(input);
 
   const bodyMode = envelope.data.mode?.trim() || routeMode;
-  const isV2SnapshotRecalculate = String(envelope.data.payload_version) === "2"
-    && bodyMode === "recalculate"
-    && envelope.data.estrutura_inalterada === true;
+  const isV2Recalculate = String(envelope.data.payload_version) === "2"
+    && bodyMode === "recalculate";
 
-  return (isV2SnapshotRecalculate ? payloadV2SnapshotRecalculateSchema : payloadSchema).parse(input);
+  return (isV2Recalculate ? payloadV2SnapshotRecalculateSchema : payloadSchema).parse(input);
 }
 
 function normalizeActivityType(value: unknown): NormalizedActivity["tipo"] {
@@ -128,6 +127,46 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
     if (record[key] !== undefined) return record[key];
   }
   return undefined;
+}
+
+function snapshotRecords(payload: SchedulePayload): Record<string, unknown>[] {
+  return payload.atividade_obra_snapshot?.length ? payload.atividade_obra_snapshot : payload.atividade_obra_json;
+}
+
+function snapshotString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = field(record, key);
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function snapshotDateOnly(record: Record<string, unknown>): string | undefined {
+  const date = snapshotString(record, "dataInicioPrevista", "data_inicio_prevista", "data_programada", "data", "date");
+  return date?.slice(0, 10);
+}
+
+function obraFromSnapshot(payload: SchedulePayload): ObraPayload | null {
+  if (payload.obra_json.length) return null;
+  if (String(payload.payload_version) !== "2" || payload.mode !== "recalculate") return null;
+
+  const snapshot = snapshotRecords(payload);
+  const firstRecordWithObra = snapshot.find((record) => snapshotString(record, "obra", "obra_id", "id_obra", "obraId", "obraUniqueId"));
+  const obraId = firstRecordWithObra
+    ? snapshotString(firstRecordWithObra, "obra", "obra_id", "id_obra", "obraId", "obraUniqueId")
+    : undefined;
+  const dataInicio = snapshot
+    .map(snapshotDateOnly)
+    .filter((date): date is string => Boolean(date))
+    .sort()[0];
+
+  if (!obraId && !dataInicio) return null;
+
+  return {
+    ...(obraId ? { id: obraId, unique_id: obraId, "unique id": obraId } : {}),
+    ...(dataInicio ? { dataInicio, data_inicio: dataInicio, startDate: dataInicio } : {})
+  };
 }
 
 function normalizeActivity(activity: ActivityPayload, index: number): NormalizedActivity {
@@ -265,6 +304,11 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
 }
 
 export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
+  const synthesizedObra = obraFromSnapshot(payload);
+  const obraJson = synthesizedObra ? [synthesizedObra] : payload.obra_json;
+  const previousAtividadeObraJson = payload.atividade_obra_json.length
+    ? payload.atividade_obra_json
+    : payload.atividade_obra_snapshot || [];
   const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
   const obraAmbienteProdutoJson = payload.obra_ambiente_produto_json || [];
   const obraAmbienteProdutos = obraAmbienteProdutoJson.length
@@ -290,8 +334,10 @@ export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePa
 
   return {
     ...payload,
+    obra_json: obraJson,
     obra_ambiente_produto_json: obraAmbienteProdutos,
     obra_ambiente_item_composicao_json: compositionProducts,
+    atividade_obra_json: previousAtividadeObraJson,
     atividades_json: [...baseActivities, ...projectActivities]
   };
 }
