@@ -11,6 +11,7 @@ const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_PATCH_CONCURRENCY = 10;
 const DEFAULT_PATCH_MAX_RETRIES = 4;
 const DEFAULT_PATCH_RETRY_BASE_MS = 250;
+const DEFAULT_PATCH_RATE_LIMIT_COOLDOWN_MS = 30000;
 const DEFAULT_PATCH_PROGRESS_INTERVAL_MS = 120000;
 const MAX_PATCH_CONCURRENCY = 25;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
@@ -48,6 +49,7 @@ interface BubbleBulkConfig {
   patchConcurrency: number;
   patchMaxRetries: number;
   patchRetryBaseMs: number;
+  patchRateLimitCooldownMs: number;
   patchProgressIntervalMs: number;
 }
 
@@ -165,6 +167,7 @@ function readConfig(): BubbleBulkConfig {
     patchConcurrency: boundedInteger(process.env.BUBBLE_PATCH_CONCURRENCY, DEFAULT_PATCH_CONCURRENCY, 1, MAX_PATCH_CONCURRENCY),
     patchMaxRetries: boundedInteger(process.env.BUBBLE_PATCH_MAX_RETRIES, DEFAULT_PATCH_MAX_RETRIES, 0, 10),
     patchRetryBaseMs: boundedInteger(process.env.BUBBLE_PATCH_RETRY_BASE_MS, DEFAULT_PATCH_RETRY_BASE_MS, 0, 60000),
+    patchRateLimitCooldownMs: boundedInteger(process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS, DEFAULT_PATCH_RATE_LIMIT_COOLDOWN_MS, 0, 600000),
     patchProgressIntervalMs: boundedInteger(process.env.BUBBLE_PATCH_PROGRESS_INTERVAL_MS, DEFAULT_PATCH_PROGRESS_INTERVAL_MS, 1000, 540000)
   };
 }
@@ -632,6 +635,25 @@ function startProgressHeartbeat(progress: PersistencePhaseProgress | undefined, 
 
 function retryDelayMs(attempt: number, config: BubbleBulkConfig): number {
   return Math.min(10000, config.patchRetryBaseMs * (2 ** attempt));
+}
+
+function createPatchRateLimitGate(): {
+  wait: () => Promise<void>;
+  postpone: (cooldownMs: number) => number;
+} {
+  let resumeAt = 0;
+
+  return {
+    async wait(): Promise<void> {
+      const waitMs = resumeAt - Date.now();
+      if (waitMs > 0) await delay(waitMs);
+    },
+    postpone(cooldownMs: number): number {
+      const nextResumeAt = Date.now() + Math.max(0, cooldownMs);
+      resumeAt = Math.max(resumeAt, nextResumeAt);
+      return Math.max(0, resumeAt - Date.now());
+    }
+  };
 }
 
 async function delay(ms: number): Promise<void> {
@@ -1213,6 +1235,7 @@ async function patchExistingAtividadeObraRecords(
   let requestCount = 0;
   let inFlight = 0;
   let peakInFlight = 0;
+  const rateLimitGate = createPatchRateLimitGate();
 
   options.log?.info({
     requestId: options.requestId,
@@ -1222,11 +1245,13 @@ async function patchExistingAtividadeObraRecords(
     configuredConcurrency: config.patchConcurrency,
     maxRetries: config.patchMaxRetries,
     retryBaseMs: config.patchRetryBaseMs,
+    rateLimitCooldownMs: config.patchRateLimitCooldownMs,
     progressIntervalMs: config.patchProgressIntervalMs
   }, "atividade obra patch pool started");
 
   const patchRecord = async (url: string, record: Record<string, unknown>, patchIndex: number): Promise<PatchResponse> => {
     for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
+      await rateLimitGate.wait();
       requestCount += 1;
       inFlight += 1;
       peakInFlight = Math.max(peakInFlight, inFlight);
@@ -1250,7 +1275,7 @@ async function patchExistingAtividadeObraRecords(
         return { ok: response.ok, status: response.status, text: responseText };
       }
 
-      const waitMs = retryDelayMs(attempt, config);
+      const waitMs = rateLimitGate.postpone(Math.max(retryDelayMs(attempt, config), config.patchRateLimitCooldownMs));
       options.log?.warn({
         requestId: options.requestId,
         typeName: config.atividadeObraType,
@@ -1258,8 +1283,7 @@ async function patchExistingAtividadeObraRecords(
         patchIndex,
         attempt: attempt + 1,
         retryInMs: waitMs
-      }, "atividade obra patch rate limited; retrying");
-      await delay(waitMs);
+      }, "atividade obra patch rate limited; pausing patch pool");
     }
 
     /* v8 ignore next -- loop always returns on the final configured attempt. */
@@ -1448,6 +1472,7 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
   let requestCount = 0;
   let inFlight = 0;
   let peakInFlight = 0;
+  const rateLimitGate = createPatchRateLimitGate();
 
   options.log?.info({
     requestId: options.requestId,
@@ -1457,11 +1482,13 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
     configuredConcurrency: config.patchConcurrency,
     maxRetries: config.patchMaxRetries,
     retryBaseMs: config.patchRetryBaseMs,
+    rateLimitCooldownMs: config.patchRateLimitCooldownMs,
     progressIntervalMs: config.patchProgressIntervalMs
   }, "atividade obra patch pool started");
 
   const patchRecord = async (url: string, fields: Record<string, unknown>, patchIndex: number): Promise<PatchResponse> => {
     for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
+      await rateLimitGate.wait();
       requestCount += 1;
       inFlight += 1;
       peakInFlight = Math.max(peakInFlight, inFlight);
@@ -1485,7 +1512,7 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
         return { ok: response.ok, status: response.status, text: responseText };
       }
 
-      const waitMs = retryDelayMs(attempt, config);
+      const waitMs = rateLimitGate.postpone(Math.max(retryDelayMs(attempt, config), config.patchRateLimitCooldownMs));
       options.log?.warn({
         requestId: options.requestId,
         typeName: config.atividadeObraType,
@@ -1493,8 +1520,7 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
         patchIndex,
         attempt: attempt + 1,
         retryInMs: waitMs
-      }, "atividade obra dependency patch rate limited; retrying");
-      await delay(waitMs);
+      }, "atividade obra dependency patch rate limited; pausing patch pool");
     }
 
     /* v8 ignore next -- loop always returns on the final configured attempt. */

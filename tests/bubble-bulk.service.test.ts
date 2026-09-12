@@ -28,6 +28,7 @@ describe("Bubble bulk persistence", () => {
     delete process.env.BUBBLE_PATCH_CONCURRENCY;
     delete process.env.BUBBLE_PATCH_MAX_RETRIES;
     delete process.env.BUBBLE_PATCH_RETRY_BASE_MS;
+    delete process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS;
   });
 
   function payloadWithOneLine(overrides: Record<string, unknown> = {}) {
@@ -275,6 +276,7 @@ describe("Bubble bulk persistence", () => {
     process.env.BUBBLE_PATCH_CONCURRENCY = "1";
     process.env.BUBBLE_PATCH_MAX_RETRIES = "2";
     process.env.BUBBLE_PATCH_RETRY_BASE_MS = "0";
+    process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS = "0";
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
       expect(init?.method).toBe("PATCH");
       if (fetchMock.mock.calls.length === 1) {
