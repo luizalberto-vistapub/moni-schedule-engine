@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { NormalizedSchedulePayload } from "../types/payload.types.js";
+import type { NormalizedDate } from "../types/schedule.types.js";
 
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
@@ -24,6 +25,7 @@ export interface ScheduleWebhookPayload {
     eventCount?: number;
     dependencyPatchCount?: number;
   };
+  normalizedDates?: NormalizedDate[];
   error_code?: string;
   error_message?: string;
   error_details?: unknown;

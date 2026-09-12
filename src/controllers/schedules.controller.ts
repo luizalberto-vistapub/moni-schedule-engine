@@ -2,13 +2,13 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError, type ZodIssue } from "zod";
 import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches } from "../services/bubble-bulk.service.js";
-import { addBusinessDays } from "../services/business-days.service.js";
+import { addBusinessDays, isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
 import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
 import type { NormalizedActivityType, NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
-import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
+import type { EngineResult, NormalizedDate, ScheduleLine } from "../types/schedule.types.js";
 import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 import { makeId } from "../utils/ids.js";
 
@@ -300,18 +300,75 @@ function eventDays(event: Record<string, unknown>): number {
   return Number.isFinite(days) ? Math.max(0, Math.trunc(days)) : 0;
 }
 
-function eventDateOnly(value: string): string {
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+function eventDateOnly(value: string, payload?: SchedulePayload): string {
+  const trimmed = value.trim();
+  const textDate = trimmed.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})/);
+  if (textDate) {
+    const months: Record<string, string> = {
+      jan: "01",
+      january: "01",
+      feb: "02",
+      february: "02",
+      mar: "03",
+      march: "03",
+      apr: "04",
+      april: "04",
+      may: "05",
+      jun: "06",
+      june: "06",
+      jul: "07",
+      july: "07",
+      aug: "08",
+      august: "08",
+      sep: "09",
+      sept: "09",
+      september: "09",
+      oct: "10",
+      october: "10",
+      nov: "11",
+      november: "11",
+      dec: "12",
+      december: "12"
+    };
+    const month = months[textDate[1]!.toLowerCase()];
+    if (month) return `${textDate[3]}-${month}-${textDate[2]!.padStart(2, "0")}`;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: payload ? stringValue(field(payload as unknown as Record<string, unknown>, "timezone")) || "America/Sao_Paulo" : "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : value;
 }
 
-function recalculatedStartDate(event: Record<string, unknown>): string {
-  return eventDateOnly(eventDate(event));
+function scopeNewDate(payload: SchedulePayload): string {
+  return stringValue(field(payload.scope || {}, "nova_data", "new_start_date", "data"));
+}
+
+function requestedRecalculateDate(payload: SchedulePayload, event: Record<string, unknown>): string {
+  const sourceDate = isSnapshotRecalculate(payload) && payload.events_json.includes(event) && scopeNewDate(payload)
+    ? scopeNewDate(payload)
+    : eventDate(event);
+  return eventDateOnly(sourceDate, payload);
+}
+
+function businessDateOnly(date: string, payload: SchedulePayload): string {
+  if (!date) return "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  return formatDateOnly(nextBusinessDay(parseDateOnly(date), payload.dias_trabalho_semana));
+}
+
+function recalculatedStartDate(payload: SchedulePayload, event: Record<string, unknown>): string {
+  return businessDateOnly(requestedRecalculateDate(payload, event), payload);
 }
 
 function activityStartEventActivityId(event: Record<string, unknown>): string {
@@ -375,7 +432,7 @@ function activeRecalculateEvents(payload: SchedulePayload): Record<string, unkno
 }
 
 function payloadEventDate(payload: SchedulePayload): string {
-  return eventDateOnly(stringValue(field(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao")));
+  return eventDateOnly(stringValue(field(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao")), payload);
 }
 
 function lastEventOfType(events: Record<string, unknown>[], ...types: string[]): Record<string, unknown> | undefined {
@@ -397,7 +454,7 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
   const activityStartDateById = new Map(
     activityStartEvents
       .map((event) => {
-        return [activityStartEventActivityId(event), eventDateOnly(eventDate(event))] as const;
+        return [activityStartEventActivityId(event), recalculatedStartDate(payload, event)] as const;
       })
       .filter(([activityId, date]) => activityId && date)
   );
@@ -411,7 +468,7 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
 
   if (!workStartEvent) return { ...payload, atividades_json };
 
-  const newStartDate = recalculatedStartDate(workStartEvent);
+  const newStartDate = recalculatedStartDate(payload, workStartEvent);
 
   return {
     ...payload,
@@ -607,7 +664,7 @@ function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string)
 function obraStartDate(payload: SchedulePayload): Date | null {
   const obra = payload.obra_json[0];
   const date = obra ? stringValue(field(obra, "dataInicio", "data_inicio", "startDate")) : "";
-  if (date) return parseDateOnly(eventDateOnly(date));
+  if (date) return parseDateOnly(eventDateOnly(date, payload));
 
   const snapshotStart = atividadeObraSnapshot(payload)
     .map(recordDateOnly)
@@ -658,7 +715,7 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
   const scheduleStartEvent = lastEventOfType(events, "work_start_delayed", "from_date_delayed");
   if (!scheduleStartEvent || eventType(scheduleStartEvent) !== "from_date_delayed") return result;
 
-  const fromDate = eventDateOnly(eventDate(scheduleStartEvent));
+  const fromDate = recalculatedStartDate(payload, scheduleStartEvent);
   /* v8 ignore next -- validation requires a date for from_date_delayed before this point. */
   if (!fromDate) return result;
 
@@ -885,7 +942,7 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
     const type = eventType(event);
     const activityId = activityStartEventActivityId(event);
     const targetKey = eventActivityLineKey(event);
-    const newDate = recalculatedStartDate(event);
+    const newDate = recalculatedStartDate(payload, event);
     if (!activityId || !newDate) continue;
 
     const targetLine = lines.find((line) => activityLineKey(line.atividadeId, line.clone_index) === targetKey)
@@ -941,7 +998,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
 
   for (const event of events) {
     const activityId = activityStartEventActivityId(event);
-    const newDate = recalculatedStartDate(event);
+    const newDate = recalculatedStartDate(payload, event);
     if (!activityId || !newDate) continue;
 
     const changedLine = lines.find((line) => line.atividadeId === activityId && line.tipo === "Compra");
@@ -1086,7 +1143,7 @@ function applyWorkStartSnapshotRecalculation(payload: SchedulePayload, result: E
   if (!event) return result;
 
   const startDate = obraStartDate(payload);
-  const newStartDate = recalculatedStartDate(event);
+  const newStartDate = recalculatedStartDate(payload, event);
   if (!startDate || !newStartDate) return result;
 
   const deltaDays = differenceInCalendarDays(startDate, parseDateOnly(newStartDate));
@@ -1101,6 +1158,76 @@ function applyWorkStartSnapshotRecalculation(payload: SchedulePayload, result: E
   return { ...result, lines: refreshLineDependencies(payload, lines) };
 }
 
+function eventTargetExternalId(event: Record<string, unknown>, lines: ScheduleLine[]): string {
+  const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  if (externalId) return externalId;
+
+  const activityId = activityStartEventActivityId(event);
+  if (!activityId) return "";
+  return lines.find((line) => line.atividadeId === activityId)?.atividade_obra_id_externo || "";
+}
+
+function inputNormalizedDates(payload: SchedulePayload, result: EngineResult): NormalizedDate[] {
+  if (payload.mode !== "recalculate") return [];
+
+  return activeRecalculateEvents(payload).flatMap((event) => {
+    const requested = requestedRecalculateDate(payload, event);
+    const applied = businessDateOnly(requested, payload);
+    if (!requested || requested === applied) return [];
+
+    return [{
+      id_atividade_obra_externo: eventTargetExternalId(event, result.lines),
+      requested,
+      applied,
+      reason: "non_working_day" as const
+    }];
+  });
+}
+
+function uniqueNormalizedDates(dates: NormalizedDate[]): NormalizedDate[] {
+  const byKey = new Map<string, NormalizedDate>();
+  for (const date of dates) {
+    const key = [
+      date.id_atividade_obra_externo,
+      date.requested,
+      date.applied,
+      date.reason
+    ].join("|");
+    byKey.set(key, date);
+  }
+  return [...byKey.values()];
+}
+
+function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const normalizedDates: NormalizedDate[] = [];
+  const lines = result.lines.map((line) => {
+    if (!lineCanMove(payload, line)) return line;
+
+    const parsedDate = parseDateOnly(line.data_programada);
+    if (isBusinessDay(parsedDate, payload.dias_trabalho_semana)) return line;
+
+    const applied = formatDateOnly(nextBusinessDay(parsedDate, payload.dias_trabalho_semana));
+    normalizedDates.push({
+      id_atividade_obra_externo: line.atividade_obra_id_externo,
+      requested: line.data_programada,
+      applied,
+      reason: "non_working_day"
+    });
+    return withLineDate(line, applied, payload);
+  });
+
+  if (!normalizedDates.length) return result;
+
+  return {
+    ...result,
+    lines: refreshLineDependencies(
+      payload,
+      lines.sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index)
+    ),
+    normalizedDates: uniqueNormalizedDates([...(result.normalizedDates || []), ...normalizedDates])
+  };
+}
+
 function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
   validateDeltaScope(payload);
 
@@ -1108,7 +1235,7 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
     ? snapshotEngineResult(payload)
     : runScheduleEngine(payload);
 
-  return applyActivityDateChangeRecalculation(
+  const recalculatedResult = applyActivityDateChangeRecalculation(
     payload,
     applyPurchaseChainRecalculation(
       payload,
@@ -1118,6 +1245,12 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
       )
     )
   );
+
+  const normalizedInputDates = inputNormalizedDates(payload, recalculatedResult);
+  return normalizeCalculatedLineDates(payload, {
+    ...recalculatedResult,
+    normalizedDates: uniqueNormalizedDates([...(recalculatedResult.normalizedDates || []), ...normalizedInputDates])
+  });
 }
 
 async function processScheduleJob(
@@ -1186,7 +1319,8 @@ async function processScheduleJob(
         eventCount: persistenceSummary.eventCount,
         dependencyPatchCount: persistenceSummary.dependencyPatchCount,
         durationMs
-      }
+      },
+      normalizedDates: result.normalizedDates || []
     }, webhookOptions);
 
     options.log?.info({

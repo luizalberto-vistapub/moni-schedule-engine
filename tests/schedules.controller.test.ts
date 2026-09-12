@@ -366,13 +366,13 @@ describe("schedule controllers", () => {
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.find((record) => record.atividade === "serv_1")).toMatchObject({ dataInicioPrevista: "2026-05-04T12:00:00.000Z" });
-    expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({ dataInicioPrevista: "2026-05-10T12:00:00.000Z" });
+    expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({ dataInicioPrevista: "2026-05-11T12:00:00.000Z" });
     expect(records.find((record) => record.atividade === "serv_3")).toMatchObject({ dataInicioPrevista: "2026-05-06T12:00:00.000Z" });
 
     const eventRecords = persistedBulkBody("eventocronograma").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(eventRecords.find((record) => record.tipo === "Alterar somente data da atividade")).toMatchObject({
       atividade: "serv_2",
-      data: "2026-05-10T12:00:00.000Z"
+      data: "2026-05-11T12:00:00.000Z"
     });
   });
 
@@ -474,6 +474,168 @@ describe("schedule controllers", () => {
       eventCount: 0,
       dependencyPatchCount: 0
     });
+  });
+
+  it("normalizes v2 delta event dates to the next business day and reports them", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      dias_trabalho_semana: 5,
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-10"
+      },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        },
+        {
+          "unique id": "axo_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          atividade: "serv_2",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 2,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-05",
+          dataFimPrevista: "2026-05-05",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-09"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(2);
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toMatchObject({
+      dataInicioPrevista: "2026-05-11T12:00:00.000Z",
+      dataFimPrevista: "2026-05-11T12:00:00.000Z"
+    });
+    expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toMatchObject({
+      dataInicioPrevista: "2026-05-12T12:00:00.000Z",
+      dataFimPrevista: "2026-05-12T12:00:00.000Z"
+    });
+    expect(doneBody.normalizedDates).toEqual([
+      {
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        requested: "2026-05-10",
+        applied: "2026-05-11",
+        reason: "non_working_day"
+      }
+    ]);
+  });
+
+  it("does not normalize or patch delta anchors on non-working days", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      dias_trabalho_semana: 5,
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-06"
+      },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_anchor",
+          id_atividade_obra_externo: "serv_anchor|amb_1|1",
+          atividade: "serv_anchor",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 0,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-10",
+          dataFimPrevista: "2026-05-10",
+          status: "N\u00e3o iniciada",
+          scopeRole: "anchor"
+        },
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_1", deps: ["serv_anchor"] }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(1);
+    expect(String(patchCalls[0]![0])).toContain("axo_1");
+    expect(doneBody.normalizedDates).toEqual([]);
   });
 
   it("reports scope insufficient when delta dependencies are outside the snapshot", async () => {
@@ -656,8 +818,8 @@ describe("schedule controllers", () => {
     const datesByExternalId = new Map(records.map((record) => [record.id_atividade_obra_externo, record.dataInicioPrevista]));
     expect(datesByExternalId.get("serv_1|amb_1|1")).toBe("2026-05-04T12:00:00.000Z");
     expect(datesByExternalId.get("serv_2|amb_1|1")).toBe("2026-05-05T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-10T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-12T12:00:00.000Z");
     expect(datesByExternalId.get("serv_4|amb_1|1")).toBe("2026-05-08T12:00:00.000Z");
   });
 
@@ -728,9 +890,9 @@ describe("schedule controllers", () => {
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     const datesByActivity = new Map(records.map((record) => [record.atividade, record.dataInicioPrevista]));
-    expect(datesByActivity.get("compra_1")).toBe("2026-05-03T12:00:00.000Z");
-    expect(datesByActivity.get("serv_anchor")).toBe("2026-05-06T12:00:00.000Z");
-    expect(datesByActivity.get("serv_dep")).toBe("2026-05-07T12:00:00.000Z");
+    expect(datesByActivity.get("compra_1")).toBe("2026-05-04T12:00:00.000Z");
+    expect(datesByActivity.get("serv_anchor")).toBe("2026-05-07T12:00:00.000Z");
+    expect(datesByActivity.get("serv_dep")).toBe("2026-05-08T12:00:00.000Z");
     expect(datesByActivity.get("serv_independent")).toBe("2026-05-06T12:00:00.000Z");
   });
 
@@ -893,7 +1055,7 @@ describe("schedule controllers", () => {
       }),
       expect.objectContaining({
         id_atividade_obra_externo: "serv_1|amb_1|1",
-        dataInicioPrevista: "2026-08-09T12:00:00.000Z"
+        dataInicioPrevista: "2026-08-10T12:00:00.000Z"
       })
     ]);
   });

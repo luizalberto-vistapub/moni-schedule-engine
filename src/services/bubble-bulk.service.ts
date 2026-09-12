@@ -2,6 +2,8 @@ import type { Logger } from "pino";
 import type { NormalizedSchedulePayload, ObraAmbientePayload, ObraAmbienteProdutoPayload, ObraPayload } from "../types/payload.types.js";
 import type { ScheduleLine } from "../types/schedule.types.js";
 import type { ScheduleJobProgress } from "./schedule-webhook.service.js";
+import { formatDateOnly, parseDateOnly } from "../utils/dates.js";
+import { nextBusinessDay } from "./business-days.service.js";
 
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
@@ -428,6 +430,61 @@ function eventDate(event: Record<string, unknown>): string | null {
   return stringValue(recordValue(event, "new_start_date", "dataInicio", "data_inicio", "startDate", "date", "data", "from", "to"));
 }
 
+function dateOnly(value: string): string {
+  const trimmed = value.trim();
+  const textDate = trimmed.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})/);
+  if (textDate) {
+    const months: Record<string, string> = {
+      jan: "01",
+      january: "01",
+      feb: "02",
+      february: "02",
+      mar: "03",
+      march: "03",
+      apr: "04",
+      april: "04",
+      may: "05",
+      jun: "06",
+      june: "06",
+      jul: "07",
+      july: "07",
+      aug: "08",
+      august: "08",
+      sep: "09",
+      sept: "09",
+      september: "09",
+      oct: "10",
+      october: "10",
+      nov: "11",
+      november: "11",
+      dec: "12",
+      december: "12"
+    };
+    const month = months[textDate[1]!.toLowerCase()];
+    if (month) return `${textDate[3]}-${month}-${textDate[2]!.padStart(2, "0")}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
+  return value;
+}
+
+function businessEventDate(payload: NormalizedSchedulePayload, value: string | null): string | null {
+  if (!value) return null;
+  const date = dateOnly(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return value;
+  return formatDateOnly(nextBusinessDay(parseDateOnly(date), payload.dias_trabalho_semana));
+}
+
+function scopeNewDate(payload: NormalizedSchedulePayload): string | null {
+  return stringValue(recordValue(payload.scope as Record<string, unknown> | undefined, "nova_data", "new_start_date", "data"));
+}
+
+function scheduleEventDate(payload: NormalizedSchedulePayload, event: Record<string, unknown>): string | null {
+  const sourceDate = payload.mode === "recalculate" && payload.estrutura_inalterada === true && payload.events_json.includes(event) && scopeNewDate(payload)
+    ? scopeNewDate(payload)
+    : eventDate(event);
+  return businessEventDate(payload, sourceDate);
+}
+
 function requestDate(payload: NormalizedSchedulePayload, event: Record<string, unknown>): string | null {
   return stringValue(recordValue(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao"))
     || stringValue(recordValue(event, "request_date", "requisicao_data", "event_date", "data_requisicao"));
@@ -777,7 +834,7 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
     const type = eventType(event);
     if (!type) return [];
 
-    const date = eventDate(event);
+    const date = scheduleEventDate(payload, event);
     const eventRequestDate = requestDate(payload, event);
     const record: Record<string, unknown> = {
       atividade: eventActivityId(event) || "",
