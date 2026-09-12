@@ -478,6 +478,100 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("does not block patch persistence on processing webhook responses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        if (body.status === "processing" && Number(body.progress_percent) > 0) {
+          return new Promise(() => undefined);
+        }
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+      };
+    }));
+
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-06",
+        descendentes_count: 1,
+        ancoras_count: 0
+      },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          scopeRole: "editable"
+        },
+        {
+          "unique id": "axo_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          atividade: "serv_2",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 2,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-05",
+          dataFimPrevista: "2026-05-05",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+
+    const doneBody = await waitForWebhookBody("done");
+
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(2);
+    expect(doneBody.metrics).toMatchObject({
+      patchedCount: 2,
+      patchRequestCount: 2
+    });
+  });
+
   it("normalizes v2 delta event dates to the next business day and reports them", async () => {
     const payload = basePayload({
       payload_version: 2,

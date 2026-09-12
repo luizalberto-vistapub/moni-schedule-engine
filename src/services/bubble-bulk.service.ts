@@ -645,8 +645,11 @@ function transportErrorMessage(error: unknown): string {
 function createPatchRateLimitGate(): {
   wait: () => Promise<void>;
   postpone: (cooldownMs: number) => number;
+  metrics: () => { pauseCount: number; pausedMs: number };
 } {
   let resumeAt = 0;
+  let pauseCount = 0;
+  let pausedMs = 0;
 
   return {
     async wait(): Promise<void> {
@@ -654,9 +657,15 @@ function createPatchRateLimitGate(): {
       if (waitMs > 0) await delay(waitMs);
     },
     postpone(cooldownMs: number): number {
+      pauseCount += 1;
+      const previousResumeAt = resumeAt;
       const nextResumeAt = Date.now() + Math.max(0, cooldownMs);
       resumeAt = Math.max(resumeAt, nextResumeAt);
+      pausedMs += Math.max(0, resumeAt - Math.max(previousResumeAt, Date.now()));
       return Math.max(0, resumeAt - Date.now());
+    },
+    metrics(): { pauseCount: number; pausedMs: number } {
+      return { pauseCount, pausedMs };
     }
   };
 }
@@ -1420,6 +1429,7 @@ async function patchExistingAtividadeObraRecords(
   }
 
   const durationMs = Date.now() - startedAt;
+  const rateLimitMetrics = rateLimitGate.metrics();
   options.log?.info({
     requestId: options.requestId,
     typeName: config.atividadeObraType,
@@ -1428,6 +1438,8 @@ async function patchExistingAtividadeObraRecords(
     configuredConcurrency: config.patchConcurrency,
     peakInFlight,
     patchRequestCount: requestCount,
+    pauseCount: rateLimitMetrics.pauseCount,
+    pausedMs: rateLimitMetrics.pausedMs,
     durationMs
   }, "atividade obra patch pool finished");
 
@@ -1621,6 +1633,7 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
   }
 
   const durationMs = Date.now() - startedAt;
+  const rateLimitMetrics = rateLimitGate.metrics();
   options.log?.info({
     requestId: options.requestId,
     typeName: config.atividadeObraType,
@@ -1629,6 +1642,8 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
     configuredConcurrency: config.patchConcurrency,
     peakInFlight,
     patchRequestCount: requestCount,
+    pauseCount: rateLimitMetrics.pauseCount,
+    pausedMs: rateLimitMetrics.pausedMs,
     durationMs
   }, "atividade obra patch pool finished");
 

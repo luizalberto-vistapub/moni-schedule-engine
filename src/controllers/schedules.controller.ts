@@ -1293,16 +1293,22 @@ async function processScheduleJob(
       onStep: (step) => {
         failedStep = step;
       },
-      onProgress: async (progress) => {
+      onProgress: (progress) => {
         lastProgress = {
           progress: progress.progress,
           progress_percent: progress.progress_percent
         };
-        await sendScheduleWebhook({
+        void sendScheduleWebhook({
           ...baseFields,
           status: "processing",
           ...progress
-        }, webhookOptions);
+        }, webhookOptions).catch((webhookError) => {
+          options.log?.warn({
+            requestId: options.requestId,
+            jobId,
+            ...errorLogFields(webhookError)
+          }, "schedule processing webhook failed");
+        });
       }
     });
 
