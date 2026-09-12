@@ -11,6 +11,7 @@ const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_PATCH_CONCURRENCY = 10;
 const DEFAULT_PATCH_MAX_RETRIES = 4;
 const DEFAULT_PATCH_RETRY_BASE_MS = 250;
+const DEFAULT_PATCH_PROGRESS_INTERVAL_MS = 120000;
 const MAX_PATCH_CONCURRENCY = 25;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
@@ -47,6 +48,7 @@ interface BubbleBulkConfig {
   patchConcurrency: number;
   patchMaxRetries: number;
   patchRetryBaseMs: number;
+  patchProgressIntervalMs: number;
 }
 
 interface PersistScheduleOptions {
@@ -64,7 +66,7 @@ interface PersistScheduleOptions {
 
 interface PersistencePhaseProgress {
   completed: number;
-  report: (completed: number) => Promise<void>;
+  report: (completed: number, force?: boolean) => Promise<void>;
 }
 
 interface PersistedBulkRecord {
@@ -75,6 +77,8 @@ interface PersistedBulkRecord {
 interface PatchPersistResult {
   persistedRecords: PersistedBulkRecord[];
   requestCount: number;
+  peakInFlight: number;
+  durationMs: number;
 }
 
 interface UpsertPersistResult extends PatchPersistResult {
@@ -160,7 +164,8 @@ function readConfig(): BubbleBulkConfig {
     eventoCronogramaType: process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE || DEFAULT_EVENTO_CRONOGRAMA_TYPE,
     patchConcurrency: boundedInteger(process.env.BUBBLE_PATCH_CONCURRENCY, DEFAULT_PATCH_CONCURRENCY, 1, MAX_PATCH_CONCURRENCY),
     patchMaxRetries: boundedInteger(process.env.BUBBLE_PATCH_MAX_RETRIES, DEFAULT_PATCH_MAX_RETRIES, 0, 10),
-    patchRetryBaseMs: boundedInteger(process.env.BUBBLE_PATCH_RETRY_BASE_MS, DEFAULT_PATCH_RETRY_BASE_MS, 0, 60000)
+    patchRetryBaseMs: boundedInteger(process.env.BUBBLE_PATCH_RETRY_BASE_MS, DEFAULT_PATCH_RETRY_BASE_MS, 0, 60000),
+    patchProgressIntervalMs: boundedInteger(process.env.BUBBLE_PATCH_PROGRESS_INTERVAL_MS, DEFAULT_PATCH_PROGRESS_INTERVAL_MS, 1000, 540000)
   };
 }
 
@@ -594,12 +599,12 @@ function createProgressReporter(
 ): (completed: number) => Promise<void> {
   let lastPercent = 0;
 
-  return async (completed: number) => {
+  return async (completed: number, force = false) => {
     if (!options.onProgress || total <= 0) return;
 
     const percent = Math.min(100, Math.floor((completed / total) * 100));
     const roundedPercent = Math.floor(percent / 10) * 10;
-    if (roundedPercent <= lastPercent) return;
+    if (!force && roundedPercent <= lastPercent) return;
 
     lastPercent = roundedPercent;
     await options.onProgress({
@@ -614,6 +619,15 @@ async function reportPersistenceProgress(progress: PersistencePhaseProgress | un
   if (!progress || completedCount <= 0) return;
   progress.completed += completedCount;
   await progress.report(progress.completed);
+}
+
+function startProgressHeartbeat(progress: PersistencePhaseProgress | undefined, intervalMs: number): ReturnType<typeof setInterval> | null {
+  if (!progress) return null;
+  const timer = setInterval(() => {
+    void progress.report(progress.completed, true);
+  }, intervalMs);
+  timer.unref?.();
+  return timer;
 }
 
 function retryDelayMs(attempt: number, config: BubbleBulkConfig): number {
@@ -1193,22 +1207,44 @@ async function patchExistingAtividadeObraRecords(
   config: BubbleBulkConfig,
   options: PersistScheduleOptions
 ): Promise<PatchPersistResult> {
+  const startedAt = Date.now();
   const results = new Array<PersistedBulkRecord>(updates.length);
   let nextIndex = 0;
   let requestCount = 0;
+  let inFlight = 0;
+  let peakInFlight = 0;
+
+  options.log?.info({
+    requestId: options.requestId,
+    typeName: config.atividadeObraType,
+    patchType: "date",
+    updatesCount: updates.length,
+    configuredConcurrency: config.patchConcurrency,
+    maxRetries: config.patchMaxRetries,
+    retryBaseMs: config.patchRetryBaseMs,
+    progressIntervalMs: config.patchProgressIntervalMs
+  }, "atividade obra patch pool started");
 
   const patchRecord = async (url: string, record: Record<string, unknown>, patchIndex: number): Promise<PatchResponse> => {
     for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
       requestCount += 1;
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${config.apiToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(record)
-      });
-      const responseText = await response.text();
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      let response: Response;
+      let responseText = "";
+      try {
+        response = await fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(record)
+        });
+        responseText = await response.text();
+      } finally {
+        inFlight -= 1;
+      }
 
       if (response.status !== 429 || attempt >= config.patchMaxRetries) {
         return { ok: response.ok, status: response.status, text: responseText };
@@ -1328,11 +1364,30 @@ async function patchExistingAtividadeObraRecords(
     }
   };
 
-  await Promise.all(Array.from({ length: Math.min(config.patchConcurrency, updates.length) }, () => worker()));
+  const heartbeat = startProgressHeartbeat(options.phase2Progress, config.patchProgressIntervalMs);
+  try {
+    await Promise.all(Array.from({ length: Math.min(config.patchConcurrency, updates.length) }, () => worker()));
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+
+  const durationMs = Date.now() - startedAt;
+  options.log?.info({
+    requestId: options.requestId,
+    typeName: config.atividadeObraType,
+    patchType: "date",
+    updatesCount: updates.length,
+    configuredConcurrency: config.patchConcurrency,
+    peakInFlight,
+    patchRequestCount: requestCount,
+    durationMs
+  }, "atividade obra patch pool finished");
 
   return {
     persistedRecords: results.filter((record): record is PersistedBulkRecord => Boolean(record)),
-    requestCount
+    requestCount,
+    peakInFlight,
+    durationMs
   };
 }
 
@@ -1345,7 +1400,9 @@ async function upsertAtividadeObraRecords(
   if (!versionId) {
     return {
       persistedRecords: await postBulk(config.atividadeObraType, records, config, options),
-      requestCount: 0
+      requestCount: 0,
+      peakInFlight: 0,
+      durationMs: 0
     };
   }
 
@@ -1378,27 +1435,51 @@ async function upsertAtividadeObraRecords(
       const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
       return externalId ? persistedByExternalId.get(externalId) || { record, bubbleId: null } : { record, bubbleId: null };
     }),
-    requestCount: updatedResult.requestCount
+    requestCount: updatedResult.requestCount,
+    peakInFlight: updatedResult.peakInFlight,
+    durationMs: updatedResult.durationMs
   };
 }
 
 async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PatchPersistResult> {
+  const startedAt = Date.now();
   const persistedRecords = new Array<PersistedBulkRecord>(patches.length);
   let nextIndex = 0;
   let requestCount = 0;
+  let inFlight = 0;
+  let peakInFlight = 0;
+
+  options.log?.info({
+    requestId: options.requestId,
+    typeName: config.atividadeObraType,
+    patchType: "dependency",
+    updatesCount: patches.length,
+    configuredConcurrency: config.patchConcurrency,
+    maxRetries: config.patchMaxRetries,
+    retryBaseMs: config.patchRetryBaseMs,
+    progressIntervalMs: config.patchProgressIntervalMs
+  }, "atividade obra patch pool started");
 
   const patchRecord = async (url: string, fields: Record<string, unknown>, patchIndex: number): Promise<PatchResponse> => {
     for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
       requestCount += 1;
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${config.apiToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(fields)
-      });
-      const responseText = await response.text();
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      let response: Response;
+      let responseText = "";
+      try {
+        response = await fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(fields)
+        });
+        responseText = await response.text();
+      } finally {
+        inFlight -= 1;
+      }
 
       if (response.status !== 429 || attempt >= config.patchMaxRetries) {
         return { ok: response.ok, status: response.status, text: responseText };
@@ -1463,11 +1544,30 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
     }
   };
 
-  await Promise.all(Array.from({ length: Math.min(config.patchConcurrency, patches.length) }, () => worker()));
+  const heartbeat = startProgressHeartbeat(options.phase3Progress, config.patchProgressIntervalMs);
+  try {
+    await Promise.all(Array.from({ length: Math.min(config.patchConcurrency, patches.length) }, () => worker()));
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+
+  const durationMs = Date.now() - startedAt;
+  options.log?.info({
+    requestId: options.requestId,
+    typeName: config.atividadeObraType,
+    patchType: "dependency",
+    updatesCount: patches.length,
+    configuredConcurrency: config.patchConcurrency,
+    peakInFlight,
+    patchRequestCount: requestCount,
+    durationMs
+  }, "atividade obra patch pool finished");
 
   return {
     persistedRecords: persistedRecords.filter((record): record is PersistedBulkRecord => Boolean(record)),
-    requestCount
+    requestCount,
+    peakInFlight,
+    durationMs
   };
 }
 
