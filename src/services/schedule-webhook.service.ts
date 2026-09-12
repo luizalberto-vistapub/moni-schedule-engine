@@ -5,6 +5,8 @@ import type { NormalizedDate } from "../types/schedule.types.js";
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const BUBBLE_WEBHOOK_PATH = "/api/1.1/wf/api_cronograma__webhook_v1";
+const DEFAULT_TERMINAL_WEBHOOK_MAX_RETRIES = 4;
+const DEFAULT_TERMINAL_WEBHOOK_RETRY_BASE_MS = 5000;
 
 export type ScheduleJobStatus = "processing" | "done" | "error";
 export type ScheduleJobProgress = 2 | 3 | 4;
@@ -53,6 +55,31 @@ function normalizeBubbleVersion(value: string): string {
   return `version-${version}`;
 }
 
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === "number" ? value : Number(stringValue(value));
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(numeric)));
+}
+
+function retryableWebhookStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function terminalWebhookRetryDelayMs(attempt: number): number {
+  const retryBaseMs = boundedInteger(
+    process.env.BUBBLE_SCHEDULE_WEBHOOK_RETRY_BASE_MS,
+    DEFAULT_TERMINAL_WEBHOOK_RETRY_BASE_MS,
+    0,
+    60000
+  );
+  return Math.min(30000, retryBaseMs * (2 ** attempt));
+}
+
+async function delay(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function webhookBubbleApiVersion(payload: NormalizedSchedulePayload): string | null {
   const version = stringValue(payload.bubble_api_version || payload.bubble_version || payload.version);
   return version ? normalizeBubbleVersion(version) : null;
@@ -73,49 +100,92 @@ export async function sendScheduleWebhook(
 ): Promise<void> {
   const apiToken = process.env.BUBBLE_API_TOKEN;
   const url = scheduleWebhookUrl(options.bubbleApiVersion);
+  const maxRetries = payload.status === "processing"
+    ? 0
+    : boundedInteger(
+      process.env.BUBBLE_SCHEDULE_WEBHOOK_MAX_RETRIES,
+      DEFAULT_TERMINAL_WEBHOOK_MAX_RETRIES,
+      0,
+      10
+    );
 
-  let response: Response;
-  let responseText = "";
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-    responseText = await response.text();
-  } catch (error) {
-    options.log?.warn({
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    let response: Response;
+    let responseText = "";
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      responseText = await response.text();
+    } catch (error) {
+      if (attempt < maxRetries) {
+        const retryInMs = terminalWebhookRetryDelayMs(attempt);
+        options.log?.warn({
+          requestId: options.requestId,
+          jobId: payload.job_id,
+          url,
+          status: payload.status,
+          attempt: attempt + 1,
+          retryInMs,
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }, "schedule webhook request failed; retrying");
+        await delay(retryInMs);
+        continue;
+      }
+
+      options.log?.warn({
+        requestId: options.requestId,
+        jobId: payload.job_id,
+        url,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }, "schedule webhook request failed");
+      return;
+    }
+
+    if (!response.ok) {
+      if (attempt < maxRetries && retryableWebhookStatus(response.status)) {
+        const retryInMs = terminalWebhookRetryDelayMs(attempt);
+        options.log?.warn({
+          requestId: options.requestId,
+          jobId: payload.job_id,
+          url,
+          status: payload.status,
+          statusCode: response.status,
+          attempt: attempt + 1,
+          retryInMs,
+          responseText
+        }, "schedule webhook failed; retrying");
+        await delay(retryInMs);
+        continue;
+      }
+
+      options.log?.warn({
+        requestId: options.requestId,
+        jobId: payload.job_id,
+        url,
+        statusCode: response.status,
+        responseText
+      }, "schedule webhook failed");
+      return;
+    }
+
+    options.log?.info({
       requestId: options.requestId,
       jobId: payload.job_id,
       url,
-      errorName: error instanceof Error ? error.name : typeof error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    }, "schedule webhook request failed");
+      status: payload.status,
+      progress: payload.progress,
+      progressPercent: payload.progress_percent
+    }, "schedule webhook sent");
     return;
   }
-
-  if (!response.ok) {
-    options.log?.warn({
-      requestId: options.requestId,
-      jobId: payload.job_id,
-      url,
-      statusCode: response.status,
-      responseText
-    }, "schedule webhook failed");
-    return;
-  }
-
-  options.log?.info({
-    requestId: options.requestId,
-    jobId: payload.job_id,
-    url,
-    status: payload.status,
-    progress: payload.progress,
-    progressPercent: payload.progress_percent
-  }, "schedule webhook sent");
 }
 
 export function webhookBaseFields(jobId: string, payload: NormalizedSchedulePayload): Pick<
