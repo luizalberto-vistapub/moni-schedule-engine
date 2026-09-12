@@ -471,6 +471,8 @@ describe("schedule controllers", () => {
     expect(doneBody.metrics).toMatchObject({
       linesCount: 2,
       patchedCount: 2,
+      patchRequestCount: 2,
+      patchBatchCount: 0,
       eventCount: 0,
       dependencyPatchCount: 0
     });

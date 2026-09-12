@@ -8,6 +8,10 @@ import { nextBusinessDay } from "./business-days.service.js";
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const DEFAULT_BATCH_SIZE = 500;
+const DEFAULT_PATCH_CONCURRENCY = 10;
+const DEFAULT_PATCH_MAX_RETRIES = 4;
+const DEFAULT_PATCH_RETRY_BASE_MS = 250;
+const MAX_PATCH_CONCURRENCY = 25;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
@@ -40,6 +44,9 @@ interface BubbleBulkConfig {
   cronogramaLinhaType: string;
   atividadeObraType: string;
   eventoCronogramaType: string;
+  patchConcurrency: number;
+  patchMaxRetries: number;
+  patchRetryBaseMs: number;
 }
 
 interface PersistScheduleOptions {
@@ -65,8 +72,24 @@ interface PersistedBulkRecord {
   bubbleId: string | null;
 }
 
+interface PatchPersistResult {
+  persistedRecords: PersistedBulkRecord[];
+  requestCount: number;
+}
+
+interface UpsertPersistResult extends PatchPersistResult {
+}
+
+interface PatchResponse {
+  ok: boolean;
+  status: number;
+  text: string;
+}
+
 export interface PersistenceSummary {
   patchedCount: number;
+  patchRequestCount: number;
+  patchBatchCount: number;
   eventCount: number;
   dependencyPatchCount: number;
 }
@@ -118,6 +141,12 @@ function normalizeAtividadeObraTypeName(value: string): string {
   return value === "atividade_x_obra" ? DEFAULT_ATIVIDADE_OBRA_TYPE : value;
 }
 
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === "number" ? value : Number(stringValue(value));
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(numeric)));
+}
+
 function readConfig(): BubbleBulkConfig {
   const rawBatchSize = Number(process.env.BUBBLE_BULK_BATCH_SIZE || DEFAULT_BATCH_SIZE);
 
@@ -128,7 +157,10 @@ function readConfig(): BubbleBulkConfig {
     batchSize: Number.isFinite(rawBatchSize) && rawBatchSize > 0 ? Math.floor(rawBatchSize) : DEFAULT_BATCH_SIZE,
     cronogramaLinhaType: process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE || DEFAULT_CRONOGRAMA_LINHA_TYPE,
     atividadeObraType: normalizeAtividadeObraTypeName(process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE),
-    eventoCronogramaType: process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE || DEFAULT_EVENTO_CRONOGRAMA_TYPE
+    eventoCronogramaType: process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE || DEFAULT_EVENTO_CRONOGRAMA_TYPE,
+    patchConcurrency: boundedInteger(process.env.BUBBLE_PATCH_CONCURRENCY, DEFAULT_PATCH_CONCURRENCY, 1, MAX_PATCH_CONCURRENCY),
+    patchMaxRetries: boundedInteger(process.env.BUBBLE_PATCH_MAX_RETRIES, DEFAULT_PATCH_MAX_RETRIES, 0, 10),
+    patchRetryBaseMs: boundedInteger(process.env.BUBBLE_PATCH_RETRY_BASE_MS, DEFAULT_PATCH_RETRY_BASE_MS, 0, 60000)
   };
 }
 
@@ -582,6 +614,15 @@ async function reportPersistenceProgress(progress: PersistencePhaseProgress | un
   if (!progress || completedCount <= 0) return;
   progress.completed += completedCount;
   await progress.report(progress.completed);
+}
+
+function retryDelayMs(attempt: number, config: BubbleBulkConfig): number {
+  return Math.min(10000, config.patchRetryBaseMs * (2 ** attempt));
+}
+
+async function delay(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function assertBulkBodySucceeded(typeName: string, responseText: string): void {
@@ -1151,43 +1192,63 @@ async function patchExistingAtividadeObraRecords(
   updates: { id: string; record: Record<string, unknown> }[],
   config: BubbleBulkConfig,
   options: PersistScheduleOptions
-): Promise<PersistedBulkRecord[]> {
-  const persistedRecords: PersistedBulkRecord[] = [];
+): Promise<PatchPersistResult> {
+  const results = new Array<PersistedBulkRecord>(updates.length);
+  let nextIndex = 0;
+  let requestCount = 0;
 
-  for (const [index, update] of updates.entries()) {
+  const patchRecord = async (url: string, record: Record<string, unknown>, patchIndex: number): Promise<PatchResponse> => {
+    for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
+      requestCount += 1;
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(record)
+      });
+      const responseText = await response.text();
+
+      if (response.status !== 429 || attempt >= config.patchMaxRetries) {
+        return { ok: response.ok, status: response.status, text: responseText };
+      }
+
+      const waitMs = retryDelayMs(attempt, config);
+      options.log?.warn({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        patchIndex,
+        attempt: attempt + 1,
+        retryInMs: waitMs
+      }, "atividade obra patch rate limited; retrying");
+      await delay(waitMs);
+    }
+
+    /* v8 ignore next -- loop always returns on the final configured attempt. */
+    return { ok: false, status: 429, text: "Rate limited" };
+  };
+
+  const patchOne = async (update: { id: string; record: Record<string, unknown> }, index: number): Promise<void> => {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}/${encodeURIComponent(update.id)}`;
 
     options.log?.info({
       requestId: options.requestId,
       typeName: config.atividadeObraType,
       url,
-      patchIndex: index
+      patchIndex: index,
+      patchConcurrency: config.patchConcurrency
     }, "atividade obra idempotent patch started");
 
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${config.apiToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(update.record)
-    });
-    const responseText = await response.text();
+    const response = await patchRecord(url, update.record, index);
 
     if (!response.ok) {
-      if (isMissingAmbienteXObraReference(responseText) && update.record["ambiente x obra"]) {
+      if (isMissingAmbienteXObraReference(response.text) && update.record["ambiente x obra"]) {
         const retryRecord = omitAmbienteXObra([update.record])[0]!;
-        const retryResponse = await fetch(url, {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${config.apiToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(retryRecord)
-        });
-        const retryResponseText = await retryResponse.text();
+        const retryResponse = await patchRecord(url, retryRecord, index);
         if (retryResponse.ok) {
-          persistedRecords.push({ record: update.record, bubbleId: update.id });
+          results[index] = { record: update.record, bubbleId: update.id };
           await reportPersistenceProgress(options.phase2Progress, 1);
           options.log?.info({
             requestId: options.requestId,
@@ -1195,7 +1256,7 @@ async function patchExistingAtividadeObraRecords(
             url,
             patchIndex: index
           }, "atividade obra idempotent patch persisted without ambiente x obra reference");
-          continue;
+          return;
         }
 
         options.log?.error({
@@ -1204,27 +1265,19 @@ async function patchExistingAtividadeObraRecords(
           url,
           patchIndex: index,
           statusCode: retryResponse.status,
-          responseText: retryResponseText
+          responseText: retryResponse.text
         }, "atividade obra idempotent patch failed");
-        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponseText}`);
+        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponse.text}`);
       }
 
       if (
-        isUnrecognizedLocalAtuacaoField(responseText)
+        isUnrecognizedLocalAtuacaoField(response.text)
         && Object.prototype.hasOwnProperty.call(update.record, LOCAL_ATUACAO_FIELD)
       ) {
         const retryRecord = omitLocalAtuacao([update.record])[0]!;
-        const retryResponse = await fetch(url, {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${config.apiToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(retryRecord)
-        });
-        const retryResponseText = await retryResponse.text();
+        const retryResponse = await patchRecord(url, retryRecord, index);
         if (retryResponse.ok) {
-          persistedRecords.push({ record: update.record, bubbleId: update.id });
+          results[index] = { record: update.record, bubbleId: update.id };
           await reportPersistenceProgress(options.phase2Progress, 1);
           options.log?.info({
             requestId: options.requestId,
@@ -1232,7 +1285,7 @@ async function patchExistingAtividadeObraRecords(
             url,
             patchIndex: index
           }, "atividade obra idempotent patch persisted without local atuacao field");
-          continue;
+          return;
         }
 
         options.log?.error({
@@ -1241,9 +1294,9 @@ async function patchExistingAtividadeObraRecords(
           url,
           patchIndex: index,
           statusCode: retryResponse.status,
-          responseText: retryResponseText
+          responseText: retryResponse.text
         }, "atividade obra idempotent patch failed");
-        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponseText}`);
+        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponse.text}`);
       }
 
       options.log?.error({
@@ -1252,12 +1305,12 @@ async function patchExistingAtividadeObraRecords(
         url,
         patchIndex: index,
         statusCode: response.status,
-        responseText
+        responseText: response.text
       }, "atividade obra idempotent patch failed");
-      throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${response.status}: ${responseText}`);
+      throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${response.status}: ${response.text}`);
     }
 
-    persistedRecords.push({ record: update.record, bubbleId: update.id });
+    results[index] = { record: update.record, bubbleId: update.id };
     await reportPersistenceProgress(options.phase2Progress, 1);
     options.log?.info({
       requestId: options.requestId,
@@ -1265,18 +1318,36 @@ async function patchExistingAtividadeObraRecords(
       url,
       patchIndex: index
     }, "atividade obra idempotent patch persisted");
-  }
+  };
 
-  return persistedRecords;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < updates.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await patchOne(updates[currentIndex]!, currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(config.patchConcurrency, updates.length) }, () => worker()));
+
+  return {
+    persistedRecords: results.filter((record): record is PersistedBulkRecord => Boolean(record)),
+    requestCount
+  };
 }
 
 async function upsertAtividadeObraRecords(
   records: Record<string, unknown>[],
   config: BubbleBulkConfig,
   options: PersistScheduleOptions
-): Promise<PersistedBulkRecord[]> {
+): Promise<UpsertPersistResult> {
   const versionId = stringValue(recordValue(records[0], "versaoCronograma"));
-  if (!versionId) return postBulk(config.atividadeObraType, records, config, options);
+  if (!versionId) {
+    return {
+      persistedRecords: await postBulk(config.atividadeObraType, records, config, options),
+      requestCount: 0
+    };
+  }
 
   const existingIds = await findExistingAtividadeObraIds(versionId, config, options);
   const updates: { id: string; record: Record<string, unknown> }[] = [];
@@ -1292,7 +1363,8 @@ async function upsertAtividadeObraRecords(
     }
   }
 
-  const updatedRecords = await patchExistingAtividadeObraRecords(updates, config, options);
+  const updatedResult = await patchExistingAtividadeObraRecords(updates, config, options);
+  const updatedRecords = updatedResult.persistedRecords;
   const createdRecords = await postBulk(config.atividadeObraType, creates, config, options);
   const persistedByExternalId = new Map<string, PersistedBulkRecord>();
 
@@ -1301,32 +1373,65 @@ async function upsertAtividadeObraRecords(
     if (externalId) persistedByExternalId.set(externalId, persisted);
   }
 
-  return records.map((record) => {
-    const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
-    return externalId ? persistedByExternalId.get(externalId) || { record, bubbleId: null } : { record, bubbleId: null };
-  });
+  return {
+    persistedRecords: records.map((record) => {
+      const externalId = stringValue(recordValue(record, "id_atividade_obra_externo"));
+      return externalId ? persistedByExternalId.get(externalId) || { record, bubbleId: null } : { record, bubbleId: null };
+    }),
+    requestCount: updatedResult.requestCount
+  };
 }
 
-async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<void> {
-  for (const [index, patch] of patches.entries()) {
+async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PatchPersistResult> {
+  const persistedRecords = new Array<PersistedBulkRecord>(patches.length);
+  let nextIndex = 0;
+  let requestCount = 0;
+
+  const patchRecord = async (url: string, fields: Record<string, unknown>, patchIndex: number): Promise<PatchResponse> => {
+    for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
+      requestCount += 1;
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(fields)
+      });
+      const responseText = await response.text();
+
+      if (response.status !== 429 || attempt >= config.patchMaxRetries) {
+        return { ok: response.ok, status: response.status, text: responseText };
+      }
+
+      const waitMs = retryDelayMs(attempt, config);
+      options.log?.warn({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        patchIndex,
+        attempt: attempt + 1,
+        retryInMs: waitMs
+      }, "atividade obra dependency patch rate limited; retrying");
+      await delay(waitMs);
+    }
+
+    /* v8 ignore next -- loop always returns on the final configured attempt. */
+    return { ok: false, status: 429, text: "Rate limited" };
+  };
+
+  const patchOne = async (patch: AtividadeObraPatch, index: number): Promise<void> => {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}/${encodeURIComponent(patch.id)}`;
 
     options.log?.info({
       requestId: options.requestId,
       typeName: config.atividadeObraType,
       url,
-      patchIndex: index
+      patchIndex: index,
+      patchConcurrency: config.patchConcurrency
     }, "atividade obra dependency patch started");
 
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${config.apiToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(patch.fields)
-    });
-    const responseText = await response.text();
+    const response = await patchRecord(url, patch.fields, index);
 
     if (!response.ok) {
       options.log?.error({
@@ -1335,11 +1440,12 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
         url,
         patchIndex: index,
         statusCode: response.status,
-        responseText
+        responseText: response.text
       }, "atividade obra dependency patch failed");
-      throw new BubbleBulkRequestError(`Bubble atividade obra dependency patch failed with ${response.status}: ${responseText}`);
+      throw new BubbleBulkRequestError(`Bubble atividade obra dependency patch failed with ${response.status}: ${response.text}`);
     }
 
+    persistedRecords[index] = { record: patch.fields, bubbleId: patch.id };
     options.log?.info({
       requestId: options.requestId,
       typeName: config.atividadeObraType,
@@ -1347,7 +1453,22 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
       patchIndex: index
     }, "atividade obra dependency patch persisted");
     await reportPersistenceProgress(options.phase3Progress, 1);
-  }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (nextIndex < patches.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await patchOne(patches[currentIndex]!, currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(config.patchConcurrency, patches.length) }, () => worker()));
+
+  return {
+    persistedRecords: persistedRecords.filter((record): record is PersistedBulkRecord => Boolean(record)),
+    requestCount
+  };
 }
 
 function atividadeObraSnapshot(payload: NormalizedSchedulePayload): Record<string, unknown>[] {
@@ -1441,13 +1562,15 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
   };
 
   options.onStep?.("patch_dates");
-  await patchExistingAtividadeObraRecords(updates, config, phase2Options);
+  const datePatchResult = await patchExistingAtividadeObraRecords(updates, config, phase2Options);
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, phase2Options);
   }
 
   return {
     patchedCount: updates.length,
+    patchRequestCount: datePatchResult.requestCount,
+    patchBatchCount: 0,
     eventCount: eventoCronogramaRecords.length,
     dependencyPatchCount: 0
   };
@@ -1511,7 +1634,8 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     }
   };
 
-  const persistedAtividadeObraRecords = await upsertAtividadeObraRecords(atividadeObraRecords, config, phase2Options);
+  const upsertResult = await upsertAtividadeObraRecords(atividadeObraRecords, config, phase2Options);
+  const persistedAtividadeObraRecords = upsertResult.persistedRecords;
   if (eventoCronogramaRecords.length) {
     await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, phase2Options);
   }
@@ -1527,10 +1651,12 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     }
   };
   options.onStep?.("patch_dependencies");
-  await patchAtividadeObraDependencies(postPersistPatches, config, phase3Options);
+  const dependencyPatchResult = await patchAtividadeObraDependencies(postPersistPatches, config, phase3Options);
 
   return {
     patchedCount: 0,
+    patchRequestCount: upsertResult.requestCount + dependencyPatchResult.requestCount,
+    patchBatchCount: 0,
     eventCount: eventoCronogramaRecords.length,
     dependencyPatchCount: postPersistPatches.length
   };

@@ -22,6 +22,8 @@ export interface ScheduleWebhookPayload {
     linesCount: number;
     durationMs: number;
     patchedCount?: number;
+    patchRequestCount?: number;
+    patchBatchCount?: number;
     eventCount?: number;
     dependencyPatchCount?: number;
   };

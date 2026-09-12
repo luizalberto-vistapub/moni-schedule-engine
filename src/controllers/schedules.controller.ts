@@ -1316,6 +1316,8 @@ async function processScheduleJob(
       metrics: {
         linesCount: result.lines.length,
         patchedCount: persistenceSummary.patchedCount,
+        patchRequestCount: persistenceSummary.patchRequestCount,
+        patchBatchCount: persistenceSummary.patchBatchCount,
         eventCount: persistenceSummary.eventCount,
         dependencyPatchCount: persistenceSummary.dependencyPatchCount,
         durationMs
@@ -1330,6 +1332,8 @@ async function processScheduleJob(
       mode: payload.mode,
       linesCount: result.lines.length,
       patchedCount: persistenceSummary.patchedCount,
+      patchRequestCount: persistenceSummary.patchRequestCount,
+      patchBatchCount: persistenceSummary.patchBatchCount,
       eventCount: persistenceSummary.eventCount,
       dependencyPatchCount: persistenceSummary.dependencyPatchCount,
       durationMs

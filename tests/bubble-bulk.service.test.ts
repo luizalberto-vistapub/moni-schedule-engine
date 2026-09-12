@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, buildEventoCronogramaRecords, persistScheduleBulks } from "../src/services/bubble-bulk.service.js";
+import { buildAtividadeObraRecords, buildCronogramaLinhaRecords, buildEventoCronogramaRecords, persistScheduleBulks, persistScheduleDatePatches } from "../src/services/bubble-bulk.service.js";
 import { normalizePayload } from "../src/services/normalize-payload.service.js";
 import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 import { basePayload } from "./test-helpers.js";
@@ -25,6 +25,9 @@ describe("Bubble bulk persistence", () => {
     delete process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE;
     delete process.env.BUBBLE_ATIVIDADE_OBRA_TYPE;
     delete process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE;
+    delete process.env.BUBBLE_PATCH_CONCURRENCY;
+    delete process.env.BUBBLE_PATCH_MAX_RETRIES;
+    delete process.env.BUBBLE_PATCH_RETRY_BASE_MS;
   });
 
   function payloadWithOneLine(overrides: Record<string, unknown> = {}) {
@@ -222,6 +225,88 @@ describe("Bubble bulk persistence", () => {
       obra: "obra_1",
       requisicao_data: "2026-05-06T12:00:00.000Z",
       versaoCronograma: "versao_1"
+    });
+  });
+
+  it("patches atividade obra date updates with bounded concurrency", async () => {
+    process.env.BUBBLE_PATCH_CONCURRENCY = "2";
+    let activePatches = 0;
+    let maxActivePatches = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      expect(init?.method).toBe("PATCH");
+      activePatches += 1;
+      maxActivePatches = Math.max(maxActivePatches, activePatches);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      activePatches -= 1;
+      return { ok: true, status: 204, text: async () => "" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = normalizePayload(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      bubble_api_version: "version-test",
+      atividade_obra_snapshot: [
+        { "unique id": "axo_1", id_atividade_obra_externo: "serv_1|amb_1|1", dataInicioPrevista: "2026-05-01", dataFimPrevista: "2026-05-01" },
+        { "unique id": "axo_2", id_atividade_obra_externo: "serv_2|amb_1|1", dataInicioPrevista: "2026-05-02", dataFimPrevista: "2026-05-02" },
+        { "unique id": "axo_3", id_atividade_obra_externo: "serv_3|amb_1|1", dataInicioPrevista: "2026-05-03", dataFimPrevista: "2026-05-03" }
+      ],
+      events_json: []
+    }));
+    const lines = ["serv_1", "serv_2", "serv_3"].map((activityId, index) => ({
+      atividade_obra_id_externo: `${activityId}|amb_1|1`,
+      atividadeId: activityId,
+      data_programada: `2026-05-${String(index + 4).padStart(2, "0")}`,
+      raw: { duracao: 1 }
+    }));
+
+    const summary = await persistScheduleDatePatches(payload, lines as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(maxActivePatches).toBe(2);
+    expect(summary).toMatchObject({
+      patchedCount: 3,
+      patchRequestCount: 3,
+      patchBatchCount: 0
+    });
+  });
+
+  it("retries 429 atividade obra date patches and counts retry requests", async () => {
+    process.env.BUBBLE_PATCH_CONCURRENCY = "1";
+    process.env.BUBBLE_PATCH_MAX_RETRIES = "2";
+    process.env.BUBBLE_PATCH_RETRY_BASE_MS = "0";
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      expect(init?.method).toBe("PATCH");
+      if (fetchMock.mock.calls.length === 1) {
+        return { ok: false, status: 429, text: async () => "rate limited" };
+      }
+      return { ok: true, status: 204, text: async () => "" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = normalizePayload(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      bubble_api_version: "version-test",
+      atividade_obra_snapshot: [
+        { "unique id": "axo_1", id_atividade_obra_externo: "serv_1|amb_1|1", dataInicioPrevista: "2026-05-01", dataFimPrevista: "2026-05-01" }
+      ],
+      events_json: []
+    }));
+    const lines = [{
+      atividade_obra_id_externo: "serv_1|amb_1|1",
+      atividadeId: "serv_1",
+      data_programada: "2026-05-04",
+      raw: { duracao: 1 }
+    }];
+
+    const summary = await persistScheduleDatePatches(payload, lines as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({
+      patchedCount: 1,
+      patchRequestCount: 2,
+      patchBatchCount: 0
     });
   });
 
