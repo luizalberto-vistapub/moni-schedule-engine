@@ -312,6 +312,45 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("retries atividade obra date patch transport failures", async () => {
+    process.env.BUBBLE_PATCH_CONCURRENCY = "1";
+    process.env.BUBBLE_PATCH_MAX_RETRIES = "2";
+    process.env.BUBBLE_PATCH_RETRY_BASE_MS = "0";
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      expect(init?.method).toBe("PATCH");
+      if (fetchMock.mock.calls.length === 1) {
+        throw new TypeError("fetch failed");
+      }
+      return { ok: true, status: 204, text: async () => "" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = normalizePayload(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      bubble_api_version: "version-test",
+      atividade_obra_snapshot: [
+        { "unique id": "axo_1", id_atividade_obra_externo: "serv_1|amb_1|1", dataInicioPrevista: "2026-05-01", dataFimPrevista: "2026-05-01" }
+      ],
+      events_json: []
+    }));
+    const lines = [{
+      atividade_obra_id_externo: "serv_1|amb_1|1",
+      atividadeId: "serv_1",
+      data_programada: "2026-05-04",
+      raw: { duracao: 1 }
+    }];
+
+    const summary = await persistScheduleDatePatches(payload, lines as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({
+      patchedCount: 1,
+      patchRequestCount: 2,
+      patchBatchCount: 0
+    });
+  });
+
   it("maps EventoCronograma event types to Bubble option set display values", () => {
     const { payload } = payloadWithOneLine({
       events_json: [

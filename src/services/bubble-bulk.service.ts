@@ -637,6 +637,11 @@ function retryDelayMs(attempt: number, config: BubbleBulkConfig): number {
   return Math.min(10000, config.patchRetryBaseMs * (2 ** attempt));
 }
 
+function transportErrorMessage(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
+}
+
 function createPatchRateLimitGate(): {
   wait: () => Promise<void>;
   postpone: (cooldownMs: number) => number;
@@ -1255,7 +1260,7 @@ async function patchExistingAtividadeObraRecords(
       requestCount += 1;
       inFlight += 1;
       peakInFlight = Math.max(peakInFlight, inFlight);
-      let response: Response;
+      let response: Response | null = null;
       let responseText = "";
       try {
         response = await fetch(url, {
@@ -1267,10 +1272,29 @@ async function patchExistingAtividadeObraRecords(
           body: JSON.stringify(record)
         });
         responseText = await response.text();
+      } catch (error) {
+        const errorMessage = transportErrorMessage(error);
+        if (attempt >= config.patchMaxRetries) {
+          return { ok: false, status: 0, text: `Transport error after ${attempt + 1} attempts: ${errorMessage}` };
+        }
+
+        const waitMs = retryDelayMs(attempt, config);
+        options.log?.warn({
+          requestId: options.requestId,
+          typeName: config.atividadeObraType,
+          url,
+          patchIndex,
+          attempt: attempt + 1,
+          retryInMs: waitMs,
+          errorMessage
+        }, "atividade obra patch transport failed; retrying");
+        await delay(waitMs);
+        continue;
       } finally {
         inFlight -= 1;
       }
 
+      if (!response) continue;
       if (response.status !== 429 || attempt >= config.patchMaxRetries) {
         return { ok: response.ok, status: response.status, text: responseText };
       }
@@ -1492,7 +1516,7 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
       requestCount += 1;
       inFlight += 1;
       peakInFlight = Math.max(peakInFlight, inFlight);
-      let response: Response;
+      let response: Response | null = null;
       let responseText = "";
       try {
         response = await fetch(url, {
@@ -1504,10 +1528,29 @@ async function patchAtividadeObraDependencies(patches: AtividadeObraPatch[], con
           body: JSON.stringify(fields)
         });
         responseText = await response.text();
+      } catch (error) {
+        const errorMessage = transportErrorMessage(error);
+        if (attempt >= config.patchMaxRetries) {
+          return { ok: false, status: 0, text: `Transport error after ${attempt + 1} attempts: ${errorMessage}` };
+        }
+
+        const waitMs = retryDelayMs(attempt, config);
+        options.log?.warn({
+          requestId: options.requestId,
+          typeName: config.atividadeObraType,
+          url,
+          patchIndex,
+          attempt: attempt + 1,
+          retryInMs: waitMs,
+          errorMessage
+        }, "atividade obra dependency patch transport failed; retrying");
+        await delay(waitMs);
+        continue;
       } finally {
         inFlight -= 1;
       }
 
+      if (!response) continue;
       if (response.status !== 429 || attempt >= config.patchMaxRetries) {
         return { ok: response.ok, status: response.status, text: responseText };
       }
