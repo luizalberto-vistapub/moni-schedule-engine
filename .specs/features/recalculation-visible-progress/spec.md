@@ -84,15 +84,15 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 
 | Requirement ID | Story | Phase | Status |
 | -------------- | ----- | ----- | ------ |
-| RVP-01 | P1: Visible Stage Boundaries | Execute | Pending |
-| RVP-02 | P1: Visible Stage Boundaries | Execute | Pending |
-| RVP-03 | P1: Visible Stage Boundaries | Execute | Pending |
-| RVP-04 | P1: Non-Blocking Progress | Execute | Pending |
+| RVP-01 | P1: Visible Stage Boundaries | Execute | Verified |
+| RVP-02 | P1: Visible Stage Boundaries | Execute | Verified |
+| RVP-03 | P1: Visible Stage Boundaries | Execute | Verified |
+| RVP-04 | P1: Non-Blocking Progress | Execute | Verified |
 
-**Coverage:** 4 total, 0 mapped to tasks, 4 unmapped.
+**Coverage:** 4 total, 4 verified in `.specs/features/recalculation-visible-progress/validation.md`, 0 unmapped.
 
 ## Success Criteria
 
-- [ ] Generate jobs emit ordered stage boundary webhooks before terminal `done`.
-- [ ] Snapshot recalculation jobs emit stage 1, 2, 3, and 4 visibility despite only patching dates.
-- [ ] Existing non-blocking progress behavior remains intact.
+- [x] Generate jobs emit ordered stage boundary webhooks before terminal `done`.
+- [x] Snapshot recalculation jobs emit stage 1, 2, 3, and 4 visibility despite only patching dates.
+- [x] Existing non-blocking progress behavior remains intact.

@@ -93,11 +93,11 @@
 ## Handoff
 
 - **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: Pause after FK0002 heavy recalculation tuning and webhook contract alignment.
-- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026.
+- **Phase / Task**: Visible recalculation progress implemented and validated.
+- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the progress feature in `.specs/features/recalculation-visible-progress/validation.md`.
 - **In-progress** (file:line): none.
-- **Next step**: Implement visible progress for stages 1, 3, and 4 according to `docs/recalculation-webhook-contract-2026-09-13.md`, including time-based stage 1 progress and closing each stage at 100% before opening the next.
-- **Blockers**: Bubble must confirm the engine's semantic definition/messages for stages 1-4 and whether `message` may be sent on every `processing` webhook; Bubble also needs to adjust `api_cronograma__gerar_v1` so it does not clear `progress_mensagem` during stage 1.
-- **Uncommitted files**: none after the chat-closure memory/docs commit.
-- **Branch**: `codex/bubble-bulk-persistence`, pushed to `origin/codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
+- **Next step**: Push `codex/bubble-bulk-persistence` when ready, then validate against Bubble branch `test` with a heavy FK0002 recalculation and confirm the visible stage messages/timing on screen.
+- **Blockers**: Bubble still must confirm the engine's semantic definition/messages for stages 1-4 and whether `message` may be sent on every `processing` webhook; Bubble also needs to adjust `api_cronograma__gerar_v1` so it does not clear `progress_mensagem` during stage 1.
+- **Uncommitted files**: `.specs/STATE.md` and `.specs/features/recalculation-visible-progress/spec.md` pending memory/traceability commit.
+- **Branch**: `codex/bubble-bulk-persistence`, ahead of `origin/codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 
