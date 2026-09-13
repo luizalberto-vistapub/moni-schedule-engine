@@ -31,6 +31,7 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 | Stage 4 semantic label | `Finalizando cronograma` | Covers metrics/normalized date handoff before terminal `done`. | No |
 | Send `message` on every processing webhook | Yes | Bubble currently records `message` on `processing`; repeated sends make the UI resilient to cleared text. | No |
 | Snapshot recalculation stage 3 | Emit a zero-work close/open boundary instead of dependency patch progress | Snapshot recalculate only patches dates today, but Bubble still presents four stages. | No |
+| Stage 1 intra-calculation percentage | Boundary progress only in this step | The current calculation path is synchronous; true elapsed-time percentages during calculation require deeper engine instrumentation or worker isolation. | No |
 
 **Open questions:** none blocking implementation; unconfirmed Bubble-facing decisions are logged as assumptions above.
 

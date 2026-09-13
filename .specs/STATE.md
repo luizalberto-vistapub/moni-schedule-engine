@@ -96,8 +96,8 @@
 - **Phase / Task**: Visible recalculation progress implemented and validated.
 - **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the progress feature in `.specs/features/recalculation-visible-progress/validation.md`.
 - **In-progress** (file:line): none.
-- **Next step**: Push `codex/bubble-bulk-persistence` when ready, then validate against Bubble branch `test` with a heavy FK0002 recalculation and confirm the visible stage messages/timing on screen.
+- **Next step**: Push `codex/bubble-bulk-persistence` when ready, then validate against Bubble branch `test` with a heavy FK0002 recalculation and confirm the visible stage messages/timing on screen. If stage 1 still needs moving intra-stage percentages rather than boundary `0% -> 100%`, implement deeper calculation instrumentation or worker isolation because the current calculation path is synchronous.
 - **Blockers**: Bubble still must confirm the engine's semantic definition/messages for stages 1-4 and whether `message` may be sent on every `processing` webhook; Bubble also needs to adjust `api_cronograma__gerar_v1` so it does not clear `progress_mensagem` during stage 1.
-- **Uncommitted files**: `.specs/STATE.md` and `.specs/features/recalculation-visible-progress/spec.md` pending memory/traceability commit.
+- **Uncommitted files**: `.specs/STATE.md` and `.specs/features/recalculation-visible-progress/spec.md` pending follow-up assumption commit.
 - **Branch**: `codex/bubble-bulk-persistence`, ahead of `origin/codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 
