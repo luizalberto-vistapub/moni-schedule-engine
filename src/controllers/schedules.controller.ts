@@ -1260,12 +1260,37 @@ async function processScheduleJob(
 ): Promise<void> {
   const startedAt = new Date();
   let failedStep = "calculate";
-  let lastProgress: { progress: 2 | 3 | 4; progress_percent: number } = { progress: 2, progress_percent: 0 };
+  let lastProgress: { progress: 1 | 2 | 3 | 4; progress_percent: number } = { progress: 1, progress_percent: 0 };
   const baseFields = webhookBaseFields(jobId, payload);
   const webhookOptions = { ...options, bubbleApiVersion: webhookBubbleApiVersion(payload) };
+  const sendProcessingProgress = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): void => {
+    lastProgress = {
+      progress,
+      progress_percent: progressPercent
+    };
+    void sendScheduleWebhook({
+      ...baseFields,
+      status: "processing",
+      progress,
+      progress_percent: progressPercent,
+      message
+    }, webhookOptions).catch((webhookError) => {
+      options.log?.warn({
+        requestId: options.requestId,
+        jobId,
+        ...errorLogFields(webhookError)
+      }, "schedule processing webhook failed");
+    });
+  };
+  const closeProgressStage = (progress: 1 | 2 | 3 | 4, message: string): void => {
+    if (lastProgress.progress === progress && lastProgress.progress_percent === 100) return;
+    sendProcessingProgress(progress, 100, message);
+  };
 
   try {
+    sendProcessingProgress(1, 0, "Calculando cronograma");
     const result = calculateScheduleResult(payload);
+    closeProgressStage(1, "Calculando cronograma");
 
     options.log?.info({
       requestId: options.requestId,
@@ -1278,13 +1303,9 @@ async function processScheduleJob(
     }, "schedule job calculation finished");
 
     failedStep = isSnapshotRecalculate(payload) ? "patch_dates" : "bulk_create";
-    await sendScheduleWebhook({
-      ...baseFields,
-      status: "processing",
-      progress: 2,
-      progress_percent: 0,
-      message: isSnapshotRecalculate(payload) ? "Atualizando datas recalculadas" : "Criando registros em bulk"
-    }, webhookOptions);
+    const stage2Message = isSnapshotRecalculate(payload) ? "Atualizando datas recalculadas" : "Criando registros em bulk";
+    const stage3Message = "Atualizando vínculos/dependências";
+    sendProcessingProgress(2, 0, stage2Message);
 
     const persist = isSnapshotRecalculate(payload) ? persistScheduleDatePatches : persistScheduleBulks;
     const persistenceSummary = await persist(payload, result.lines, {
@@ -1294,25 +1315,14 @@ async function processScheduleJob(
         failedStep = step;
       },
       onProgress: (progress) => {
-        lastProgress = {
-          progress: progress.progress,
-          progress_percent: progress.progress_percent
-        };
-        void sendScheduleWebhook({
-          ...baseFields,
-          status: "processing",
-          ...progress
-        }, webhookOptions).catch((webhookError) => {
-          options.log?.warn({
-            requestId: options.requestId,
-            jobId,
-            ...errorLogFields(webhookError)
-          }, "schedule processing webhook failed");
-        });
+        sendProcessingProgress(progress.progress, progress.progress_percent, progress.message);
       }
     });
 
     failedStep = "finalizing";
+    closeProgressStage(2, stage2Message);
+    closeProgressStage(3, stage3Message);
+    sendProcessingProgress(4, 0, "Finalizando cronograma");
     const durationMs = new Date().getTime() - startedAt.getTime();
     await sendScheduleWebhook({
       ...baseFields,

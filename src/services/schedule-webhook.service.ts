@@ -9,7 +9,7 @@ const DEFAULT_TERMINAL_WEBHOOK_MAX_RETRIES = 4;
 const DEFAULT_TERMINAL_WEBHOOK_RETRY_BASE_MS = 5000;
 
 export type ScheduleJobStatus = "processing" | "done" | "error";
-export type ScheduleJobProgress = 2 | 3 | 4;
+export type ScheduleJobProgress = 1 | 2 | 3 | 4;
 
 export interface ScheduleWebhookPayload {
   job_id: string;

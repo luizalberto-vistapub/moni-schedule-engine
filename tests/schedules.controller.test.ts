@@ -88,6 +88,32 @@ describe("schedule controllers", () => {
     return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
   }
 
+  function webhookBodies(): Record<string, unknown>[] {
+    return fetchCalls("/api/1.1/wf/api_cronograma__webhook_v1", "POST")
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>);
+  }
+
+  function expectWebhookSequence(expected: Array<Record<string, unknown>>): void {
+    const actual = webhookBodies().map((body) => ({
+      status: body.status,
+      progress: body.progress,
+      progress_percent: body.progress_percent,
+      message: body.message
+    }));
+    let cursor = 0;
+
+    for (const expectedBody of expected) {
+      const foundIndex = actual.slice(cursor).findIndex((body) => (
+        body.status === expectedBody.status
+        && body.progress === expectedBody.progress
+        && body.progress_percent === expectedBody.progress_percent
+        && body.message === expectedBody.message
+      ));
+      expect(foundIndex, `missing ordered webhook ${JSON.stringify(expectedBody)} in ${JSON.stringify(actual)}`).toBeGreaterThanOrEqual(0);
+      cursor += foundIndex + 1;
+    }
+  }
+
   it("returns health status", async () => {
     const response = await request(app).get("/health");
 
@@ -150,15 +176,6 @@ describe("schedule controllers", () => {
     expect(response.body.metrics).toBeUndefined();
     expect(response.body.validations).toBeUndefined();
 
-    const processingBody = await waitForWebhookBody("processing");
-    expect(processingBody).toMatchObject({
-      job_id: response.body.job_id,
-      status: "processing",
-      progress: 2,
-      progress_percent: 0,
-      message: "Criando registros em bulk"
-    });
-
     const webhookCall = await waitForWebhookCall("done");
     expect(webhookCall[0]).toBe("https://moni-29694.bubbleapps.io/version-test/api/1.1/wf/api_cronograma__webhook_v1");
     expect((webhookCall[1] as RequestInit).headers).toMatchObject({
@@ -177,6 +194,16 @@ describe("schedule controllers", () => {
     });
     expect(webhookBody.metrics).toMatchObject({ linesCount: 3 });
     expect(typeof (webhookBody.metrics as { durationMs?: unknown }).durationMs).toBe("number");
+
+    expectWebhookSequence([
+      { status: "processing", progress: 1, progress_percent: 0, message: "Calculando cronograma" },
+      { status: "processing", progress: 1, progress_percent: 100, message: "Calculando cronograma" },
+      { status: "processing", progress: 2, progress_percent: 0, message: "Criando registros em bulk" },
+      { status: "processing", progress: 2, progress_percent: 100, message: "Criando registros em bulk" },
+      { status: "processing", progress: 3, progress_percent: 100, message: "Atualizando vínculos/dependências" },
+      { status: "processing", progress: 4, progress_percent: 0, message: "Finalizando cronograma" },
+      { status: "done", progress: 4, progress_percent: 100, message: undefined }
+    ]);
   });
 
   it("sends schedule webhooks to the Bubble API version from the payload", async () => {
@@ -476,6 +503,15 @@ describe("schedule controllers", () => {
       eventCount: 0,
       dependencyPatchCount: 0
     });
+    expectWebhookSequence([
+      { status: "processing", progress: 1, progress_percent: 0, message: "Calculando cronograma" },
+      { status: "processing", progress: 1, progress_percent: 100, message: "Calculando cronograma" },
+      { status: "processing", progress: 2, progress_percent: 0, message: "Atualizando datas recalculadas" },
+      { status: "processing", progress: 2, progress_percent: 100, message: "Atualizando datas recalculadas" },
+      { status: "processing", progress: 3, progress_percent: 100, message: "Atualizando vínculos/dependências" },
+      { status: "processing", progress: 4, progress_percent: 0, message: "Finalizando cronograma" },
+      { status: "done", progress: 4, progress_percent: 100, message: undefined }
+    ]);
   });
 
   it("does not block patch persistence on processing webhook responses", async () => {
