@@ -519,7 +519,7 @@ describe("schedule controllers", () => {
       if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
         const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
         if (body.status === "processing" && Number(body.progress_percent) > 0) {
-          return new Promise(() => undefined);
+          return { ok: false, status: 429, text: async (): Promise<string> => "rate limited" };
         }
         return { ok: true, status: 200, text: async (): Promise<string> => "" };
       }

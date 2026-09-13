@@ -40,6 +40,8 @@ describe("schedule controller non-Error failures", () => {
         expect(JSON.parse(String((webhookCall[1] as RequestInit).body))).toMatchObject({
           job_id: response.body.job_id,
           status: "error",
+          progress: 1,
+          progress_percent: 0,
           error_code: "SCHEDULE_ENGINE_ERROR",
           error_message: "Unexpected error",
           failed_step: "calculate"
