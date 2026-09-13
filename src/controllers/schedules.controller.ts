@@ -1261,20 +1261,28 @@ async function processScheduleJob(
   const startedAt = new Date();
   let failedStep = "calculate";
   let lastProgress: { progress: 1 | 2 | 3 | 4; progress_percent: number } = { progress: 1, progress_percent: 0 };
+  const closedProgressStages = new Set<1 | 2 | 3 | 4>();
   const baseFields = webhookBaseFields(jobId, payload);
   const webhookOptions = { ...options, bubbleApiVersion: webhookBubbleApiVersion(payload) };
-  const sendProcessingProgress = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): void => {
+  const processingPayload = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string) => {
     lastProgress = {
       progress,
       progress_percent: progressPercent
     };
-    void sendScheduleWebhook({
+    if (progressPercent === 100) closedProgressStages.add(progress);
+    return {
       ...baseFields,
       status: "processing",
       progress,
       progress_percent: progressPercent,
       message
-    }, webhookOptions).catch((webhookError) => {
+    } as const;
+  };
+  const sendProcessingProgress = async (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): Promise<void> => {
+    await sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions);
+  };
+  const sendProcessingProgressDetached = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): void => {
+    void sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions).catch((webhookError) => {
       options.log?.warn({
         requestId: options.requestId,
         jobId,
@@ -1282,15 +1290,15 @@ async function processScheduleJob(
       }, "schedule processing webhook failed");
     });
   };
-  const closeProgressStage = (progress: 1 | 2 | 3 | 4, message: string): void => {
-    if (lastProgress.progress === progress && lastProgress.progress_percent === 100) return;
-    sendProcessingProgress(progress, 100, message);
+  const closeProgressStage = async (progress: 1 | 2 | 3 | 4, message: string): Promise<void> => {
+    if (closedProgressStages.has(progress)) return;
+    await sendProcessingProgress(progress, 100, message);
   };
 
   try {
-    sendProcessingProgress(1, 0, "Calculando cronograma");
+    await sendProcessingProgress(1, 0, "Calculando cronograma");
     const result = calculateScheduleResult(payload);
-    closeProgressStage(1, "Calculando cronograma");
+    await closeProgressStage(1, "Calculando cronograma");
 
     options.log?.info({
       requestId: options.requestId,
@@ -1305,7 +1313,7 @@ async function processScheduleJob(
     failedStep = isSnapshotRecalculate(payload) ? "patch_dates" : "bulk_create";
     const stage2Message = isSnapshotRecalculate(payload) ? "Atualizando datas recalculadas" : "Criando registros em bulk";
     const stage3Message = "Atualizando vínculos/dependências";
-    sendProcessingProgress(2, 0, stage2Message);
+    await sendProcessingProgress(2, 0, stage2Message);
 
     const persist = isSnapshotRecalculate(payload) ? persistScheduleDatePatches : persistScheduleBulks;
     const persistenceSummary = await persist(payload, result.lines, {
@@ -1315,14 +1323,15 @@ async function processScheduleJob(
         failedStep = step;
       },
       onProgress: (progress) => {
-        sendProcessingProgress(progress.progress, progress.progress_percent, progress.message);
+        if (progress.progress_percent === 100) return sendProcessingProgress(progress.progress, progress.progress_percent, progress.message);
+        sendProcessingProgressDetached(progress.progress, progress.progress_percent, progress.message);
       }
     });
 
     failedStep = "finalizing";
-    closeProgressStage(2, stage2Message);
-    closeProgressStage(3, stage3Message);
-    sendProcessingProgress(4, 0, "Finalizando cronograma");
+    await closeProgressStage(2, stage2Message);
+    await closeProgressStage(3, stage3Message);
+    await sendProcessingProgress(4, 0, "Finalizando cronograma");
     const durationMs = new Date().getTime() - startedAt.getTime();
     await sendScheduleWebhook({
       ...baseFields,

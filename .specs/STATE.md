@@ -90,14 +90,22 @@
 - **Date**: 2026-09-13
 - **Status**: active
 
+### AD-012
+- **Decision**: Schedule progress stages 1, 3, and 4 are UI milestones, while stage 2 carries the real long-running persistence progress.
+- **Reason**: Bubble logs from 13/09 showed stages 1, 3, and 4 completing in milliseconds and almost all elapsed work happening in stage 2; inventing artificial duration in the engine would make the UI less truthful.
+- **Trade-off**: Bubble should render stages 1, 3, and 4 as fast transitions, or separately choose a single global progress bar if it wants proportional elapsed-time UX.
+- **Scope**: Schedule recalculation webhook ordering, progress semantics, and Bubble Cronograma loading UI.
+- **Date**: 2026-09-13
+- **Status**: active
+
 ## Handoff
 
 - **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: Visible recalculation progress implemented and validated.
-- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the progress feature in `.specs/features/recalculation-visible-progress/validation.md`.
+- **Phase / Task**: Visible recalculation progress ordering and dedupe implemented; validation pending.
+- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the initial progress feature in `.specs/features/recalculation-visible-progress/validation.md`, applied the decision that stages 1/3/4 are UI milestones, serialized stage-boundary webhooks, and deduped repeated stage 2 heartbeat percentages.
 - **In-progress** (file:line): none.
-- **Next step**: Push `codex/bubble-bulk-persistence` when ready, then validate against Bubble branch `test` with a heavy FK0002 recalculation and confirm the visible stage messages/timing on screen. If stage 1 still needs moving intra-stage percentages rather than boundary `0% -> 100%`, implement deeper calculation instrumentation or worker isolation because the current calculation path is synchronous.
+- **Next step**: Run full tests/build, commit, run/update independent validation, push `codex/bubble-bulk-persistence`, then validate against Bubble branch `test` with a heavy FK0002 recalculation and confirm webhook count/order.
 - **Blockers**: Bubble still must confirm the engine's semantic definition/messages for stages 1-4 and whether `message` may be sent on every `processing` webhook; Bubble also needs to adjust `api_cronograma__gerar_v1` so it does not clear `progress_mensagem` during stage 1.
-- **Uncommitted files**: `.specs/STATE.md` and `.specs/features/recalculation-visible-progress/spec.md` pending follow-up assumption commit.
-- **Branch**: `codex/bubble-bulk-persistence`, ahead of `origin/codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
+- **Uncommitted files**: progress ordering/dedupe implementation, tests, docs, and memory pending commit.
+- **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 

@@ -29,6 +29,7 @@ describe("Bubble bulk persistence", () => {
     delete process.env.BUBBLE_PATCH_MAX_RETRIES;
     delete process.env.BUBBLE_PATCH_RETRY_BASE_MS;
     delete process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS;
+    delete process.env.BUBBLE_PATCH_PROGRESS_INTERVAL_MS;
   });
 
   function payloadWithOneLine(overrides: Record<string, unknown> = {}) {
@@ -90,6 +91,10 @@ describe("Bubble bulk persistence", () => {
     });
   }
 
+  async function delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   it("posts Atividade x Obra bulk payload as NDJSON while cronogramaLinha is paused", async () => {
     const fetchMock = successfulBubbleFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -127,6 +132,63 @@ describe("Bubble bulk persistence", () => {
     expect(progressEvents.filter((event) => event.progress === 3).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
     expect(progressEvents.find((event) => event.progress === 2)?.message).toBe("Criando registros em bulk");
     expect(progressEvents.find((event) => event.progress === 3)?.message).toBe("Atualizando vínculos/dependências");
+  });
+
+  it("does not repeat unchanged progress percentages on short heartbeat intervals", async () => {
+    process.env.BUBBLE_PATCH_PROGRESS_INTERVAL_MS = "1000";
+    let releasePatch: (() => void) | undefined;
+    const patchStarted = new Promise<void>((resolveStarted) => {
+      vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+        if (init?.method === "GET") return atividadeObraLookupResponse();
+        if (init?.method === "PATCH") {
+          resolveStarted();
+          await new Promise<void>((resolvePatch) => {
+            releasePatch = resolvePatch;
+          });
+          return { ok: true, status: 204, text: async () => "" };
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => ""
+        };
+      }));
+    });
+    const { payload, lines } = payloadWithOneLine({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      previous_version_id: "versao_0",
+      mode: "recalculate"
+    });
+    payload.atividade_obra_snapshot = [{
+      "unique id": "axo_1",
+      id_atividade_obra_externo: lines[0]!.atividade_obra_id_externo,
+      atividade: "serv_1",
+      ambiente_id: "amb_1",
+      tipo: "Servico",
+      ordem: 1,
+      peso: 1,
+      equipe: "",
+      diasAntecedencia: 0,
+      duracao: 1,
+      dataInicioPrevista: "2026-05-01",
+      dataFimPrevista: "2026-05-01",
+      scopeRole: "editable"
+    }];
+    const progressEvents: Array<{ progress: number; progress_percent: number; message: string }> = [];
+
+    const persistence = persistScheduleDatePatches(payload, lines, {
+      onProgress: (progress) => {
+        progressEvents.push(progress);
+      }
+    });
+    await patchStarted;
+    await delay(2200);
+    releasePatch?.();
+    await persistence;
+
+    expect(progressEvents.map((event) => event.progress_percent)).toEqual([100]);
   });
 
   it("uses Bubble API version from the request body", async () => {

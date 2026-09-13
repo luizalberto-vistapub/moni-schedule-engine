@@ -88,6 +88,10 @@ describe("schedule controllers", () => {
     return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
   }
 
+  async function delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   function webhookBodies(): Record<string, unknown>[] {
     return fetchCalls("/api/1.1/wf/api_cronograma__webhook_v1", "POST")
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>);
@@ -203,6 +207,73 @@ describe("schedule controllers", () => {
       { status: "processing", progress: 3, progress_percent: 100, message: "Atualizando vínculos/dependências" },
       { status: "processing", progress: 4, progress_percent: 0, message: "Finalizando cronograma" },
       { status: "done", progress: 4, progress_percent: 100, message: undefined }
+    ]);
+  });
+
+  it("delivers stage boundary webhooks in order even when Bubble responds unevenly", async () => {
+    const delivered: string[] = [];
+    let idIndex = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        const key = `${body.status}:${body.progress}:${body.progress_percent}`;
+        if (key === "processing:1:0" || key === "processing:2:100" || key === "processing:3:100") {
+          await delay(20);
+        }
+        delivered.push(key);
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map(() => JSON.stringify({ id: `bubble_${idIndex += 1}` })).join("\n")
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        atividades_json: [
+          { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "Projeto" }] },
+          { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "" },
+          { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 3, atividadeServicoAncoraId: "serv_1", etapaCompra: "limite de compra" }
+        ]
+      }));
+
+    expect(response.status).toBe(202);
+    await waitForWebhookBody("done");
+    await delay(50);
+
+    expect(delivered.filter((key) => [
+      "processing:1:0",
+      "processing:1:100",
+      "processing:2:0",
+      "processing:2:100",
+      "processing:3:100",
+      "processing:4:0",
+      "done:4:100"
+    ].includes(key))).toEqual([
+      "processing:1:0",
+      "processing:1:100",
+      "processing:2:0",
+      "processing:2:100",
+      "processing:3:100",
+      "processing:4:0",
+      "done:4:100"
     ]);
   });
 

@@ -13,6 +13,7 @@ const DEFAULT_PATCH_MAX_RETRIES = 4;
 const DEFAULT_PATCH_RETRY_BASE_MS = 250;
 const DEFAULT_PATCH_RATE_LIMIT_COOLDOWN_MS = 30000;
 const DEFAULT_PATCH_PROGRESS_INTERVAL_MS = 120000;
+const PROGRESS_REPEAT_GUARDRAIL_RENEWAL_MS = 540000;
 const MAX_PATCH_CONCURRENCY = 25;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
@@ -601,15 +602,23 @@ function createProgressReporter(
   message: string
 ): (completed: number) => Promise<void> {
   let lastPercent = 0;
+  let lastReportedAt = 0;
 
   return async (completed: number, force = false) => {
     if (!options.onProgress || total <= 0) return;
 
     const percent = Math.min(100, Math.floor((completed / total) * 100));
     const roundedPercent = Math.floor(percent / 10) * 10;
-    if (!force && roundedPercent <= lastPercent) return;
+    const now = Date.now();
+    const percentAdvanced = roundedPercent > lastPercent;
+    const guardrailRenewalDue = force
+      && roundedPercent === lastPercent
+      && lastReportedAt > 0
+      && now - lastReportedAt >= PROGRESS_REPEAT_GUARDRAIL_RENEWAL_MS;
+    if (!percentAdvanced && !guardrailRenewalDue) return;
 
     lastPercent = roundedPercent;
+    lastReportedAt = now;
     await options.onProgress({
       progress,
       progress_percent: roundedPercent,
