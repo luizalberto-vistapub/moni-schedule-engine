@@ -8,7 +8,7 @@
 - **Trade-off**: Branch operations must include an explicit equality check before declaring the work done.
 - **Scope**: Git workflow for Bubble bulk persistence and schedule recalculation fixes.
 - **Date**: 2026-08-21
-- **Status**: active
+- **Status**: superseded by AD-008
 
 ### AD-002
 - **Decision**: The Bubble field `ambiente x obra` must be populated from `obra_ambiente_json[]."id ambiente x obra"` only.
@@ -58,14 +58,46 @@
 - **Date**: 2026-08-21
 - **Status**: active
 
+### AD-008
+- **Decision**: Schedule recalculation changes must be committed and pushed only to `codex/bubble-bulk-persistence` until the user explicitly promotes them.
+- **Reason**: The current validation cycle is happening against Bubble branch `test`, and the user repeatedly requested that `main` remain untouched.
+- **Trade-off**: Branch equality with `main` is no longer the completion criterion for this workstream.
+- **Scope**: Git workflow for schedule recalculation, Bubble persistence, and webhook contract changes.
+- **Date**: 2026-09-13
+- **Status**: active
+
+### AD-009
+- **Decision**: Recalculation completion depends on terminal webhooks (`done`/`error`), while intermediate `processing` webhooks must not block PATCH persistence.
+- **Reason**: Bubble uses `processing` only to move the screen and renew the 600 s guardrail; a failed/intermittent progress webhook should not stop thousands of successful PATCHes.
+- **Trade-off**: The UI can miss an intermediate progress update and still rely on the terminal webhook to close or fail the loading state.
+- **Scope**: `src/controllers/schedules.controller.ts` and `src/services/schedule-webhook.service.ts`.
+- **Date**: 2026-09-13
+- **Status**: active
+
+### AD-010
+- **Decision**: Bubble PATCH persistence must retry both HTTP 429 and transport failures, logging `patchRequestCount`, `pauseCount`, and `pausedMs` for heavy recalculations.
+- **Reason**: Real FK0002 tests showed Cloudflare 1015 rate limits, transient `fetch failed` transport errors, and the need to distinguish retry overhead from pause overhead.
+- **Trade-off**: Final job duration may include deliberate waits, but the process avoids aborting large recalculations because of recoverable network noise.
+- **Scope**: Bubble Atividade x Obra date/dependency PATCH persistence.
+- **Date**: 2026-09-13
+- **Status**: active
+
+### AD-011
+- **Decision**: The current Bubble webhook contract for branch `test` is documented in `docs/recalculation-webhook-contract-2026-09-13.md`.
+- **Reason**: Bubble currently accepts a specific field set and treats `processing`, `done`, and other statuses differently; the engine needs this explicit contract to design visible progress correctly.
+- **Trade-off**: Future Bubble workflow changes must update the document or supersede this decision.
+- **Scope**: Schedule job webhook payloads and Bubble Cronograma loading UI.
+- **Date**: 2026-09-13
+- **Status**: active
+
 ## Handoff
 
 - **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: Pause after branch sync and contract fixes; next chat should continue from commit `4fae4ec`.
-- **Completed**: fixed `ambiente x obra` source, preserved `sem_ambiente`, surfaced validation messages, created Atividade x Obra records on recalculation, deduped shared project lines by earliest service date, sent `familia`/`nomeFamilia`, returned project metadata and service anchors in bulk.
+- **Phase / Task**: Pause after FK0002 heavy recalculation tuning and webhook contract alignment.
+- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026.
 - **In-progress** (file:line): none.
-- **Next step**: Validate the next real Bubble payload after Bubble starts sending direct project identity fields (`projetoId`, `tipoProjeto`, responsible/status) and confirm the created Atividade x Obra records receive those values.
-- **Blockers**: none in the engine; Bubble payload `bb9a4c20...` still had some direct project metadata absent, so empty fields there are payload-driven.
-- **Uncommitted files**: `.specs/STATE.md`, `.specs/LESSONS.md`.
-- **Branch**: `codex/bubble-bulk-persistence` at `4fae4ec`, equal to `main`, `origin/main`, and `origin/codex/bubble-bulk-persistence` at the last check.
+- **Next step**: Implement visible progress for stages 1, 3, and 4 according to `docs/recalculation-webhook-contract-2026-09-13.md`, including time-based stage 1 progress and closing each stage at 100% before opening the next.
+- **Blockers**: Bubble must confirm the engine's semantic definition/messages for stages 1-4 and whether `message` may be sent on every `processing` webhook; Bubble also needs to adjust `api_cronograma__gerar_v1` so it does not clear `progress_mensagem` during stage 1.
+- **Uncommitted files**: none after the chat-closure memory/docs commit.
+- **Branch**: `codex/bubble-bulk-persistence`, pushed to `origin/codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 

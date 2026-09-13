@@ -29,3 +29,23 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Grounding**: Skill upload rejected a ZIP whose entries used backslash paths such as `agents\openai.yaml`.
 - **Scope**: Skill packaging and release artifacts.
 
+### L-006
+- **Lesson**: Long Bubble write loops must treat HTTP 429 and transport exceptions as retryable persistence noise before failing the whole job.
+- **Grounding**: FK0002 heavy recalculations hit Cloudflare 1015 and later `fetch failed` during `patch_dates`; retries and cooldowns allowed subsequent large runs to finish.
+- **Scope**: Bubble PATCH persistence and schedule job error handling.
+
+### L-007
+- **Lesson**: Progress webhooks that only move the UI must not be awaited inside the critical persistence loop.
+- **Grounding**: Intermediate `processing` webhook failures produced many 429 logs during FK0002 recalculation and could mask PATCH timing until progress sends were made non-blocking.
+- **Scope**: Schedule controller progress reporting and Bubble webhook integration.
+
+### L-008
+- **Lesson**: Heavy Bubble API tuning needs separate metrics for attempted requests, explicit rate-limit pauses, and elapsed persistence time.
+- **Grounding**: `patchRequestCount` alone mixed transport retries with rate-limit behavior until `pauseCount` and `pausedMs` were added to the patch pool log.
+- **Scope**: Observability for schedule recalculation persistence.
+
+### L-009
+- **Lesson**: Treat Bubble branch `test` as the validation target until production promotion is explicitly requested.
+- **Grounding**: The recalc optimization cycle required repeated commits and pushes only to `codex/bubble-bulk-persistence` while Render/Bubble branch `test` was being measured.
+- **Scope**: Git workflow and deployment validation.
+
