@@ -6,6 +6,9 @@ export interface ScheduleMetrics {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  createdCount?: number;
+  bulkBatchCount?: number;
+  bulkRetryCount?: number;
 }
 
 export interface ScheduleValidations {

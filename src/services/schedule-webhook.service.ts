@@ -28,6 +28,9 @@ export interface ScheduleWebhookPayload {
     patchBatchCount?: number;
     eventCount?: number;
     dependencyPatchCount?: number;
+    createdCount?: number;
+    bulkBatchCount?: number;
+    bulkRetryCount?: number;
   };
   normalizedDates?: NormalizedDate[];
   error_code?: string;

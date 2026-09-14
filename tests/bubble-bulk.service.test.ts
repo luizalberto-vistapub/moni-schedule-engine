@@ -102,13 +102,18 @@ describe("Bubble bulk persistence", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { payload, lines } = payloadWithOneLine();
 
-    await persistScheduleBulks(payload, lines);
+    const summary = await persistScheduleBulks(payload, lines);
 
     const bulkCall = findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(bulkCall?.[0]).toBe("https://bubble.test/version-test/api/1.1/obj/atividadexobra/bulk");
     expect(() => JSON.parse(String(bulkCall?.[1]?.body))).not.toThrow();
     expect(Array.isArray(JSON.parse(String(bulkCall?.[1]?.body)))).toBe(false);
+    expect(summary).toMatchObject({
+      createdCount: 1,
+      bulkBatchCount: 1,
+      bulkRetryCount: 0
+    });
   });
 
   it("reports phase 2 and phase 3 persistence progress in 10 percent increments", async () => {
@@ -578,7 +583,7 @@ describe("Bubble bulk persistence", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await persistScheduleBulks(payload, lines, { requestId: "req_partial_retry", log });
+    const summary = await persistScheduleBulks(payload, lines, { requestId: "req_partial_retry", log });
 
     const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
     const patchCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/partially_created_axo_1", "PATCH");
@@ -590,6 +595,11 @@ describe("Bubble bulk persistence", () => {
       recoveredExistingCount: 1,
       retryCreateCount: 0
     }), "atividade obra bulk retry guarded by idempotency lookup");
+    expect(summary).toMatchObject({
+      createdCount: 0,
+      bulkBatchCount: 1,
+      bulkRetryCount: 1
+    });
   });
 
   it("reconciles generic Atividade x Obra bulk failures before retrying the batch", async () => {

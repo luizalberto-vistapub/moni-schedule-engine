@@ -198,7 +198,12 @@ describe("schedule controllers", () => {
       versao_cronograma_unique_id: "versao_1",
       previous_version_id: null
     });
-    expect(webhookBody.metrics).toMatchObject({ linesCount: 3 });
+    expect(webhookBody.metrics).toMatchObject({
+      linesCount: 3,
+      createdCount: 3,
+      bulkBatchCount: 1,
+      bulkRetryCount: 0
+    });
     expect(typeof (webhookBody.metrics as { durationMs?: unknown }).durationMs).toBe("number");
 
     expectWebhookSequence([

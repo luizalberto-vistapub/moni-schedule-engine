@@ -66,6 +66,7 @@ interface PersistScheduleOptions {
   onStep?: (step: "bulk_create" | "patch_dependencies" | "patch_dates") => void;
   phase2Progress?: PersistencePhaseProgress;
   phase3Progress?: PersistencePhaseProgress;
+  bulkMetrics?: BulkPersistenceMetrics;
 }
 
 interface PersistencePhaseProgress {
@@ -85,6 +86,12 @@ interface PatchPersistResult {
   durationMs: number;
 }
 
+interface BulkPersistenceMetrics {
+  createdCount: number;
+  bulkBatchCount: number;
+  bulkRetryCount: number;
+}
+
 interface UpsertPersistResult extends PatchPersistResult {
 }
 
@@ -100,6 +107,9 @@ export interface PersistenceSummary {
   patchBatchCount: number;
   eventCount: number;
   dependencyPatchCount: number;
+  createdCount: number;
+  bulkBatchCount: number;
+  bulkRetryCount: number;
 }
 
 interface AtividadeObraPatch {
@@ -1130,6 +1140,7 @@ async function recoverAtividadeObraBulkRetry(
   batchIndex: number,
   allowCreateMissing = true
 ): Promise<PersistedBulkRecord[]> {
+  options.bulkMetrics && (options.bulkMetrics.bulkRetryCount += 1);
   const versionId = stringValue(recordValue(batch[0], "versaoCronograma"));
   if (!versionId) {
     const retryResponse = await fetch(url, {
@@ -1213,6 +1224,9 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 
   for (const [batchIndex, batch] of chunks(records, config.batchSize).entries()) {
     const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
+    if (typeName === config.atividadeObraType && options.bulkMetrics) {
+      options.bulkMetrics.bulkBatchCount += 1;
+    }
 
     options.log?.info({
       requestId: options.requestId,
@@ -1330,6 +1344,9 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
     assertBulkBodySucceeded(typeName, responseText);
     const createdIds = parseBulkCreatedIds(responseText, batch.length);
     persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
+    if (typeName === config.atividadeObraType && options.bulkMetrics) {
+      options.bulkMetrics.createdCount += batch.length;
+    }
     await reportPersistenceProgress(options.phase2Progress, batch.length);
 
     options.log?.info({
@@ -1862,7 +1879,10 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
     patchRequestCount: datePatchResult.requestCount,
     patchBatchCount: 0,
     eventCount: eventoCronogramaRecords.length,
-    dependencyPatchCount: 0
+    dependencyPatchCount: 0,
+    createdCount: 0,
+    bulkBatchCount: 0,
+    bulkRetryCount: 0
   };
 }
 
@@ -1916,8 +1936,14 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   }
 
   options.onStep?.("bulk_create");
+  const bulkMetrics: BulkPersistenceMetrics = {
+    createdCount: 0,
+    bulkBatchCount: 0,
+    bulkRetryCount: 0
+  };
   const phase2Options: PersistScheduleOptions = {
     ...options,
+    bulkMetrics,
     phase2Progress: {
       completed: 0,
       report: createProgressReporter(options, 2, atividadeObraRecords.length + eventoCronogramaRecords.length, "Criando registros em bulk")
@@ -1948,6 +1974,9 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     patchRequestCount: upsertResult.requestCount + dependencyPatchResult.requestCount,
     patchBatchCount: 0,
     eventCount: eventoCronogramaRecords.length,
-    dependencyPatchCount: postPersistPatches.length
+    dependencyPatchCount: postPersistPatches.length,
+    createdCount: bulkMetrics.createdCount,
+    bulkBatchCount: bulkMetrics.bulkBatchCount,
+    bulkRetryCount: bulkMetrics.bulkRetryCount
   };
 }

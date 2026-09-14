@@ -396,7 +396,10 @@ export function buildOpenApiDocument() {
             projectsCount: { type: "integer" },
             startedAt: { type: "string", format: "date-time" },
             finishedAt: { type: "string", format: "date-time" },
-            durationMs: { type: "integer" }
+            durationMs: { type: "integer" },
+            createdCount: { type: "integer" },
+            bulkBatchCount: { type: "integer" },
+            bulkRetryCount: { type: "integer" }
           }
         },
         ScheduleValidations: {

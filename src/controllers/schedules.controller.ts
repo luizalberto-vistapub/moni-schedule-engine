@@ -1363,6 +1363,9 @@ async function processScheduleJob(
         patchBatchCount: persistenceSummary.patchBatchCount,
         eventCount: persistenceSummary.eventCount,
         dependencyPatchCount: persistenceSummary.dependencyPatchCount,
+        createdCount: persistenceSummary.createdCount,
+        bulkBatchCount: persistenceSummary.bulkBatchCount,
+        bulkRetryCount: persistenceSummary.bulkRetryCount,
         durationMs
       },
       normalizedDates: result.normalizedDates || []
@@ -1379,6 +1382,9 @@ async function processScheduleJob(
       patchBatchCount: persistenceSummary.patchBatchCount,
       eventCount: persistenceSummary.eventCount,
       dependencyPatchCount: persistenceSummary.dependencyPatchCount,
+      createdCount: persistenceSummary.createdCount,
+      bulkBatchCount: persistenceSummary.bulkBatchCount,
+      bulkRetryCount: persistenceSummary.bulkRetryCount,
       durationMs
     }, "schedule job finished");
   } catch (error) {
