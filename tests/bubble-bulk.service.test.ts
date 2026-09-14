@@ -531,7 +531,7 @@ describe("Bubble bulk persistence", () => {
         return {
           ok: false,
           status: 400,
-          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Unrecognized field: localatuacao_option_os_localatua__o\"}\n"
+          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Unrecognized field: localAtuacao\"}\n"
         };
       }
 
@@ -550,8 +550,8 @@ describe("Bubble bulk persistence", () => {
 
     const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
     expect(fetchMock).toHaveBeenCalledTimes(8);
-    expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"localatuacao_option_os_localatua__o\"");
-    expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"localatuacao_option_os_localatua__o\"");
+    expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"localAtuacao\"");
+    expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"localAtuacao\"");
     expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
       requestId: "req_local_atuacao_retry",
       statusCode: 400
@@ -952,7 +952,7 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
-  it("maps service localAtuacao to the Bubble option-set slug in Atividade x Obra records", () => {
+  it("maps service localAtuacao to the Bubble Data API field in Atividade x Obra records", () => {
     const { payload, lines } = payloadWithOneLine({
       atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }]
     });
@@ -963,7 +963,7 @@ describe("Bubble bulk persistence", () => {
     expect(line?.localAtuacao).toBe("Indoor");
     expect(record).toMatchObject({
       atividade: "serv_1",
-      localatuacao_option_os_localatua__o: "indoor"
+      localAtuacao: "indoor"
     });
   });
 
@@ -991,7 +991,7 @@ describe("Bubble bulk persistence", () => {
       expect.objectContaining({ atividade: "compra_1" }),
       expect.objectContaining({ atividade: "projeto_1" })
     ]));
-    expect(records.every((record) => !Object.prototype.hasOwnProperty.call(record, "localatuacao_option_os_localatua__o"))).toBe(true);
+    expect(records.every((record) => !Object.prototype.hasOwnProperty.call(record, "localAtuacao"))).toBe(true);
   });
 
   it("uses recalculate atividade_obra_json localAtuacao when present before falling back to catalog activity", () => {
@@ -1009,9 +1009,8 @@ describe("Bubble bulk persistence", () => {
 
     expect(record).toMatchObject({
       atividade: "serv_1",
-      localatuacao_option_os_localatua__o: "outdoor"
+      localAtuacao: "outdoor"
     });
-    expect(record).not.toHaveProperty("localAtuacao");
   });
 
   it("uses activity responsible when previous Atividade x Obra record has blank responsible", () => {

@@ -21,7 +21,7 @@ const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
 const ATIVIDADE_OBRA_MASTER_FIELD = "Atividade x Obra Master";
-const LOCAL_ATUACAO_FIELD = "localatuacao_option_os_localatua__o";
+const LOCAL_ATUACAO_FIELD = "localAtuacao";
 const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "responsavel",
   "responsavelFranqueado",
