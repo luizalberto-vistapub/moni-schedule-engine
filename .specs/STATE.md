@@ -106,14 +106,53 @@
 - **Date**: 2026-09-14
 - **Status**: active
 
+### AD-014
+- **Decision**: Initial schedule duplicate protection uses pre-persistence deduplication plus a separate `dedupDroppedCount` metric.
+- **Reason**: Real Bubble branch `test` runs showed duplicate Atividade x Obra rows in purchase/project lines derived from service anchors. Deduplication prevents bad writes, but without a separate metric the safety net would hide a generator regression.
+- **Trade-off**: A healthy run should report `dedupDroppedCount: 0`; any value above zero means the defect was contained but still needs investigation.
+- **Scope**: `src/services/bubble-bulk.service.ts`, schedule webhook metrics, OpenAPI docs, Bubble audit checklist.
+- **Date**: 2026-09-14
+- **Status**: active
+
+### AD-015
+- **Decision**: `createdCount` must include Atividade x Obra rows recovered by idempotency lookup after a failed/partial bulk response.
+- **Reason**: Teste 4 persisted 4,676 rows, but `createdCount` reported only 1,484 because rows created by the first POST and later recovered by lookup were not counted.
+- **Trade-off**: `createdCount` now represents successful row creation from both direct success responses and confirmed partial-create recovery.
+- **Scope**: Bubble bulk retry/reconciliation metrics.
+- **Date**: 2026-09-14
+- **Status**: active
+
+### AD-016
+- **Decision**: Send Bubble Data API field `localAtuacao` for Atividade x Obra, not the internal option-set key `localatuacao_option_os_localatua__o`; if a bulk containing `localAtuacao` is rejected, retry without the field through the guarded idempotency path.
+- **Reason**: Bubble Swagger exposes `localAtuacao`, while production logs showed bulk rejections around the old/internal key and later around the field in bulk context. The fallback keeps schedule generation available while Bubble can backfill Local de Atuação afterward.
+- **Trade-off**: Some rows may persist without Local de Atuação when Bubble bulk rejects the field; Bubble must run "Preencher Local de Atuação da obra" afterward. `bulkRetryCount` can be high for this operational fallback and should not be confused with duplicate generation.
+- **Scope**: Bubble Atividade x Obra bulk payload mapping and fallback behavior.
+- **Date**: 2026-09-14
+- **Status**: active
+
+### AD-017
+- **Decision**: For `payload_version=2`, `mode="recalculate"`, `estrutura_inalterada=true`, the snapshot is the complete universe of the recalculation; for `estrutura_inalterada=false`, Bubble must send the full structural inputs needed by `runScheduleEngine`.
+- **Reason**: A "recalculate after error" payload with only 360 snapshot rows returned 360 rows by design, and an aditivo payload with `estrutura_inalterada=false` but empty `atividades_json`/environment/composition inputs failed at stage 2.
+- **Trade-off**: Bubble cannot use a partial failed-version snapshot to recover a failed initial build, and structural aditivos require payloads closer to initial generation.
+- **Scope**: Bubble recalculate/aditivo contract and schedule controller interpretation.
+- **Date**: 2026-09-14
+- **Status**: active
+
 ## Handoff
 
 - **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: FK0002 `work_start_delayed` bug investigated, fixed, and locally verified.
-- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation with explicit contract checks, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the initial progress feature in `.specs/features/recalculation-visible-progress/validation.md`, applied the decision that stages 1/3/4 are UI milestones, serialized stage-boundary webhooks, deduped repeated stage 2 heartbeat percentages, rejected snapshot-only `work_start_delayed` without explicit `obra_json[0].dataInicio`, discarded stale activity-level `events_old` when a new work-start event resets the timeline, updated README contract notes, and passed TypeScript plus the full Vitest suite.
+- **Phase / Task**: Branch `codex/bubble-bulk-persistence` is validating Bubble branch `test` for initial schedule, localAtuacao bulk fallback, metrics, and aditivo/recalculate contract.
+- **Completed**: fixed duplicated purchase/project Atividade x Obra creation with pre-persistence deduplication; added `dedupDroppedCount`; added bulk metrics `createdCount`, `bulkBatchCount`, and `bulkRetryCount`; corrected `createdCount` for rows recovered by idempotency lookup; switched Local de Atuação payload field to `localAtuacao`; broadened the guarded fallback to retry bulk without `localAtuacao`; kept progress at 10% increments for stages 2 and 3; clarified that `patchBatchCount` is legacy/non-applicable while Etapa 3 PATCHes are individual pool requests; confirmed TypeScript and the full Vitest suite pass after each commit; pushed all related commits to `codex/bubble-bulk-persistence`.
+- **Latest pushed commits**: `3f49256 Broaden localAtuacao bulk fallback`; `64acbac Count recovered bulk creates`; `612242e Use Data API localAtuacao field`; `0fa577e Add dedup dropped metric`; `1672c44 Deduplicate Bubble bulk records before persistence`; `1e98f99 Add Bubble bulk create metrics`; `6111f29 Reconcile failed Bubble bulk batches before retry`.
+- **Latest verification**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 174 tests.
+- **Bubble test findings**: Initial schedule target remains 4,676 rows. Healthy runs should show persisted rows 4,676, distinct identities 4,676, `dedupDroppedCount: 0`, and `dependencyPatchCount === patchRequestCount === 4676`. `patchBatchCount` remains 0 because Etapa 3 uses individual PATCH requests in a concurrency pool, not PATCH batches.
+- **LocalAtuacao finding**: Obra 6 initial payload had `localAtuacao` in all 1,725 `atividades_json` rows: 1,345 Compra blank, 348 Serviço with 228 `Indoor` and 120 `Outdoor`, and 32 Projeto blank. The engine should emit `localAtuacao` only when it normalizes to `indoor` or `outdoor`; blank Compra/Projeto values should not be sent in Atividade x Obra bulk records. If Bubble bulk rejects a lote containing `localAtuacao`, the engine now retries without that field through the guarded idempotency path.
+- **Partial recovery finding**: The "recalculate after failed initial schedule" payload attached as `a8238b9a-5552-42a3-8dbd-785173ac8fa0` had `estrutura_inalterada=true`, `atividade_obra_snapshot: 360`, `atividades_json: 0`, `events_json: 0`, and `scope: null`; returning 360 rows is expected because snapshot recalculation treats the provided snapshot as the full universe. Bubble should not use partial failed-version snapshots to recover failed initial schedule creation.
+- **Aditivo finding**: The Obra 6 aditivo payload attached as `2156c940-5e15-48d2-8428-e92cc8de3841` had `estrutura_inalterada=false`, `atividade_obra_snapshot: 4676`, but `atividades_json: 0`, `atividade_obra_json: 0`, and `events_json: 0`. With `estrutura_inalterada=false`, the engine calls `runScheduleEngine` and needs full structural inputs; a snapshot alone is not enough.
 - **In-progress** (file:line): none.
-- **Next step**: Commit the FK0002 work-start recalculation fix, push `codex/bubble-bulk-persistence`, then ask Bubble to send `obra_json[0].dataInicio` for snapshot-only `work_start_delayed` and optionally normalize old event dates to `YYYY-MM-DD`.
-- **Blockers**: Bubble must include the current real work start in `obra_json[0].dataInicio` for snapshot-only work-start recalculations; date normalization for legacy `events_old` remains a small Bubble-side cleanup for activity recalc events.
-- **Uncommitted files**: `README.md`, `.specs/STATE.md`, `.specs/LESSONS.md`, `src/controllers/schedules.controller.ts`, `src/services/bubble-bulk.service.ts`, and `tests/schedules.controller.test.ts`.
+- **Next step**: Bubble should retest initial schedule/aditivo on branch `test` after commit `3f49256`; if aditivo still fails, collect the preceding `schedule job failed` log line and the exact raw Bubble response/body from the failed bulk. Bubble must also fix the aditivo payload contract: structural aditivo (`estrutura_inalterada=false`) needs full structural inputs, while snapshot recalculation (`estrutura_inalterada=true`) needs a complete snapshot and events.
+- **Blockers**: Bubble-side payloads currently show two invalid recovery/aditivo patterns: a partial snapshot of 360 rows after a failed initial build, and an aditivo with `estrutura_inalterada=false` but empty `atividades_json`/environment/composition inputs. The engine cannot infer the full structure from those payloads.
+- **Recommended future engine improvement**: add a fast validation error when `mode="recalculate"` and `estrutura_inalterada=false` but structural inputs are empty, so Bubble receives a clearer contract error instead of a stage 2 persistence failure.
+- **Uncommitted files**: none before this documentation update.
 - **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 

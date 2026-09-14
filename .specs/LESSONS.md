@@ -54,3 +54,23 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Grounding**: FK0002 `work_start_delayed` used the minimum snapshot date `2026-04-06` as the work-start anchor, producing a false +301 day shift; regression coverage now rejects missing `obra_json[0].dataInicio`.
 - **Scope**: Schedule recalculation contracts, snapshot payload normalization, and event precedence.
 
+### L-011
+- **Lesson**: A dedup safety net needs its own dropped-row metric, otherwise it can hide the regression it is containing.
+- **Grounding**: Initial schedule Teste 3 persisted the correct 4,676 rows after duplicate defenses, but Bubble correctly noted that ordinary created/persisted counts would not reveal future duplicate generation once dedup runs before persistence.
+- **Scope**: Bulk Atividade x Obra metrics and Bubble audit checklist.
+
+### L-012
+- **Lesson**: Bubble Data API field names must be verified against Swagger, and bulk endpoints may still need operational fallbacks for fields that object endpoints accept.
+- **Grounding**: Swagger exposed `localAtuacao`, while earlier payloads used the internal key `localatuacao_option_os_localatua__o`; later bulk runs still needed a guarded fallback that removes `localAtuacao` when the bulk rejects a lote.
+- **Scope**: Bubble bulk payload mapping, option-set fields, and field-specific retry logic.
+
+### L-013
+- **Lesson**: Metrics for partial bulk recovery must count rows confirmed by lookup as created rows.
+- **Grounding**: Teste 4 showed `createdCount: 1484` despite 4,676 rows in Bubble because rows created before a 400 bulk response were recovered by idempotency lookup but not counted.
+- **Scope**: Bulk retry/reconciliation metrics.
+
+### L-014
+- **Lesson**: Recalculate payload mode controls whether the engine uses a snapshot or regenerates structure; Bubble must not mix structural mode with snapshot-only inputs.
+- **Grounding**: A recovery payload with `estrutura_inalterada=true` and only 360 snapshot rows returned 360 rows by design, while an aditivo with `estrutura_inalterada=false` and empty `atividades_json`/structure blocks failed because `runScheduleEngine` had no structure to generate.
+- **Scope**: Bubble recalculate/aditivo contract and support triage.
+
