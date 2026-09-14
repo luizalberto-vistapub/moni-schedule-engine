@@ -597,7 +597,7 @@ describe("Bubble bulk persistence", () => {
       retryCreateCount: 0
     }), "atividade obra bulk retry guarded by idempotency lookup");
     expect(summary).toMatchObject({
-      createdCount: 0,
+      createdCount: 1,
       bulkBatchCount: 1,
       bulkRetryCount: 1,
       dedupDroppedCount: 0

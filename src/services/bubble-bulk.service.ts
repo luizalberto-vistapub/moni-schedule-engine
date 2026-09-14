@@ -1207,6 +1207,10 @@ async function recoverAtividadeObraBulkRetry(
     retryCreateCount: creates.length
   }, "atividade obra bulk retry guarded by idempotency lookup");
 
+  if (options.bulkMetrics) {
+    options.bulkMetrics.createdCount += updates.length;
+  }
+
   const updatedResult = await patchExistingAtividadeObraRecords(updates, config, options);
   const createdRecords = creates.length ? await postBulk(typeName, creates, config, options) : [];
   const persistedByExternalId = new Map<string, PersistedBulkRecord>();
