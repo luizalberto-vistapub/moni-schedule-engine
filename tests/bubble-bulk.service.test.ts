@@ -517,7 +517,7 @@ describe("Bubble bulk persistence", () => {
     }), "retrying atividade obra bulk without ambiente x obra reference");
   });
 
-  it("retries Atividade x Obra without local atuacao when Bubble rejects the field", async () => {
+  it("retries Atividade x Obra without local atuacao when Bubble rejects a batch containing the field", async () => {
     const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
     let atividadeObraPostAttempts = 0;
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
@@ -531,7 +531,7 @@ describe("Bubble bulk persistence", () => {
         return {
           ok: false,
           status: 400,
-          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Unrecognized field: localAtuacao\"}\n"
+          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Invalid data for field localAtuacao: value is not a valid option\"}\n"
         };
       }
 

@@ -1296,7 +1296,6 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
 
       if (
         typeName === config.atividadeObraType
-        && isUnrecognizedLocalAtuacaoField(responseText)
         && batch.some((record) => Object.prototype.hasOwnProperty.call(record, LOCAL_ATUACAO_FIELD))
       ) {
         options.log?.warn({
