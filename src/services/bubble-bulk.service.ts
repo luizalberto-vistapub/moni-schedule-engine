@@ -750,6 +750,10 @@ function atividadeObraLookupUrl(config: BubbleBulkConfig, versionId: string, cur
   return `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}?constraints=${constraints}&limit=100&cursor=${cursor}`;
 }
 
+function atividadeObraExternalId(record: Record<string, unknown>): string | null {
+  return stringValue(recordValue(record, "id_atividade_obra_externo"));
+}
+
 async function findExistingAtividadeObraIds(
   versionId: string,
   config: BubbleBulkConfig,
@@ -1103,6 +1107,82 @@ function mergeAtividadeObraPatches(patches: AtividadeObraPatch[]): AtividadeObra
   return [...fieldsById.entries()].map(([id, fields]) => ({ id, fields }));
 }
 
+async function recoverAtividadeObraBulkRetry(
+  typeName: string,
+  url: string,
+  batch: Record<string, unknown>[],
+  retryBatch: Record<string, unknown>[],
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions,
+  batchIndex: number
+): Promise<PersistedBulkRecord[]> {
+  const versionId = stringValue(recordValue(batch[0], "versaoCronograma"));
+  if (!versionId) {
+    const retryResponse = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`,
+        "Content-Type": "text/plain"
+      },
+      body: ndjson(retryBatch)
+    });
+    const retryResponseText = await retryResponse.text();
+    if (!retryResponse.ok) {
+      options.log?.error({
+        requestId: options.requestId,
+        typeName,
+        url,
+        batchIndex,
+        recordsCount: retryBatch.length,
+        statusCode: retryResponse.status,
+        responseText: retryResponseText
+      }, "bubble bulk batch failed");
+      throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${retryResponse.status}: ${retryResponseText}`);
+    }
+    assertBulkBodySucceeded(typeName, retryResponseText);
+    const createdIds = parseBulkCreatedIds(retryResponseText, retryBatch.length);
+    await reportPersistenceProgress(options.phase2Progress, retryBatch.length);
+    return retryBatch.map((record, index) => ({ record, bubbleId: createdIds[index] || null }));
+  }
+
+  const existingIds = await findExistingAtividadeObraIds(versionId, config, options);
+  const updates: { id: string; record: Record<string, unknown> }[] = [];
+  const creates: Record<string, unknown>[] = [];
+
+  for (const [index, record] of batch.entries()) {
+    const retryRecord = retryBatch[index] || record;
+    const externalId = atividadeObraExternalId(record);
+    const existingId = externalId ? existingIds.get(externalId) : undefined;
+    if (existingId) {
+      updates.push({ id: existingId, record: retryRecord });
+    } else {
+      creates.push(retryRecord);
+    }
+  }
+
+  options.log?.warn({
+    requestId: options.requestId,
+    typeName,
+    batchIndex,
+    recordsCount: batch.length,
+    recoveredExistingCount: updates.length,
+    retryCreateCount: creates.length
+  }, "atividade obra bulk retry guarded by idempotency lookup");
+
+  const updatedResult = await patchExistingAtividadeObraRecords(updates, config, options);
+  const createdRecords = creates.length ? await postBulk(typeName, creates, config, options) : [];
+  const persistedByExternalId = new Map<string, PersistedBulkRecord>();
+  for (const persisted of [...updatedResult.persistedRecords, ...createdRecords]) {
+    const externalId = atividadeObraExternalId(persisted.record);
+    if (externalId) persistedByExternalId.set(externalId, persisted);
+  }
+
+  return retryBatch.map((record) => {
+    const externalId = atividadeObraExternalId(record);
+    return externalId ? persistedByExternalId.get(externalId) || { record, bubbleId: null } : { record, bubbleId: null };
+  });
+}
+
 async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
   const persistedRecords: PersistedBulkRecord[] = [];
 
@@ -1143,29 +1223,15 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
           responseText
         }, "retrying atividade obra bulk without ambiente x obra reference");
 
-        const retryResponse = await fetch(url, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${config.apiToken}`,
-            "Content-Type": "text/plain"
-          },
-          body: ndjson(omitAmbienteXObra(batch))
-        });
-        const retryResponseText = await retryResponse.text();
-        if (retryResponse.ok) {
-          assertBulkBodySucceeded(typeName, retryResponseText);
-          const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
-          persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
-          await reportPersistenceProgress(options.phase2Progress, batch.length);
-          options.log?.info({
-            requestId: options.requestId,
-            typeName,
-            url,
-            batchIndex,
-            recordsCount: batch.length
-          }, "bubble bulk batch persisted without ambiente x obra reference");
-          continue;
-        }
+        persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, omitAmbienteXObra(batch), config, options, batchIndex));
+        options.log?.info({
+          requestId: options.requestId,
+          typeName,
+          url,
+          batchIndex,
+          recordsCount: batch.length
+        }, "bubble bulk batch persisted without ambiente x obra reference");
+        continue;
       }
 
       if (
@@ -1183,20 +1249,8 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
           responseText
         }, "retrying atividade obra bulk without local atuacao field");
 
-        const retryResponse = await fetch(url, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${config.apiToken}`,
-            "Content-Type": "text/plain"
-          },
-          body: ndjson(omitLocalAtuacao(batch))
-        });
-        const retryResponseText = await retryResponse.text();
-        if (retryResponse.ok) {
-          assertBulkBodySucceeded(typeName, retryResponseText);
-          const createdIds = parseBulkCreatedIds(retryResponseText, batch.length);
-          persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
-          await reportPersistenceProgress(options.phase2Progress, batch.length);
+        try {
+          persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, omitLocalAtuacao(batch), config, options, batchIndex));
           options.log?.info({
             requestId: options.requestId,
             typeName,
@@ -1205,18 +1259,17 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
             recordsCount: batch.length
           }, "bubble bulk batch persisted without local atuacao field");
           continue;
+        } catch (error) {
+          options.log?.error({
+            requestId: options.requestId,
+            typeName,
+            url,
+            batchIndex,
+            recordsCount: batch.length,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          }, "bubble bulk batch failed");
+          throw error;
         }
-
-        options.log?.error({
-          requestId: options.requestId,
-          typeName,
-          url,
-          batchIndex,
-          recordsCount: batch.length,
-          statusCode: retryResponse.status,
-          responseText: retryResponseText
-        }, "bubble bulk batch failed");
-        throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${retryResponse.status}: ${retryResponseText}`);
       }
 
       options.log?.error({

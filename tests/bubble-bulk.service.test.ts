@@ -500,7 +500,7 @@ describe("Bubble bulk persistence", () => {
     await persistScheduleBulks(payload, lines, { requestId: "req_retry", log });
 
     const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"ambiente x obra\"");
     expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"ambiente x obra\"");
     expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
@@ -541,13 +541,53 @@ describe("Bubble bulk persistence", () => {
     await persistScheduleBulks(payload, lines, { requestId: "req_local_atuacao_retry", log });
 
     const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"localatuacao_option_os_localatua__o\"");
     expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"localatuacao_option_os_localatua__o\"");
     expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
       requestId: "req_local_atuacao_retry",
       statusCode: 400
     }), "retrying atividade obra bulk without local atuacao field");
+  });
+
+  it("does not repost an Atividade x Obra retry batch when Bubble already created it before returning an error", async () => {
+    const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const { payload, lines } = payloadWithOneLine();
+    const externalId = lines[0]!.atividade_obra_id_externo;
+    let lookupCount = 0;
+    let atividadeObraPostAttempts = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "GET") {
+        lookupCount += 1;
+        return lookupCount === 1
+          ? atividadeObraLookupResponse()
+          : atividadeObraLookupResponse([{ _id: "partially_created_axo_1", id_atividade_obra_externo: externalId }]);
+      }
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      atividadeObraPostAttempts += 1;
+      return {
+        ok: false,
+        status: 400,
+        text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Invalid data for field ambiente x obra: object with this id does not exist\",\"body\":{\"statusCode\":400,\"body\":{\"status\":\"MISSING_DATA\"}}}\n"
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await persistScheduleBulks(payload, lines, { requestId: "req_partial_retry", log });
+
+    const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
+    const patchCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/partially_created_axo_1", "PATCH");
+    expect(atividadeObraPostAttempts).toBe(1);
+    expect(atividadeObraPostCalls).toHaveLength(1);
+    expect(patchCalls.length).toBeGreaterThanOrEqual(1);
+    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_partial_retry",
+      recoveredExistingCount: 1,
+      retryCreateCount: 0
+    }), "atividade obra bulk retry guarded by idempotency lookup");
   });
 
   it("updates existing Atividade x Obra records by external id instead of creating duplicates", async () => {
