@@ -1366,6 +1366,7 @@ async function processScheduleJob(
         createdCount: persistenceSummary.createdCount,
         bulkBatchCount: persistenceSummary.bulkBatchCount,
         bulkRetryCount: persistenceSummary.bulkRetryCount,
+        dedupDroppedCount: persistenceSummary.dedupDroppedCount,
         durationMs
       },
       normalizedDates: result.normalizedDates || []
@@ -1385,6 +1386,7 @@ async function processScheduleJob(
       createdCount: persistenceSummary.createdCount,
       bulkBatchCount: persistenceSummary.bulkBatchCount,
       bulkRetryCount: persistenceSummary.bulkRetryCount,
+      dedupDroppedCount: persistenceSummary.dedupDroppedCount,
       durationMs
     }, "schedule job finished");
   } catch (error) {

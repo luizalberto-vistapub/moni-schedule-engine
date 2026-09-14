@@ -399,7 +399,8 @@ export function buildOpenApiDocument() {
             durationMs: { type: "integer" },
             createdCount: { type: "integer" },
             bulkBatchCount: { type: "integer" },
-            bulkRetryCount: { type: "integer" }
+            bulkRetryCount: { type: "integer" },
+            dedupDroppedCount: { type: "integer" }
           }
         },
         ScheduleValidations: {

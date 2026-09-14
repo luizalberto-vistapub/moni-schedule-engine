@@ -112,7 +112,8 @@ describe("Bubble bulk persistence", () => {
     expect(summary).toMatchObject({
       createdCount: 1,
       bulkBatchCount: 1,
-      bulkRetryCount: 0
+      bulkRetryCount: 0,
+      dedupDroppedCount: 0
     });
   });
 
@@ -598,7 +599,8 @@ describe("Bubble bulk persistence", () => {
     expect(summary).toMatchObject({
       createdCount: 0,
       bulkBatchCount: 1,
-      bulkRetryCount: 1
+      bulkRetryCount: 1,
+      dedupDroppedCount: 0
     });
   });
 
@@ -730,7 +732,8 @@ describe("Bubble bulk persistence", () => {
     expect(postedRows).toHaveLength(1);
     expect(summary).toMatchObject({
       createdCount: 1,
-      bulkBatchCount: 1
+      bulkBatchCount: 1,
+      dedupDroppedCount: 1
     });
     expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
       requestId: "req_dedupe",

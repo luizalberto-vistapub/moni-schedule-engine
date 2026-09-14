@@ -9,6 +9,7 @@ export interface ScheduleMetrics {
   createdCount?: number;
   bulkBatchCount?: number;
   bulkRetryCount?: number;
+  dedupDroppedCount?: number;
 }
 
 export interface ScheduleValidations {

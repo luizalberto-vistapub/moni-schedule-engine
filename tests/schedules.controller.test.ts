@@ -202,7 +202,8 @@ describe("schedule controllers", () => {
       linesCount: 3,
       createdCount: 3,
       bulkBatchCount: 1,
-      bulkRetryCount: 0
+      bulkRetryCount: 0,
+      dedupDroppedCount: 0
     });
     expect(typeof (webhookBody.metrics as { durationMs?: unknown }).durationMs).toBe("number");
 

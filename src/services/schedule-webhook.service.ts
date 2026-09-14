@@ -31,6 +31,7 @@ export interface ScheduleWebhookPayload {
     createdCount?: number;
     bulkBatchCount?: number;
     bulkRetryCount?: number;
+    dedupDroppedCount?: number;
   };
   normalizedDates?: NormalizedDate[];
   error_code?: string;

@@ -90,6 +90,7 @@ interface BulkPersistenceMetrics {
   createdCount: number;
   bulkBatchCount: number;
   bulkRetryCount: number;
+  dedupDroppedCount: number;
 }
 
 interface UpsertPersistResult extends PatchPersistResult {
@@ -110,6 +111,7 @@ export interface PersistenceSummary {
   createdCount: number;
   bulkBatchCount: number;
   bulkRetryCount: number;
+  dedupDroppedCount: number;
 }
 
 interface AtividadeObraPatch {
@@ -1594,6 +1596,7 @@ async function upsertAtividadeObraRecords(
     dedupedRecords.push(record);
   }
   if (duplicateRecordsCount > 0) {
+    if (options.bulkMetrics) options.bulkMetrics.dedupDroppedCount += duplicateRecordsCount;
     options.log?.warn({
       requestId: options.requestId,
       typeName: config.atividadeObraType,
@@ -1907,7 +1910,8 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
     dependencyPatchCount: 0,
     createdCount: 0,
     bulkBatchCount: 0,
-    bulkRetryCount: 0
+    bulkRetryCount: 0,
+    dedupDroppedCount: 0
   };
 }
 
@@ -1964,7 +1968,8 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   const bulkMetrics: BulkPersistenceMetrics = {
     createdCount: 0,
     bulkBatchCount: 0,
-    bulkRetryCount: 0
+    bulkRetryCount: 0,
+    dedupDroppedCount: 0
   };
   const phase2Options: PersistScheduleOptions = {
     ...options,
@@ -2002,6 +2007,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
     dependencyPatchCount: postPersistPatches.length,
     createdCount: bulkMetrics.createdCount,
     bulkBatchCount: bulkMetrics.bulkBatchCount,
-    bulkRetryCount: bulkMetrics.bulkRetryCount
+    bulkRetryCount: bulkMetrics.bulkRetryCount,
+    dedupDroppedCount: bulkMetrics.dedupDroppedCount
   };
 }
