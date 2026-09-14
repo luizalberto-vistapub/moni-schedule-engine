@@ -712,6 +712,32 @@ describe("Bubble bulk persistence", () => {
     expect(postedRows[0]).toMatchObject({ id_atividade_obra_externo: "serv_2|amb_1|1" });
   });
 
+  it("deduplicates Atividade x Obra records by external id before bulk persistence", async () => {
+    process.env.BUBBLE_BULK_BATCH_SIZE = "500";
+    const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
+    const fetchMock = successfulBubbleFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const { payload, lines } = payloadWithOneLine();
+    const duplicateLine = {
+      ...lines[0]!,
+      ordemCronograma: lines[0]!.ordemCronograma + 1
+    };
+
+    const summary = await persistScheduleBulks(payload, [lines[0]!, duplicateLine], { requestId: "req_dedupe", log });
+
+    const postedRows = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")
+      .flatMap((call) => String(call[1]?.body).split(/\r?\n/).filter(Boolean).map((row) => JSON.parse(row) as Record<string, unknown>));
+    expect(postedRows).toHaveLength(1);
+    expect(summary).toMatchObject({
+      createdCount: 1,
+      bulkBatchCount: 1
+    });
+    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_dedupe",
+      duplicateRecordsCount: 1
+    }), "deduplicated atividade obra records before bulk persistence");
+  });
+
   it("throws when Bubble omits created ids required for atividade obra master patches", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => init?.method === "GET" ? atividadeObraLookupResponse() : ({
       ok: true,

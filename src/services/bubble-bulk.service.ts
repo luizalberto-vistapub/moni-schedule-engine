@@ -1579,6 +1579,31 @@ async function upsertAtividadeObraRecords(
   config: BubbleBulkConfig,
   options: PersistScheduleOptions
 ): Promise<UpsertPersistResult> {
+  const uniqueRecordsByExternalId = new Map<string, Record<string, unknown>>();
+  const dedupedRecords: Record<string, unknown>[] = [];
+  let duplicateRecordsCount = 0;
+  for (const record of records) {
+    const externalId = atividadeObraExternalId(record);
+    if (externalId) {
+      if (uniqueRecordsByExternalId.has(externalId)) {
+        duplicateRecordsCount += 1;
+        continue;
+      }
+      uniqueRecordsByExternalId.set(externalId, record);
+    }
+    dedupedRecords.push(record);
+  }
+  if (duplicateRecordsCount > 0) {
+    options.log?.warn({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      recordsCount: records.length,
+      dedupedRecordsCount: dedupedRecords.length,
+      duplicateRecordsCount
+    }, "deduplicated atividade obra records before bulk persistence");
+  }
+  records = dedupedRecords;
+
   const versionId = stringValue(recordValue(records[0], "versaoCronograma"));
   if (!versionId) {
     return {
