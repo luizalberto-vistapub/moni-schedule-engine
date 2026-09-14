@@ -13,6 +13,7 @@ const DEFAULT_PATCH_MAX_RETRIES = 4;
 const DEFAULT_PATCH_RETRY_BASE_MS = 250;
 const DEFAULT_PATCH_RATE_LIMIT_COOLDOWN_MS = 30000;
 const DEFAULT_PATCH_PROGRESS_INTERVAL_MS = 120000;
+const DEFAULT_BULK_RETRY_LOOKUP_DELAYS_MS = [1500, 3000, 5000];
 const PROGRESS_REPEAT_GUARDRAIL_RENEWAL_MS = 540000;
 const MAX_PATCH_CONCURRENCY = 25;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
@@ -152,6 +153,15 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   const numeric = typeof value === "number" ? value : Number(stringValue(value));
   if (!Number.isFinite(numeric)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(numeric)));
+}
+
+function bulkRetryLookupDelaysMs(): number[] {
+  const raw = process.env.BUBBLE_BULK_RETRY_LOOKUP_DELAYS_MS;
+  if (!raw) return DEFAULT_BULK_RETRY_LOOKUP_DELAYS_MS;
+  const values = raw.split(",")
+    .map((value) => boundedInteger(value.trim(), Number.NaN, 0, 60000))
+    .filter(Number.isFinite);
+  return values.length ? values : DEFAULT_BULK_RETRY_LOOKUP_DELAYS_MS;
 }
 
 function readConfig(): BubbleBulkConfig {
@@ -1117,7 +1127,8 @@ async function recoverAtividadeObraBulkRetry(
   retryBatch: Record<string, unknown>[],
   config: BubbleBulkConfig,
   options: PersistScheduleOptions,
-  batchIndex: number
+  batchIndex: number,
+  allowCreateMissing = true
 ): Promise<PersistedBulkRecord[]> {
   const versionId = stringValue(recordValue(batch[0], "versaoCronograma"));
   if (!versionId) {
@@ -1148,7 +1159,14 @@ async function recoverAtividadeObraBulkRetry(
     return retryBatch.map((record, index) => ({ record, bubbleId: createdIds[index] || null }));
   }
 
-  const existingIds = await findExistingAtividadeObraIds(versionId, config, options);
+  const batchExternalIds = new Set(batch.map(atividadeObraExternalId).filter((externalId): externalId is string => Boolean(externalId)));
+  let existingIds = await findExistingAtividadeObraIds(versionId, config, options);
+  for (const waitMs of bulkRetryLookupDelaysMs()) {
+    const recoveredCount = [...batchExternalIds].filter((externalId) => existingIds.has(externalId)).length;
+    if (recoveredCount >= batchExternalIds.size) break;
+    await delay(waitMs);
+    existingIds = await findExistingAtividadeObraIds(versionId, config, options);
+  }
   const updates: { id: string; record: Record<string, unknown> }[] = [];
   const creates: Record<string, unknown>[] = [];
 
@@ -1161,6 +1179,10 @@ async function recoverAtividadeObraBulkRetry(
     } else {
       creates.push(retryRecord);
     }
+  }
+
+  if (!allowCreateMissing && creates.length === batch.length) {
+    throw new BubbleBulkRequestError("Bubble atividade obra bulk failed before any created records could be confirmed; refusing blind retry");
   }
 
   options.log?.warn({
@@ -1200,14 +1222,29 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
       recordsCount: batch.length
     }, "bubble bulk batch started");
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiToken}`,
-        "Content-Type": "text/plain"
-      },
-      body: ndjson(batch)
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          "Content-Type": "text/plain"
+        },
+        body: ndjson(batch)
+      });
+    } catch (error) {
+      if (typeName !== config.atividadeObraType) throw error;
+      options.log?.warn({
+        requestId: options.requestId,
+        typeName,
+        url,
+        batchIndex,
+        recordsCount: batch.length,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }, "atividade obra bulk transport failed; reconciling before retry");
+      persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false));
+      continue;
+    }
 
     const responseText = await response.text();
     if (!response.ok) {
@@ -1284,6 +1321,10 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
         statusCode: response.status,
         responseText
       }, "bubble bulk batch failed");
+      if (typeName === config.atividadeObraType) {
+        persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false));
+        continue;
+      }
       throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
     }
     assertBulkBodySucceeded(typeName, responseText);

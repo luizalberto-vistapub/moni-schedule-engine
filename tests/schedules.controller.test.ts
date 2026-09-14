@@ -9,6 +9,7 @@ import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 describe("schedule controllers", () => {
   beforeEach(() => {
     process.env.BUBBLE_API_TOKEN = "test_token";
+    process.env.BUBBLE_BULK_RETRY_LOOKUP_DELAYS_MS = "0,0,0";
     let idIndex = 0;
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "GET") {
@@ -38,6 +39,7 @@ describe("schedule controllers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.BUBBLE_API_TOKEN;
+    delete process.env.BUBBLE_BULK_RETRY_LOOKUP_DELAYS_MS;
   });
 
   function persistedBulkBody(typeName: string): string {
@@ -1924,7 +1926,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "BUBBLE_BULK_REQUEST_ERROR",
-      error_message: "Bubble bulk atividadexobra failed with 401: Unauthorized",
+      error_message: "Bubble atividade obra bulk failed before any created records could be confirmed; refusing blind retry",
       failed_step: "bulk_create"
     });
   });
