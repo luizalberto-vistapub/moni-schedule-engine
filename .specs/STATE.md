@@ -98,14 +98,22 @@
 - **Date**: 2026-09-13
 - **Status**: active
 
+### AD-013
+- **Decision**: Snapshot-only `work_start_delayed` recalculations must require an explicit `obra_json[0].dataInicio`, and a new work-start event resets prior activity-level events.
+- **Reason**: FK0002 showed that deriving the work start from the minimum snapshot date can anchor on an old isolated line and apply a huge false delta; stale activity events can then pull part of the schedule back to the old timeline.
+- **Trade-off**: Bubble must include the current real work start when sending `work_start_delayed`; snapshot-only payloads missing that field now fail fast instead of guessing.
+- **Scope**: Recalculate contract, event precedence, Bubble `events_old` handling, and Atividade x Obra date patching.
+- **Date**: 2026-09-14
+- **Status**: active
+
 ## Handoff
 
 - **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: Visible recalculation progress ordering and dedupe implemented; validation pending.
-- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation without `obra_json`, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the initial progress feature in `.specs/features/recalculation-visible-progress/validation.md`, applied the decision that stages 1/3/4 are UI milestones, serialized stage-boundary webhooks, and deduped repeated stage 2 heartbeat percentages.
+- **Phase / Task**: FK0002 `work_start_delayed` bug investigated, fixed, and locally verified.
+- **Completed**: normalized recalc dates to business days, accepted v2 structural recalculation with explicit contract checks, parallelized Atividade x Obra PATCHes, added 429 cooldown/retry, retried transport failures, retried terminal webhooks, made intermediate progress webhooks non-blocking, added `pauseCount`/`pausedMs` pool metrics, documented the Bubble webhook contract for 13/09/2026, emitted visible stage boundary webhooks for stages 1-4, preserved non-blocking `processing` semantics, validated the initial progress feature in `.specs/features/recalculation-visible-progress/validation.md`, applied the decision that stages 1/3/4 are UI milestones, serialized stage-boundary webhooks, deduped repeated stage 2 heartbeat percentages, rejected snapshot-only `work_start_delayed` without explicit `obra_json[0].dataInicio`, discarded stale activity-level `events_old` when a new work-start event resets the timeline, updated README contract notes, and passed TypeScript plus the full Vitest suite.
 - **In-progress** (file:line): none.
-- **Next step**: Run full tests/build, commit, run/update independent validation, push `codex/bubble-bulk-persistence`, then validate against Bubble branch `test` with a heavy FK0002 recalculation and confirm webhook count/order.
-- **Blockers**: Bubble still must confirm the engine's semantic definition/messages for stages 1-4 and whether `message` may be sent on every `processing` webhook; Bubble also needs to adjust `api_cronograma__gerar_v1` so it does not clear `progress_mensagem` during stage 1.
-- **Uncommitted files**: progress ordering/dedupe implementation, tests, docs, and memory pending commit.
+- **Next step**: Commit the FK0002 work-start recalculation fix, push `codex/bubble-bulk-persistence`, then ask Bubble to send `obra_json[0].dataInicio` for snapshot-only `work_start_delayed` and optionally normalize old event dates to `YYYY-MM-DD`.
+- **Blockers**: Bubble must include the current real work start in `obra_json[0].dataInicio` for snapshot-only work-start recalculations; date normalization for legacy `events_old` remains a small Bubble-side cleanup for activity recalc events.
+- **Uncommitted files**: `README.md`, `.specs/STATE.md`, `.specs/LESSONS.md`, `src/controllers/schedules.controller.ts`, `src/services/bubble-bulk.service.ts`, and `tests/schedules.controller.test.ts`.
 - **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 

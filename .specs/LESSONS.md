@@ -49,3 +49,8 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Grounding**: The recalc optimization cycle required repeated commits and pushes only to `codex/bubble-bulk-persistence` while Render/Bubble branch `test` was being measured.
 - **Scope**: Git workflow and deployment validation.
 
+### L-010
+- **Lesson**: Snapshot-only recalculations must require explicit contract anchors instead of deriving business anchors from incidental snapshot extrema.
+- **Grounding**: FK0002 `work_start_delayed` used the minimum snapshot date `2026-04-06` as the work-start anchor, producing a false +301 day shift; regression coverage now rejects missing `obra_json[0].dataInicio`.
+- **Scope**: Schedule recalculation contracts, snapshot payload normalization, and event precedence.
+

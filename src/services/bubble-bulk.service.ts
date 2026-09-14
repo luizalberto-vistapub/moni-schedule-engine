@@ -569,9 +569,12 @@ function activeScheduleEvents(payload: NormalizedSchedulePayload): Record<string
       .map(scheduleEventOverrideKey)
       .filter(Boolean)
   );
+  const currentWorkStartResetsTimeline = currentEventKeys.has("schedule")
+    && payload.events_json.some((event) => eventType(event) === "work_start_delayed");
   const oldEvents = currentEventKeys.size
     ? payload.events_old.filter((event) => {
       const key = scheduleEventOverrideKey(event);
+      if (currentWorkStartResetsTimeline && key.startsWith("activity:")) return false;
       return !key || !currentEventKeys.has(key);
     })
     : payload.events_old;

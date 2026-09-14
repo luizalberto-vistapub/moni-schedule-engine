@@ -178,6 +178,11 @@ function versionId(payload: SchedulePayload): string {
   return stringValue(field(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
 }
 
+function explicitObraStartDate(payload: SchedulePayload): string {
+  const obra = payload.obra_json[0];
+  return obra ? stringValue(field(obra, "dataInicio", "data_inicio", "startDate")) : "";
+}
+
 function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayload): void {
   if (mode !== "recalculate") return;
 
@@ -217,6 +222,16 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
         code: "custom" as const,
         path: ["events_json", insertedEventIndex, "type"],
         message: "activity_inserted cannot use estrutura_inalterada=true"
+      });
+    }
+
+    const hasWorkStartDelay = [...payload.events_old, ...payload.events_json]
+      .some((event) => eventType(event) === "work_start_delayed");
+    if (hasWorkStartDelay && !explicitObraStartDate(payload)) {
+      issues.push({
+        code: "custom" as const,
+        path: ["obra_json", 0, "dataInicio"],
+        message: "work_start_delayed snapshot recalculation requires obra_json[0].dataInicio"
       });
     }
 
@@ -421,9 +436,12 @@ function activeRecalculateEvents(payload: SchedulePayload): Record<string, unkno
       .map(recalculateEventOverrideKey)
       .filter(Boolean)
   );
+  const currentWorkStartResetsTimeline = currentEventKeys.has("schedule")
+    && payload.events_json.some((event) => eventType(event) === "work_start_delayed");
   const oldEvents = currentEventKeys.size
     ? payload.events_old.filter((event) => {
       const key = recalculateEventOverrideKey(event);
+      if (currentWorkStartResetsTimeline && key.startsWith("activity:")) return false;
       return !key || !currentEventKeys.has(key);
     })
     : payload.events_old;

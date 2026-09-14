@@ -333,6 +333,91 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("rejects snapshot work start recalculation without an explicit work start date", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        estrutura_inalterada: true,
+        obra_json: [],
+        atividade_obra_snapshot: [{
+          "unique id": "ao_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          tipo: "Servico",
+          dataInicioPrevista: "2026-04-06",
+          dataFimPrevista: "2026-04-06",
+          status: "Nao iniciada",
+          scopeRole: "editable"
+        }],
+        events_json: [{ type: "work_start_delayed", new_start_date: "2027-02-01" }]
+      }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.validations.errors).toContain("work_start_delayed snapshot recalculation requires obra_json[0].dataInicio");
+  });
+
+  it("lets a new work start reset override stale activity events from previous recalculations", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        estrutura_inalterada: true,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-01" }],
+        atividade_obra_snapshot: [
+          {
+            "unique id": "ao_1",
+            id_atividade_obra_externo: "serv_1|amb_1|1",
+            atividade: "serv_1",
+            tipo: "Servico",
+            dataInicioPrevista: "2026-05-01",
+            dataFimPrevista: "2026-05-01",
+            status: "Nao iniciada",
+            scopeRole: "editable"
+          },
+          {
+            "unique id": "ao_2",
+            id_atividade_obra_externo: "serv_2|amb_1|1",
+            atividade: "serv_2",
+            tipo: "Servico",
+            dataInicioPrevista: "2026-05-02",
+            dataFimPrevista: "2026-05-02",
+            status: "Nao iniciada",
+            scopeRole: "editable"
+          }
+        ],
+        events_old: [{
+          tipo: "activity_date_changed_cascade",
+          atividade: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          data: "2026-05-10"
+        }],
+        events_json: [{ type: "work_start_delayed", new_start_date: "2026-06-01" }]
+      }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    const patchBodies = patchCalls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(patchBodies).toEqual([
+      expect.objectContaining({ dataInicioPrevista: "2026-06-01T12:00:00.000Z" }),
+      expect.objectContaining({ dataInicioPrevista: "2026-06-02T12:00:00.000Z" })
+    ]);
+
+    const eventRecords = persistedBulkBody("eventocronograma").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventRecords).toHaveLength(1);
+    expect(eventRecords[0]).toMatchObject({
+      data: "2026-06-01T12:00:00.000Z"
+    });
+  });
+
   it("applies from date paralysis days during recalculation", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
