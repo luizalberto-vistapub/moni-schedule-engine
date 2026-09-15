@@ -78,3 +78,8 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: Event-sourced recalculation paths must separate replay input from persistence output: replay `events_old`, but persist only the new `events_json` event.
 - **Grounding**: The delta motor v3 work found duplicated `EventoCronograma` history and timezone date drift when old events were re-persisted; regression coverage now asserts one new event and calendar-stable event dates.
 - **Scope**: Schedule recalculation contracts, `EventoCronograma` persistence, and Bubble fallback triage.
+
+### L-016
+- **Lesson**: Numeric environment defaults must distinguish missing values from zero, and every Bubble Data API persistence lookup needs retry handling for HTTP 429/Cloudflare 1015.
+- **Grounding**: A Live initial-generation failure returned `Bubble atividade obra lookup failed with 429` during `bulk_create`; investigation found lookup did not retry and `boundedInteger(undefined, ...)` collapsed defaults to minimum values because `Number(null) === 0`.
+- **Scope**: Bubble Data API lookup retry, environment parsing, and schedule persistence defaults.

@@ -180,7 +180,9 @@ function normalizeAtividadeObraTypeName(value: string): string {
 }
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
-  const numeric = typeof value === "number" ? value : Number(stringValue(value));
+  const normalized = typeof value === "number" ? value : stringValue(value);
+  if (normalized === null) return fallback;
+  const numeric = typeof normalized === "number" ? normalized : Number(normalized);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(numeric)));
 }
@@ -711,6 +713,15 @@ function retryDelayMs(attempt: number, config: BubbleBulkConfig): number {
   return Math.min(10000, config.patchRetryBaseMs * (2 ** attempt));
 }
 
+function lookupRetryDelayMs(attempt: number, status: number, config: BubbleBulkConfig): number {
+  const retryDelay = retryDelayMs(attempt, config);
+  return status === 429 ? Math.max(retryDelay, config.patchRateLimitCooldownMs) : retryDelay;
+}
+
+function retryableLookupStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
 function transportErrorMessage(error: unknown): string {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);
@@ -747,6 +758,84 @@ function createPatchRateLimitGate(): {
 async function delay(ms: number): Promise<void> {
   if (ms <= 0) return;
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchAtividadeObraLookupText(
+  url: string,
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions,
+  messages: { retry: string; failed: string; errorPrefix: string },
+  logFields: Record<string, unknown> = {}
+): Promise<string> {
+  for (let attempt = 0; attempt <= config.patchMaxRetries; attempt += 1) {
+    let response: Response;
+    let responseText = "";
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`
+        }
+      });
+      responseText = await response.text();
+    } catch (error) {
+      if (attempt < config.patchMaxRetries) {
+        const waitMs = retryDelayMs(attempt, config);
+        options.log?.warn({
+          requestId: options.requestId,
+          typeName: config.atividadeObraType,
+          url,
+          ...logFields,
+          attempt: attempt + 1,
+          retryInMs: waitMs,
+          errorMessage: transportErrorMessage(error)
+        }, messages.retry);
+        await delay(waitMs);
+        continue;
+      }
+
+      const errorMessage = transportErrorMessage(error);
+      options.log?.error({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        ...logFields,
+        errorMessage
+      }, messages.failed);
+      throw new BubbleBulkRequestError(`${messages.errorPrefix}: ${errorMessage}`);
+    }
+
+    if (response.ok) return responseText;
+
+    if (attempt < config.patchMaxRetries && retryableLookupStatus(response.status)) {
+      const waitMs = lookupRetryDelayMs(attempt, response.status, config);
+      options.log?.warn({
+        requestId: options.requestId,
+        typeName: config.atividadeObraType,
+        url,
+        ...logFields,
+        statusCode: response.status,
+        attempt: attempt + 1,
+        retryInMs: waitMs,
+        responseText
+      }, messages.retry);
+      await delay(waitMs);
+      continue;
+    }
+
+    options.log?.error({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      ...logFields,
+      statusCode: response.status,
+      responseText
+    }, messages.failed);
+    throw new BubbleBulkRequestError(`${messages.errorPrefix} with ${response.status}: ${responseText}`);
+  }
+
+  /* v8 ignore next -- loop always returns or throws on the final configured attempt. */
+  throw new BubbleBulkRequestError(`${messages.errorPrefix}: exhausted retries`);
 }
 
 function assertBulkBodySucceeded(typeName: string, responseText: string): void {
@@ -846,24 +935,11 @@ async function findExistingAtividadeObraIds(
       cursor
     }, "atividade obra idempotency lookup started");
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${config.apiToken}`
-      }
-    });
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      options.log?.error({
-        requestId: options.requestId,
-        typeName: config.atividadeObraType,
-        url,
-        statusCode: response.status,
-        responseText
-      }, "atividade obra idempotency lookup failed");
-      throw new BubbleBulkRequestError(`Bubble atividade obra lookup failed with ${response.status}: ${responseText}`);
-    }
+    const responseText = await fetchAtividadeObraLookupText(url, config, options, {
+      retry: "atividade obra idempotency lookup failed; retrying",
+      failed: "atividade obra idempotency lookup failed",
+      errorPrefix: "Bubble atividade obra lookup failed"
+    }, { cursor });
 
     let parsed: BubbleListResponse;
     try {
@@ -924,16 +1000,11 @@ async function findDeltaAtividadeObraRows(
       externalIdsCount: batch.length
     }, "atividade obra delta lookup started");
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${config.apiToken}`
-      }
-    });
-    const responseText = await response.text();
-    if (!response.ok) {
-      throw new BubbleBulkRequestError(`Bubble atividade obra delta lookup failed with ${response.status}: ${responseText}`);
-    }
+    const responseText = await fetchAtividadeObraLookupText(url, config, options, {
+      retry: "atividade obra delta lookup failed; retrying",
+      failed: "atividade obra delta lookup failed",
+      errorPrefix: "Bubble atividade obra delta lookup failed"
+    }, { externalIdsCount: batch.length });
 
     let parsed: BubbleListResponse;
     try {

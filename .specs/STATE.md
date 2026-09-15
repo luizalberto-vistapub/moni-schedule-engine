@@ -146,6 +146,14 @@
 - **Date**: 2026-09-15
 - **Status**: active
 
+### AD-019
+- **Decision**: Atividade x Obra Data API lookups must retry retryable Bubble/Cloudflare failures before failing the schedule job.
+- **Reason**: Live showed `BUBBLE_BULK_REQUEST_ERROR` during `bulk_create` because the idempotency lookup received Cloudflare 1015/HTTP 429 and failed immediately, even though PATCH paths already treated 429 as transient persistence noise.
+- **Trade-off**: A rate-limited lookup can add retry/cooldown time, but avoids failing long initial schedule generation on a temporary Cloudflare ban.
+- **Scope**: Atividade x Obra idempotency lookup, delta lookup, Bubble bulk persistence retry behavior, and env default parsing.
+- **Date**: 2026-09-15
+- **Status**: active
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-15

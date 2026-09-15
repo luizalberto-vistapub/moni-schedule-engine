@@ -161,6 +161,43 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("uses the default patch concurrency when the environment variable is absent", async () => {
+    process.env.BUBBLE_BULK_BATCH_SIZE = "500";
+    let activePatches = 0;
+    let maxActivePatches = 0;
+    let idIndex = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      if (init?.method === "GET") return atividadeObraLookupResponse();
+      if (init?.method === "PATCH") {
+        activePatches += 1;
+        maxActivePatches = Math.max(maxActivePatches, activePatches);
+        await delay(20);
+        activePatches -= 1;
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map(() => JSON.stringify({ id: `bubble_${idIndex += 1}` })).join("\n")
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const activities = Array.from({ length: 3 }, (_, index) => ({
+      id: `serv_${index + 1}`,
+      nome: `Servico ${index + 1}`,
+      tipo: "Servico",
+      ordem: index + 1,
+      duracao: 1
+    }));
+    const { payload, lines } = payloadWithOneLine({ atividades_json: activities });
+
+    await persistScheduleBulks(payload, lines);
+
+    expect(maxActivePatches).toBeGreaterThan(1);
+  });
+
   it("reports phase 2 and phase 3 persistence progress with early life signs and 5 percent increments", async () => {
     const fetchMock = successfulBubbleFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -697,6 +734,66 @@ describe("Bubble bulk persistence", () => {
     expect(atividadeObraPostAttempts).toBe(1);
     expect(findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(1);
     expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/created_after_502", "PATCH")).toBeDefined();
+  });
+
+  it("retries rate-limited Atividade x Obra idempotency lookups before bulk create", async () => {
+    process.env.BUBBLE_PATCH_RETRY_BASE_MS = "0";
+    process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS = "0";
+    const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const { payload, lines } = payloadWithOneLine();
+    let lookupCount = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      if (init?.method === "GET") {
+        lookupCount += 1;
+        return lookupCount === 1
+          ? { ok: false, status: 429, text: async (): Promise<string> => "<html>Error 1015: You are being rate limited</html>" }
+          : atividadeObraLookupResponse();
+      }
+      if (init?.method === "PATCH") return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => "{\"id\":\"created_after_lookup_retry\"}\n"
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await persistScheduleBulks(payload, lines, { requestId: "req_lookup_retry", log });
+
+    expect(lookupCount).toBe(2);
+    expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toBeDefined();
+    expect(summary).toMatchObject({ createdCount: 1, bulkBatchCount: 1 });
+    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "req_lookup_retry",
+      statusCode: 429,
+      retryInMs: 0
+    }), "atividade obra idempotency lookup failed; retrying");
+  });
+
+  it("does not retry non-retryable Atividade x Obra idempotency lookup failures", async () => {
+    const { payload, lines } = payloadWithOneLine();
+    let lookupCount = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      if (init?.method === "GET") {
+        lookupCount += 1;
+        return {
+          ok: false,
+          status: 400,
+          text: async (): Promise<string> => "Bad lookup request"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => "{\"id\":\"should_not_create\"}\n"
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(persistScheduleBulks(payload, lines)).rejects.toThrow("Bubble atividade obra lookup failed with 400");
+
+    expect(lookupCount).toBe(1);
+    expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toBeUndefined();
   });
 
   it("refuses blind Atividade x Obra bulk retries when no created records can be confirmed", async () => {
