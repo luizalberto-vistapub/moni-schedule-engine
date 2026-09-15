@@ -74,3 +74,7 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Grounding**: A recovery payload with `estrutura_inalterada=true` and only 360 snapshot rows returned 360 rows by design, while an aditivo with `estrutura_inalterada=false` and empty `atividades_json`/structure blocks failed because `runScheduleEngine` had no structure to generate.
 - **Scope**: Bubble recalculate/aditivo contract and support triage.
 
+### L-015
+- **Lesson**: Event-sourced recalculation paths must separate replay input from persistence output: replay `events_old`, but persist only the new `events_json` event.
+- **Grounding**: The delta motor v3 work found duplicated `EventoCronograma` history and timezone date drift when old events were re-persisted; regression coverage now asserts one new event and calendar-stable event dates.
+- **Scope**: Schedule recalculation contracts, `EventoCronograma` persistence, and Bubble fallback triage.

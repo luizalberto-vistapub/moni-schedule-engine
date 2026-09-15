@@ -138,7 +138,35 @@
 - **Date**: 2026-09-14
 - **Status**: active
 
+### AD-018
+- **Decision**: `payload_version=3` with `scope.tipo="delta_motor"` is the supported fast path for pencil activity-date recalculations with dependents, using `base.payload + events_old` replay and in-place PATCH of only changed Atividade x Obra rows.
+- **Reason**: Bubble graph traversal for dependent activities times out on large works; the engine can rebuild the active structure deterministically, replay the event history, compute the delta, and validate drift before writing.
+- **Trade-off**: The v3 path depends on complete preserved active-version payloads and trustworthy event history; when `BASE_STATE_INVALID` or `STATE_DRIFT` occurs, Bubble must fall back to the v2 full payload path.
+- **Scope**: Schedule recalculation contracts, event persistence, Bubble fallback behavior, and Atividade x Obra date patching.
+- **Date**: 2026-09-15
+- **Status**: active
+
 ## Handoff
+
+### Current Snapshot - 2026-09-15
+
+- **Feature**: Delta motor recalculation v3 / Bubble bulk persistence.
+- **Phase / Task**: Implementation complete and pushed to Bubble test branch `codex/bubble-bulk-persistence`; Bubble can validate pencil "Alterar data da atividade com dependentes" without Bubble-side graph traversal.
+- **Completed**: Implemented `payload_version=3` + `scope.tipo="delta_motor"` on `POST /api/v1/schedules/recalculate`; v3 accepts `base.payload`, `linhas_esperadas`, target/date scope, `events_old`, and `events_json`; reconstructs base lines deterministically; replays `events_old` ordered by `requisicao_data`, `criado_em`, then `evento_id`; validates target current date via `scope.data_atual_inicio`; applies the new event; diffs current vs next state; looks up changed Bubble rows by `obra`, `desatualizado (deletar)=false`, and `id_atividade_obra_externo in [...]`; rejects drift with `STATE_DRIFT`; rejects invalid base/targets/missing rows with `BASE_STATE_INVALID`; PATCHes only changed rows; persists only new `events_json`; fixes event date persistence to preserve the received calendar day; added spec and validation artifacts in `.specs/features/delta-motor-recalculation/`.
+- **Latest pushed commit**: `fc2d2b9 feat(recalculate): add delta motor v3 flow` pushed to `origin/codex/bubble-bulk-persistence`.
+- **Latest verification**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 179 tests; `git diff --check` passed before commit.
+- **Bubble v3 test payload requirements**: send `payload_version: 3`, `estrutura_inalterada: true`, `scope.tipo: "delta_motor"`, `scope.id_atividade_obra_externo`, `scope.nova_data`, `scope.data_atual_inicio`, `linhas_esperadas`, `base.versao_id`, `base.mode`, complete `base.payload` from the active schedule version, `events_old` with `requisicao_data`/`criado_em`/`evento_id`, and `events_json` containing only the new pencil event.
+- **Bubble expected behavior**: A valid dependent activity-date change should receive `202`, then normal processing webhooks, then `done` with `metrics.patchedCount` equal to changed rows and `metrics.eventCount: 1`; Bubble should not send `atividade_obra_snapshot`, `master_dependencies`, or `master_anchors` for this v3 path.
+- **Fallback behavior**: On webhook `error_code: "BASE_STATE_INVALID"` or `"STATE_DRIFT"`, Bubble should automatically retry the same recalculation with the existing v2 full payload fallback. These errors mean base count/target/lookup mismatch or current Bubble dates no longer match reconstructed state.
+- **Known previous findings still relevant**: Initial schedule target remains 4,676 rows; healthy initial runs should keep `dedupDroppedCount: 0`; structural aditivo/recovery payloads must not mix `estrutura_inalterada=false` with snapshot-only inputs.
+- **In-progress** (file:line): none.
+- **Next step**: Bubble should retest on branch `test` using a real active-version payload for an activity with dependents. If v3 errors, capture the final webhook body (`error_code`, `error_message`, `failed_step`) and the exact v3 request payload sent.
+- **Blockers**: none on the engine side for the v3 dependent-activity test; Bubble must ensure active versions preserve `payload_requisicao_json` and event history is cleaned of known duplicate Teste Recalculo events before using v3 as source of truth.
+- **Recommended future engine improvement**: add clearer early validation for structural recalculations where `estrutura_inalterada=false` but structural inputs are empty.
+- **Uncommitted files**: `.specs/STATE.md` and `.specs/LESSONS.md` documentation updates only.
+- **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
+
+### Previous Snapshot
 
 - **Feature**: Bubble bulk persistence / schedule recalculation contract.
 - **Phase / Task**: Branch `codex/bubble-bulk-persistence` is validating Bubble branch `test` for initial schedule, localAtuacao bulk fallback, metrics, and aditivo/recalculate contract.
