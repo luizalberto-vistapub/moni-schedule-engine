@@ -773,6 +773,81 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("normalizes rebuilt delta_motor v3 base dates before checking Bubble state drift", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+      if (init?.method === "GET" && String(url).includes("/api/1.1/obj/atividadexobra")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({
+            response: {
+              cursor: 0,
+              count: 1,
+              remaining: 0,
+              results: [
+                { _id: "axo_project", id_atividade_obra_externo: "proj_1|amb_1|1", dataInicioPrevista: "2026-08-31T12:00:00.000Z", dataFimPrevista: "2026-08-31T12:00:00.000Z" }
+              ]
+            }
+          })
+        };
+      }
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+      return { ok: true, status: 200, text: async (): Promise<string> => JSON.stringify({ id: "event_1" }) };
+    }));
+
+    const activeBasePayload = basePayload({
+      obra_json: [{ id: "obra_1", dataInicio: "2026-08-31" }],
+      versao_cronograma_unique_id: "versao_ativa",
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1, produtoId: "prod_1" },
+        { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, duracao: 1, atividadeServicoAncoraId: "serv_1", offsetDias: 2 }
+      ]
+    });
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 3,
+        estrutura_inalterada: true,
+        linhas_esperadas: 2,
+        versao_cronograma_unique_id: "versao_ativa",
+        previous_version_id: "versao_ativa",
+        mode: "activity_date_changed_only",
+        scope: {
+          tipo: "delta_motor",
+          id_atividade_obra_externo: "proj_1|amb_1|1",
+          nova_data: "2026-09-01",
+          data_atual_inicio: "2026-08-31"
+        },
+        base: {
+          versao_id: "versao_ativa",
+          mode: "generate",
+          payload: activeBasePayload
+        },
+        events_json: [{
+          type: "activity_date_changed_only",
+          atividade_id: "proj_1",
+          id_atividade_obra_externo: "proj_1|amb_1|1",
+          new_start_date: "2026-09-01"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    expect(doneBody.status).toBe("done");
+
+    const patchBodies = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(patchBodies).toEqual([
+      { dataInicioPrevista: "2026-09-01T12:00:00.000Z", dataFimPrevista: "2026-09-01T12:00:00.000Z" }
+    ]);
+  });
+
   it("returns BASE_STATE_INVALID for delta_motor v3 when rebuilt line count differs", async () => {
     const activeBasePayload = basePayload({
       versao_cronograma_unique_id: "versao_ativa",

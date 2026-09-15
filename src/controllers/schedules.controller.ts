@@ -1375,13 +1375,21 @@ function applyReplayEventToLines(basePayload: NormalizedSchedulePayload, request
   return calculateScheduleResult(snapshotPayloadForReplay(basePayload, requestPayload, lines, event));
 }
 
+function calculateDeltaMotorBaseResult(basePayload: NormalizedSchedulePayload): EngineResult {
+  return calculateScheduleResult({
+    ...basePayload,
+    events_old: [],
+    events_json: []
+  });
+}
+
 function calculateDeltaMotorResult(payload: NormalizedSchedulePayload): DeltaMotorResult {
   const basePayloadInput = parseDeltaMotorBasePayload(payload);
   const baseMode = basePayloadInput.mode || "generate";
   const baseForGeneration = normalizePayload(baseMode === "recalculate" && !isSnapshotRecalculate(basePayloadInput)
     ? applyRecalculateEvents(basePayloadInput)
     : basePayloadInput);
-  const baseResult = runScheduleEngine(baseForGeneration);
+  const baseResult = calculateDeltaMotorBaseResult(baseForGeneration);
   const expectedLines = Number(payload.linhas_esperadas);
   if (!Number.isFinite(expectedLines) || expectedLines <= 0) {
     throw new BaseStateInvalidError("linhas_esperadas is required for payload_version 3 delta_motor");
