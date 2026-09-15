@@ -299,6 +299,24 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
+  it("preserves EventoCronograma calendar dates from Bubble timestamps", () => {
+    const { payload } = payloadWithOneLine({
+      event_date: "2026-09-07T00:00:00.000Z",
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "atividade_1",
+        id_atividade_obra_externo: "atividade_1|amb_1|1",
+        new_start_date: "2026-09-07T00:00:00.000Z",
+        requisicao_data: "2026-09-07T00:00:00.000Z"
+      }]
+    });
+
+    expect(buildEventoCronogramaRecords(payload)[0]).toMatchObject({
+      data: "2026-09-07T12:00:00.000Z",
+      requisicao_data: "2026-09-07T12:00:00.000Z"
+    });
+  });
+
   it("patches atividade obra date updates with bounded concurrency", async () => {
     process.env.BUBBLE_PATCH_CONCURRENCY = "2";
     let activePatches = 0;

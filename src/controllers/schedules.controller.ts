@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError, type ZodIssue } from "zod";
-import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches } from "../services/bubble-bulk.service.js";
+import { BaseStateInvalidError, BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches, persistScheduleDeltaMotorPatches, StateDriftError } from "../services/bubble-bulk.service.js";
 import { addBusinessDays, isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
 import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
@@ -42,6 +42,8 @@ function errorLogFields(error: unknown): Record<string, unknown> {
 }
 
 function scheduleErrorCode(error: unknown): string {
+  if (error instanceof BaseStateInvalidError) return "BASE_STATE_INVALID";
+  if (error instanceof StateDriftError) return "STATE_DRIFT";
   if (error instanceof ScopeInsufficientError) return "SCOPE_INSUFFICIENT";
   if (error instanceof BubbleBulkPayloadError) return "BUBBLE_BULK_PAYLOAD_ERROR";
   if (error instanceof BubbleBulkConfigError) return "BUBBLE_BULK_CONFIG_ERROR";
@@ -56,6 +58,7 @@ function requestLog(req: ObservedRequest): Logger | undefined {
 }
 
 function modeFromRequest(req: ObservedRequest, fallback: ScheduleMode): ScheduleMode {
+  if (fallback === "recalculate" && String(req.body?.payload_version) === "3") return "recalculate";
   return typeof req.body?.mode === "string" && req.body.mode.trim() ? req.body.mode : fallback;
 }
 
@@ -174,6 +177,11 @@ function isSnapshotRecalculate(payload: SchedulePayload): boolean {
   return payload.mode === "recalculate" && payload.estrutura_inalterada === true;
 }
 
+function isDeltaMotorRecalculate(payload: SchedulePayload): boolean {
+  return String(payload.payload_version) === "3"
+    && scopeType(payload) === "delta_motor";
+}
+
 function versionId(payload: SchedulePayload): string {
   return stringValue(field(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
 }
@@ -207,7 +215,7 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
     });
   }
 
-  if (newVersionId && previousVersionId && newVersionId === previousVersionId) {
+  if (!isDeltaMotorRecalculate(payload) && newVersionId && previousVersionId && newVersionId === previousVersionId) {
     issues.push({
       code: "custom" as const,
       path: ["versao_cronograma_unique_id"],
@@ -215,7 +223,7 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
     });
   }
 
-  if (payload.estrutura_inalterada === true) {
+  if (payload.estrutura_inalterada === true && !isDeltaMotorRecalculate(payload)) {
     const insertedEventIndex = payload.events_json.findIndex((event) => eventType(event) === "activity_inserted");
     if (insertedEventIndex !== -1) {
       issues.push({
@@ -1271,6 +1279,141 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
   });
 }
 
+interface DeltaMotorResult {
+  current: EngineResult;
+  next: EngineResult;
+}
+
+function parseDeltaMotorBasePayload(payload: SchedulePayload): SchedulePayload {
+  const rawPayload = payload.base?.payload;
+  if (!rawPayload) throw new BaseStateInvalidError("base.payload is required for payload_version 3 delta_motor");
+
+  let parsedRaw: unknown = rawPayload;
+  if (typeof rawPayload === "string") {
+    try {
+      parsedRaw = JSON.parse(rawPayload);
+    } catch {
+      throw new BaseStateInvalidError("base.payload must be valid JSON");
+    }
+  }
+
+  const baseMode = typeof payload.base?.mode === "string" && payload.base.mode.trim()
+    ? payload.base.mode
+    : (typeof (parsedRaw as Record<string, unknown>)?.mode === "string" ? String((parsedRaw as Record<string, unknown>).mode) : "generate");
+  return parseSchedulePayload(parsedRaw, baseMode);
+}
+
+function eventOrderValue(event: Record<string, unknown>, ...keys: string[]): string {
+  const value = stringValue(field(event, ...keys));
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  if (!Number.isNaN(timestamp)) return new Date(timestamp).toISOString();
+  return eventDateOnly(value);
+}
+
+function compareReplayEvents(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  return eventOrderValue(a, "requisicao_data", "request_date", "event_date", "data_requisicao")
+    .localeCompare(eventOrderValue(b, "requisicao_data", "request_date", "event_date", "data_requisicao"))
+    || eventOrderValue(a, "criado_em", "created_at", "Created Date")
+      .localeCompare(eventOrderValue(b, "criado_em", "created_at", "Created Date"))
+    || stringValue(field(a, "evento_id", "_id", "id", "unique id"))
+      .localeCompare(stringValue(field(b, "evento_id", "_id", "id", "unique id")));
+}
+
+function replayEvent(event: Record<string, unknown>): Record<string, unknown> {
+  return eventType(event) === "activity_start_delayed"
+    ? { ...event, type: "activity_date_changed_cascade", tipo: "activity_date_changed_cascade" }
+    : event;
+}
+
+function lineSnapshotRecord(line: ScheduleLine): Record<string, unknown> {
+  return {
+    "unique id": line.atividade_obra_id_externo,
+    id_atividade_obra_externo: line.atividade_obra_id_externo,
+    atividade: line.atividadeId,
+    ambiente_id: line.ambienteId || "",
+    tipo: line.tipo,
+    ordem: line.ordem,
+    peso: line.peso,
+    equipe: line.equipe || "",
+    diasAntecedencia: line.diasAntecedencia ?? 0,
+    duracao: 1,
+    dataInicioPrevista: line.data_programada,
+    dataFimPrevista: line.data_programada,
+    status: "Nao iniciada",
+    scopeRole: "editable"
+  };
+}
+
+function snapshotPayloadForReplay(basePayload: NormalizedSchedulePayload, requestPayload: NormalizedSchedulePayload, lines: ScheduleLine[], event: Record<string, unknown>): NormalizedSchedulePayload {
+  return normalizePayload({
+    ...basePayload,
+    payload_version: 2,
+    mode: "recalculate",
+    estrutura_inalterada: true,
+    cronograma_unique_id: requestPayload.cronograma_unique_id,
+    versao_cronograma_unique_id: requestPayload.versao_cronograma_unique_id,
+    previous_version_id: requestPayload.previous_version_id,
+    bubble_api_version: requestPayload.bubble_api_version,
+    bubble_version: requestPayload.bubble_version,
+    version: requestPayload.version,
+    timezone: requestPayload.timezone,
+    dias_trabalho_semana: requestPayload.dias_trabalho_semana,
+    event_date: requestPayload.event_date,
+    request_date: requestPayload.request_date,
+    requisicao_data: requestPayload.requisicao_data,
+    data_requisicao: requestPayload.data_requisicao,
+    obra_json: requestPayload.obra_json.length ? requestPayload.obra_json : basePayload.obra_json,
+    atividade_obra_snapshot: lines.map(lineSnapshotRecord),
+    atividade_obra_json: lines.map(lineSnapshotRecord),
+    events_old: [],
+    events_json: [replayEvent(event)]
+  });
+}
+
+function applyReplayEventToLines(basePayload: NormalizedSchedulePayload, requestPayload: NormalizedSchedulePayload, lines: ScheduleLine[], event: Record<string, unknown>): EngineResult {
+  return calculateScheduleResult(snapshotPayloadForReplay(basePayload, requestPayload, lines, event));
+}
+
+function calculateDeltaMotorResult(payload: NormalizedSchedulePayload): DeltaMotorResult {
+  const basePayloadInput = parseDeltaMotorBasePayload(payload);
+  const baseMode = basePayloadInput.mode || "generate";
+  const baseForGeneration = normalizePayload(baseMode === "recalculate" && !isSnapshotRecalculate(basePayloadInput)
+    ? applyRecalculateEvents(basePayloadInput)
+    : basePayloadInput);
+  const baseResult = runScheduleEngine(baseForGeneration);
+  const expectedLines = Number(payload.linhas_esperadas);
+  if (!Number.isFinite(expectedLines) || expectedLines <= 0) {
+    throw new BaseStateInvalidError("linhas_esperadas is required for payload_version 3 delta_motor");
+  }
+  if (baseResult.lines.length !== Math.trunc(expectedLines)) {
+    throw new BaseStateInvalidError(`Base line count mismatch: rebuilt ${baseResult.lines.length}, expected ${Math.trunc(expectedLines)}`);
+  }
+
+  const targetExternalId = stringValue(field(payload.scope || {}, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  if (!targetExternalId || !baseResult.lines.some((line) => line.atividade_obra_id_externo === targetExternalId)) {
+    throw new BaseStateInvalidError(`Target line not found in rebuilt base: ${targetExternalId || "empty"}`);
+  }
+
+  let current = baseResult;
+  for (const event of [...payload.events_old].sort(compareReplayEvents)) {
+    current = applyReplayEventToLines(baseForGeneration, payload, current.lines, event);
+  }
+
+  const currentTarget = current.lines.find((line) => line.atividade_obra_id_externo === targetExternalId);
+  const expectedCurrentStart = eventDateOnly(stringValue(field(payload.scope || {}, "data_atual_inicio", "current_start_date")), payload);
+  if (expectedCurrentStart && currentTarget?.data_programada !== expectedCurrentStart) {
+    throw new StateDriftError(`State drift for ${targetExternalId}: Bubble target has ${expectedCurrentStart}, reconstructed has ${currentTarget?.data_programada || "missing"}`);
+  }
+
+  let next = current;
+  for (const event of payload.events_json) {
+    next = applyReplayEventToLines(baseForGeneration, payload, next.lines, event);
+  }
+
+  return { current, next };
+}
+
 async function processScheduleJob(
   jobId: string,
   payload: NormalizedSchedulePayload,
@@ -1315,7 +1458,8 @@ async function processScheduleJob(
 
   try {
     await sendProcessingProgress(1, 0, "Calculando cronograma");
-    const result = calculateScheduleResult(payload);
+    const deltaMotorResult = isDeltaMotorRecalculate(payload) ? calculateDeltaMotorResult(payload) : null;
+    const result = deltaMotorResult?.next || calculateScheduleResult(payload);
     await closeProgressStage(1, "Calculando cronograma");
 
     options.log?.info({
@@ -1333,18 +1477,22 @@ async function processScheduleJob(
     const stage3Message = "Atualizando vínculos/dependências";
     await sendProcessingProgress(2, 0, stage2Message);
 
-    const persist = isSnapshotRecalculate(payload) ? persistScheduleDatePatches : persistScheduleBulks;
-    const persistenceSummary = await persist(payload, result.lines, {
+    const persistenceOptions = {
       requestId: options.requestId,
       log: options.log,
-      onStep: (step) => {
+      onStep: (step: "bulk_create" | "patch_dependencies" | "patch_dates") => {
         failedStep = step;
       },
-      onProgress: (progress) => {
+      onProgress: (progress: { progress: 1 | 2 | 3 | 4; progress_percent: number; message: string }) => {
         if (progress.progress_percent === 100) return sendProcessingProgress(progress.progress, progress.progress_percent, progress.message);
         sendProcessingProgressDetached(progress.progress, progress.progress_percent, progress.message);
       }
-    });
+    };
+    const persistenceSummary = deltaMotorResult
+      ? await persistScheduleDeltaMotorPatches(payload, deltaMotorResult.current.lines, deltaMotorResult.next.lines, persistenceOptions)
+      : isSnapshotRecalculate(payload)
+        ? await persistScheduleDatePatches(payload, result.lines, persistenceOptions)
+        : await persistScheduleBulks(payload, result.lines, persistenceOptions);
 
     failedStep = "finalizing";
     await closeProgressStage(2, stage2Message);

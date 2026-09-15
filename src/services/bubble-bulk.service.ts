@@ -157,6 +157,20 @@ export class BubbleBulkRequestError extends Error {
   }
 }
 
+export class BaseStateInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BaseStateInvalidError";
+  }
+}
+
+export class StateDriftError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StateDriftError";
+  }
+}
+
 function normalizeAtividadeObraTypeName(value: string): string {
   return value === "atividade_x_obra" ? DEFAULT_ATIVIDADE_OBRA_TYPE : value;
 }
@@ -344,6 +358,11 @@ function toBubbleDate(value: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T12:00:00.000Z`;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+function toBubbleCalendarDate(value: string): string {
+  const calendarDate = dateOnly(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(calendarDate) ? toBubbleDate(calendarDate) : toBubbleDate(value);
 }
 
 function atividadeObraNomeAtividade(line: ScheduleLine): string {
@@ -608,6 +627,13 @@ function activeScheduleEvents(payload: NormalizedSchedulePayload): Record<string
   return [...activeEvents.values()];
 }
 
+function newScheduleEventPayload(payload: NormalizedSchedulePayload): NormalizedSchedulePayload {
+  return {
+    ...payload,
+    events_old: []
+  };
+}
+
 function ndjson(records: Record<string, unknown>[]): string {
   return records.map((record) => JSON.stringify(record)).join("\n");
 }
@@ -775,6 +801,15 @@ function atividadeObraLookupUrl(config: BubbleBulkConfig, versionId: string, cur
   return `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}?constraints=${constraints}&limit=100&cursor=${cursor}`;
 }
 
+function atividadeObraDeltaLookupUrl(config: BubbleBulkConfig, obraId: string, externalIds: string[]): string {
+  const constraints = encodeURIComponent(JSON.stringify([
+    { key: "obra", constraint_type: "equals", value: obraId },
+    { key: "desatualizado (deletar)", constraint_type: "equals", value: false },
+    { key: "id_atividade_obra_externo", constraint_type: "in", value: externalIds }
+  ]));
+  return `${config.baseUrl}/${config.version}/api/1.1/obj/${config.atividadeObraType}?constraints=${constraints}&limit=100`;
+}
+
 function atividadeObraExternalId(record: Record<string, unknown>): string | null {
   return stringValue(recordValue(record, "id_atividade_obra_externo"));
 }
@@ -855,6 +890,52 @@ async function findExistingAtividadeObraIds(
   }, "atividade obra idempotency lookup completed");
 
   return existingIds;
+}
+
+async function findDeltaAtividadeObraRows(
+  obraId: string,
+  externalIds: string[],
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions
+): Promise<Map<string, Record<string, unknown>>> {
+  const rowsByExternalId = new Map<string, Record<string, unknown>>();
+  for (let index = 0; index < externalIds.length; index += 100) {
+    const batch = externalIds.slice(index, index + 100);
+    const url = atividadeObraDeltaLookupUrl(config, obraId, batch);
+
+    options.log?.info({
+      requestId: options.requestId,
+      typeName: config.atividadeObraType,
+      url,
+      externalIdsCount: batch.length
+    }, "atividade obra delta lookup started");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`
+      }
+    });
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new BubbleBulkRequestError(`Bubble atividade obra delta lookup failed with ${response.status}: ${responseText}`);
+    }
+
+    let parsed: BubbleListResponse;
+    try {
+      parsed = responseText.trim() ? JSON.parse(responseText) as BubbleListResponse : {};
+    } catch {
+      throw new BubbleBulkRequestError(`Bubble atividade obra delta lookup returned invalid JSON: ${responseText}`);
+    }
+
+    const results = Array.isArray(parsed.response?.results) ? parsed.response.results : [];
+    for (const result of results) {
+      const externalId = stringValue(recordValue(result, "id_atividade_obra_externo"));
+      if (externalId && !rowsByExternalId.has(externalId)) rowsByExternalId.set(externalId, result);
+    }
+  }
+
+  return rowsByExternalId;
 }
 
 function atividadeObraAmbienteXObraId(record: Record<string, unknown>): string {
@@ -968,12 +1049,12 @@ export function buildEventoCronogramaRecords(payload: NormalizedSchedulePayload)
     const record: Record<string, unknown> = {
       atividade: eventActivityId(event) || "",
       cronograma: payload.cronograma_unique_id,
-      data: date ? toBubbleDate(date) : "",
+      data: date ? toBubbleCalendarDate(date) : "",
       dias: eventDays(event) ?? 0,
       id_atividade_obra_externo: stringValue(recordValue(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")) || "",
       tipo: bubbleScheduleEventType(type),
       obra: currentObraId,
-      requisicao_data: eventRequestDate ? toBubbleDate(eventRequestDate) : "",
+      requisicao_data: eventRequestDate ? toBubbleCalendarDate(eventRequestDate) : "",
       versaoCronograma: versionId
     };
 
@@ -1890,7 +1971,87 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
     const record = buildAtividadeObraDatePatchFields(line, snapshot);
     return Object.keys(record).length ? [{ id, record }] : [];
   });
-  const eventoCronogramaRecords = buildEventoCronogramaRecords(payload);
+  const eventoCronogramaRecords = buildEventoCronogramaRecords(newScheduleEventPayload(payload));
+  const phase2Options: PersistScheduleOptions = {
+    ...options,
+    phase2Progress: {
+      completed: 0,
+      report: createProgressReporter(options, 2, updates.length + eventoCronogramaRecords.length, "Atualizando datas recalculadas")
+    }
+  };
+
+  options.onStep?.("patch_dates");
+  const datePatchResult = await patchExistingAtividadeObraRecords(updates, config, phase2Options);
+  if (eventoCronogramaRecords.length) {
+    await postBulk(config.eventoCronogramaType, eventoCronogramaRecords, config, phase2Options);
+  }
+
+  return {
+    patchedCount: updates.length,
+    patchRequestCount: datePatchResult.requestCount,
+    patchBatchCount: 0,
+    eventCount: eventoCronogramaRecords.length,
+    dependencyPatchCount: 0,
+    createdCount: 0,
+    bulkBatchCount: 0,
+    bulkRetryCount: 0,
+    dedupDroppedCount: 0
+  };
+}
+
+export async function persistScheduleDeltaMotorPatches(
+  payload: NormalizedSchedulePayload,
+  currentLines: ScheduleLine[],
+  nextLines: ScheduleLine[],
+  options: PersistScheduleOptions = {}
+): Promise<PersistenceSummary> {
+  const requestedBubbleApiVersion = bubbleApiVersion(payload);
+  const requestedObraId = obraId(payload);
+  const config = { ...readConfig(), version: requestedBubbleApiVersion || DEFAULT_BUBBLE_API_VERSION };
+  if (!config.apiToken) {
+    throw new BubbleBulkConfigError("BUBBLE_API_TOKEN is required to persist schedule bulks");
+  }
+  if (!requestedBubbleApiVersion || !requestedObraId) {
+    const missingFields = [
+      requestedBubbleApiVersion ? null : "bubble_api_version",
+      requestedObraId ? null : "obra_json[0].unique id"
+    ].filter(Boolean);
+    throw new BubbleBulkPayloadError(`Missing required Bubble id(s): ${missingFields.join(", ")}`);
+  }
+
+  const currentByExternalId = new Map(currentLines.map((line) => [line.atividade_obra_id_externo, line]));
+  const changedLines = nextLines.filter((line) => {
+    const current = currentByExternalId.get(line.atividade_obra_id_externo);
+    return current && current.data_programada !== line.data_programada;
+  });
+  const changedExternalIds = changedLines.map((line) => line.atividade_obra_id_externo);
+  const bubbleRowsByExternalId = changedExternalIds.length
+    ? await findDeltaAtividadeObraRows(requestedObraId, changedExternalIds, config, options)
+    : new Map<string, Record<string, unknown>>();
+
+  const updates = changedLines.map((line) => {
+    const current = currentByExternalId.get(line.atividade_obra_id_externo);
+    /* v8 ignore next -- changedLines only contains ids present in currentByExternalId. */
+    if (!current) throw new BaseStateInvalidError(`Current state missing line ${line.atividade_obra_id_externo}`);
+    const bubbleRow = bubbleRowsByExternalId.get(line.atividade_obra_id_externo);
+    if (!bubbleRow) throw new BaseStateInvalidError(`Bubble row not found for ${line.atividade_obra_id_externo}`);
+
+    const bubbleStart = snapshotDate(bubbleRow, "dataInicioPrevista", "data_inicio_prevista", "data_programada");
+    const currentStart = toBubbleDate(current.data_programada);
+    if (bubbleStart !== currentStart) {
+      throw new StateDriftError(`State drift for ${line.atividade_obra_id_externo}: Bubble has ${bubbleStart || "empty"}, reconstructed has ${currentStart}`);
+    }
+
+    const id = snapshotBubbleId(bubbleRow);
+    if (!id) throw new BaseStateInvalidError(`Bubble row missing _id for ${line.atividade_obra_id_externo}`);
+
+    return {
+      id,
+      record: buildAtividadeObraDatePatchFields(line, bubbleRow)
+    };
+  }).filter((update) => Object.keys(update.record).length);
+
+  const eventoCronogramaRecords = buildEventoCronogramaRecords(newScheduleEventPayload(payload));
   const phase2Options: PersistScheduleOptions = {
     ...options,
     phase2Progress: {
@@ -1928,7 +2089,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   }
 
   const atividadeObraRecords = buildAtividadeObraRecords(payload, lines);
-  const eventoCronogramaRecords = buildEventoCronogramaRecords(payload);
+  const eventoCronogramaRecords = buildEventoCronogramaRecords(newScheduleEventPayload(payload));
 
   if (!atividadeObraRecords.length || !requestedBubbleApiVersion) {
     const invalidFields = [

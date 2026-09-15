@@ -104,8 +104,15 @@ export interface SchedulePayload {
   payload_version?: number | string;
   estrutura_inalterada?: boolean;
   estrutura_id?: string;
+  linhas_esperadas?: number;
   structure_version_id?: string;
   scope?: Record<string, unknown>;
+  base?: {
+    versao_id?: string;
+    mode?: ScheduleMode;
+    payload?: unknown;
+    [key: string]: unknown;
+  };
   cronograma_unique_id: string;
   versao_cronograma_unique_id?: string;
   versao_cronograma_id?: string;
