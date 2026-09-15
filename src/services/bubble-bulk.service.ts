@@ -75,6 +75,8 @@ interface PersistScheduleOptions {
 
 interface PersistencePhaseProgress {
   completed: number;
+  progress: ScheduleJobProgress;
+  currentPercent: number;
   report: (completed: number, force?: boolean) => Promise<void>;
 }
 
@@ -653,9 +655,25 @@ function chunks<T>(items: T[], size: number): T[][] {
   return result;
 }
 
-function createProgressReporter(
+function createPersistencePhaseProgress(
   options: PersistScheduleOptions,
   progress: ScheduleJobProgress,
+  total: number,
+  message: string
+): PersistencePhaseProgress {
+  const phaseProgress: PersistencePhaseProgress = {
+    completed: 0,
+    progress,
+    currentPercent: 0,
+    report: async () => {}
+  };
+  phaseProgress.report = createProgressReporter(options, phaseProgress, total, message);
+  return phaseProgress;
+}
+
+function createProgressReporter(
+  options: PersistScheduleOptions,
+  phaseProgress: PersistencePhaseProgress,
   total: number,
   message: string
 ): (completed: number) => Promise<void> {
@@ -677,8 +695,9 @@ function createProgressReporter(
 
     lastPercent = roundedPercent;
     lastReportedAt = now;
+    phaseProgress.currentPercent = roundedPercent;
     await options.onProgress({
-      progress,
+      progress: phaseProgress.progress,
       progress_percent: roundedPercent,
       message
     });
@@ -720,6 +739,17 @@ function lookupRetryDelayMs(attempt: number, status: number, config: BubbleBulkC
 
 function retryableLookupStatus(status: number): boolean {
   return status === 429 || status >= 500;
+}
+
+async function reportLookupRetryHeartbeat(options: PersistScheduleOptions, config: BubbleBulkConfig, attempt: number): Promise<void> {
+  const phaseProgress = options.phase3Progress || options.phase2Progress;
+  if (!options.onProgress || !phaseProgress) return;
+
+  await options.onProgress({
+    progress: phaseProgress.progress,
+    progress_percent: phaseProgress.currentPercent,
+    message: `Aguardando liberacao do Bubble (tentativa ${attempt + 2} de ${config.patchMaxRetries + 1})`
+  });
 }
 
 function transportErrorMessage(error: unknown): string {
@@ -790,6 +820,7 @@ async function fetchAtividadeObraLookupText(
           retryInMs: waitMs,
           errorMessage: transportErrorMessage(error)
         }, messages.retry);
+        await reportLookupRetryHeartbeat(options, config, attempt);
         await delay(waitMs);
         continue;
       }
@@ -819,6 +850,7 @@ async function fetchAtividadeObraLookupText(
         retryInMs: waitMs,
         responseText
       }, messages.retry);
+      await reportLookupRetryHeartbeat(options, config, attempt);
       await delay(waitMs);
       continue;
     }
@@ -2084,10 +2116,7 @@ export async function persistScheduleDatePatches(payload: NormalizedSchedulePayl
   const eventoCronogramaRecords = buildEventoCronogramaRecords(newScheduleEventPayload(payload));
   const phase2Options: PersistScheduleOptions = {
     ...options,
-    phase2Progress: {
-      completed: 0,
-      report: createProgressReporter(options, 2, updates.length + eventoCronogramaRecords.length, "Atualizando datas recalculadas")
-    }
+    phase2Progress: createPersistencePhaseProgress(options, 2, updates.length + eventoCronogramaRecords.length, "Atualizando datas recalculadas")
   };
 
   options.onStep?.("patch_dates");
@@ -2164,10 +2193,7 @@ export async function persistScheduleDeltaMotorPatches(
   const eventoCronogramaRecords = buildEventoCronogramaRecords(newScheduleEventPayload(payload));
   const phase2Options: PersistScheduleOptions = {
     ...options,
-    phase2Progress: {
-      completed: 0,
-      report: createProgressReporter(options, 2, updates.length + eventoCronogramaRecords.length, "Atualizando datas recalculadas")
-    }
+    phase2Progress: createPersistencePhaseProgress(options, 2, updates.length + eventoCronogramaRecords.length, "Atualizando datas recalculadas")
   };
 
   options.onStep?.("patch_dates");
@@ -2248,10 +2274,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   const phase2Options: PersistScheduleOptions = {
     ...options,
     bulkMetrics,
-    phase2Progress: {
-      completed: 0,
-      report: createProgressReporter(options, 2, atividadeObraRecords.length + eventoCronogramaRecords.length, "Criando registros em bulk")
-    }
+    phase2Progress: createPersistencePhaseProgress(options, 2, atividadeObraRecords.length + eventoCronogramaRecords.length, "Criando registros em bulk")
   };
 
   const upsertResult = await upsertAtividadeObraRecords(atividadeObraRecords, config, phase2Options);
@@ -2265,10 +2288,7 @@ export async function persistScheduleBulks(payload: NormalizedSchedulePayload, l
   ]);
   const phase3Options: PersistScheduleOptions = {
     ...options,
-    phase3Progress: {
-      completed: 0,
-      report: createProgressReporter(options, 3, postPersistPatches.length, "Atualizando vínculos/dependências")
-    }
+    phase3Progress: createPersistencePhaseProgress(options, 3, postPersistPatches.length, "Atualizando vínculos/dependências")
   };
   options.onStep?.("patch_dependencies");
   const dependencyPatchResult = await patchAtividadeObraDependencies(postPersistPatches, config, phase3Options);

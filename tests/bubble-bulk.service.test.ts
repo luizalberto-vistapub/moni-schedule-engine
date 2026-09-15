@@ -741,6 +741,7 @@ describe("Bubble bulk persistence", () => {
     process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS = "0";
     const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
     const { payload, lines } = payloadWithOneLine();
+    const progressEvents: Array<{ progress: number; progress_percent: number; message: string }> = [];
     let lookupCount = 0;
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<MockFetchResponse> => {
       if (init?.method === "GET") {
@@ -758,16 +759,79 @@ describe("Bubble bulk persistence", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const summary = await persistScheduleBulks(payload, lines, { requestId: "req_lookup_retry", log });
+    const summary = await persistScheduleBulks(payload, lines, {
+      requestId: "req_lookup_retry",
+      log,
+      onProgress: (event) => {
+        progressEvents.push(event);
+      }
+    });
 
     expect(lookupCount).toBe(2);
     expect(findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toBeDefined();
     expect(summary).toMatchObject({ createdCount: 1, bulkBatchCount: 1 });
+    expect(progressEvents[0]).toEqual({
+      progress: 2,
+      progress_percent: 0,
+      message: "Aguardando liberacao do Bubble (tentativa 2 de 5)"
+    });
     expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
       requestId: "req_lookup_retry",
       statusCode: 429,
       retryInMs: 0
     }), "atividade obra idempotency lookup failed; retrying");
+  });
+
+  it("keeps the current progress percent when a retry heartbeat follows partial bulk progress", async () => {
+    process.env.BUBBLE_PATCH_RETRY_BASE_MS = "0";
+    process.env.BUBBLE_PATCH_RATE_LIMIT_COOLDOWN_MS = "0";
+    const { payload, lines } = payloadWithOneLine({
+      atividades_json: [
+        { "unique id": "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1, equipe: "Equipe", peso: 1 },
+        { "unique id": "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1, equipe: "Equipe", peso: 1 }
+      ]
+    });
+    const secondExternalId = lines[1]!.atividade_obra_id_externo;
+    const progressEvents: Array<{ progress: number; progress_percent: number; message: string }> = [];
+    let lookupCount = 0;
+    let atividadeObraPostCount = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      if (init?.method === "GET") {
+        lookupCount += 1;
+        if (lookupCount === 1) return atividadeObraLookupResponse();
+        return lookupCount === 2
+          ? { ok: false, status: 429, text: async (): Promise<string> => "<html>Error 1015: You are being rate limited</html>" }
+          : atividadeObraLookupResponse([{ _id: "created_after_retry_1015", id_atividade_obra_externo: secondExternalId }]);
+      }
+      if (init?.method === "POST" && url.includes("/api/1.1/obj/atividadexobra/bulk")) {
+        atividadeObraPostCount += 1;
+        return atividadeObraPostCount === 1
+          ? { ok: true, status: 200, text: async (): Promise<string> => "{\"id\":\"first_created_id\"}\n" }
+          : { ok: false, status: 502, text: async (): Promise<string> => "Bad gateway after partial create" };
+      }
+      if (init?.method === "PATCH") return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      return { ok: true, status: 200, text: async (): Promise<string> => "{\"id\":\"event_created_id\"}\n" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await persistScheduleBulks(payload, lines, {
+      onProgress: (event) => {
+        progressEvents.push(event);
+      }
+    });
+
+    const heartbeatIndex = progressEvents.findIndex((event) => event.message === "Aguardando liberacao do Bubble (tentativa 2 de 5)");
+    const previousPhase2Progress = progressEvents
+      .slice(0, heartbeatIndex)
+      .reverse()
+      .find((event) => event.progress === 2);
+    expect(heartbeatIndex).toBeGreaterThan(0);
+    expect(progressEvents[heartbeatIndex]).toMatchObject({
+      progress: 2,
+      progress_percent: previousPhase2Progress?.progress_percent,
+      message: "Aguardando liberacao do Bubble (tentativa 2 de 5)"
+    });
+    expect(atividadeObraPostCount).toBe(2);
   });
 
   it("does not retry non-retryable Atividade x Obra idempotency lookup failures", async () => {

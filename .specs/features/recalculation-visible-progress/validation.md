@@ -287,3 +287,60 @@ Sensor ran by temporarily mutating `src/services/bubble-bulk.service.ts` in the 
 **Spec-anchored check**: 2/2 checked acceptance criteria for this commit matched spec outcomes.  
 **Sensor**: 1/1 mutations killed.  
 **Gate**: TypeScript passed; Vitest passed with 181 tests.
+
+---
+
+## Validation Report - 2026-09-15 Lookup Retry Heartbeat
+
+**Spec**: `.specs/features/recalculation-visible-progress/spec.md`
+**Author**: Codex
+**Verifier**: independent verifier agent `01a0a4cc-1168-75a3-8c4e-fe72adedd944`
+**Commit**: pending at validation time
+
+### Scope
+
+- `src/services/bubble-bulk.service.ts`
+- `tests/bubble-bulk.service.test.ts`
+- `docs/bubble-cloudflare-1015-lookup-retry-2026-09-15.md`
+- `.specs/features/recalculation-visible-progress/spec.md`
+- `.specs/STATE.md`
+- `.specs/LESSONS.md`
+
+### Spec-Anchored Acceptance Criteria
+
+| Requirement | Spec-defined outcome | Evidence | Result |
+| --- | --- | --- | --- |
+| P1 Non-Blocking Progress AC4: retryable Atividade x Obra lookup failures emit a `processing` webhook using the current progress state. | Heartbeat repeats the current `progress` and `progress_percent`, without advancing either value. | `src/services/bubble-bulk.service.ts:744-752` emits `phaseProgress.progress` and `phaseProgress.currentPercent`; `tests/bubble-bulk.service.test.ts:739-782` asserts a 429/1015 retry emits `progress: 2`, `progress_percent: 0`; `tests/bubble-bulk.service.test.ts:785-836` asserts a retry after partial progress repeats the prior phase 2 percent. | PASS |
+| P1 Non-Blocking Progress AC5: retryable lookups do not emit terminal `error` until retries are exhausted. | While attempts remain, the lookup logs retry, emits heartbeat, delays, and continues; terminal throw occurs only after final attempt or non-retryable status. | `src/services/bubble-bulk.service.ts:812-824` and `src/services/bubble-bulk.service.ts:841-854` continue retry paths before throwing; verifier cross-checked controller error webhook is only sent from the catch path. | PASS |
+
+### Bubble-Facing Documentation Evidence
+
+- `docs/bubble-cloudflare-1015-lookup-retry-2026-09-15.md` documents the repeated `processing` heartbeat format.
+- The same doc states that final `error` remains terminal and is not sent while the motor still intends to retry.
+
+### Gate Evidence
+
+| Command | Result |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc` | PASS: exit code 0. |
+| `node node_modules\vitest\vitest.mjs run tests\bubble-bulk.service.test.ts -t "lookup"` | PASS outside sandbox after sandbox config-load failure: 1 file, 2 tests passed, 56 skipped. |
+| `node node_modules\vitest\vitest.mjs run` | PASS outside sandbox after sandbox config-load failure: 7 files, 185 tests passed, 0 failed. |
+| `git diff --check` | PASS: no whitespace errors. |
+
+Initial focused Vitest execution inside the managed sandbox failed before tests ran because esbuild could not read `../..` and could not resolve `vitest.config.ts`; the same command passed when rerun outside the sandbox.
+
+### Independent Verifier
+
+PASS. No blocking findings. The verifier confirmed:
+
+- heartbeat is emitted before the retry delay for retryable HTTP and transport lookup failures;
+- heartbeat repeats stage and percent through `phaseProgress.currentPercent`;
+- current percent changes only after real progress threshold advancement;
+- terminal `error` remains after retry exhaustion rather than before retry.
+
+### Summary
+
+**Overall**: Ready.
+
+**Spec-anchored check**: 2/2 new acceptance criteria passed.
+**Gate**: TypeScript passed; Vitest passed with 185 tests.
