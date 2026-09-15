@@ -198,13 +198,14 @@
 
 ### Current Snapshot - 2026-09-15
 
-- **Feature**: Promote Bubble bulk persistence, visible progress, and delta motor recalculation work from `codex/bubble-bulk-persistence` to `main`.
-- **Phase / Task**: Merge in progress on `main`; conflicts in `.specs/STATE.md` and `.specs/LESSONS.md` resolved by preserving both histories.
-- **Completed**: async schedule jobs with progress webhooks; Bubble version-aware webhook routing; retry/cooldown for PATCH loops; initial schedule bulk metrics and dedup protection; localAtuacao guarded fallback; delta motor v3 for dependent activity-date recalculation; optional Atividade x Obra bulk create concurrency via `BUBBLE_BULK_CREATE_CONCURRENCY`.
-- **Latest pushed test branch commit**: `8c77287 Add optional bulk create concurrency` on `origin/codex/bubble-bulk-persistence`.
-- **Latest verification before merge**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 181 tests; `git diff --check` passed.
+- **Feature**: Promote Bubble bulk persistence, visible progress, lookup retry, and delta motor recalculation work from `codex/bubble-bulk-persistence` to `main`.
+- **Phase / Task**: Implementation and local promotion complete on `main`; ready to push `codex/bubble-bulk-persistence` and `main`.
+- **Completed**: async schedule jobs with progress webhooks; Bubble version-aware webhook routing; retry/cooldown for PATCH loops; retry/cooldown for Atividade x Obra Data API lookups; numeric env defaults now use fallbacks when env vars are absent; initial schedule bulk metrics and dedup protection; localAtuacao guarded fallback; delta motor v3 for dependent activity-date recalculation; optional Atividade x Obra bulk create concurrency via `BUBBLE_BULK_CREATE_CONCURRENCY`; persistence progress now emits `1%`, `3%`, `5%`, then every `5%` through `100%`.
+- **Latest local test branch commits**: `70ac041 feat(progress): add early persistence updates`; `5675fca fix(bulk): retry atividade obra lookups` on `codex/bubble-bulk-persistence`.
+- **Latest local main commits**: `0477bbe feat(progress): add early persistence updates`; `a68939d fix(bulk): retry atividade obra lookups`.
+- **Latest verification before push**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 184 tests; `git diff --check` passed.
 - **Bubble v3 test payload requirements**: send `payload_version: 3`, `estrutura_inalterada: true`, `scope.tipo: "delta_motor"`, target/date scope fields, `linhas_esperadas`, `base.versao_id`, `base.mode`, complete active-version `base.payload`, ordered `events_old`, and `events_json` containing only the new pencil event.
 - **Bulk create tuning**: default behavior remains serial; test can set `BUBBLE_BULK_CREATE_CONCURRENCY=2` or `3`. Etapa 3 remains controlled by `BUBBLE_PATCH_CONCURRENCY`; user stated `6` is the verified ideal value.
-- **Next step**: finish merge commit on `main`, run focused/full validation, then push `main` to `origin/main`.
+- **Next step**: push `codex/bubble-bulk-persistence` for Bubble test and `main` for Live deployment.
 - **Blockers**: none after conflict resolution.
 - **Branch**: `main`.
