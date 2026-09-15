@@ -36,6 +36,7 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 | Repeated stage 2 percentages | Do not resend unchanged percentages on short heartbeats | Bubble logs showed each duplicate costs actions and guardrail rescheduling; one send per threshold is enough unless a rare guardrail renewal is due. | Yes |
 | Stage 2/3 percentage cadence | Send 1%, 3%, 5%, then 5% increments | Large Live generation can spend too long before the first 10% signal; early life-sign webhooks keep the locked screen visibly alive. | Yes |
 | Lookup retry heartbeat | Resend `processing` with the current stage and percent during retry/backoff | Bubble sentinels cannot distinguish a healthy lookup cooldown from a dead motor unless the engine renews `ultimo_sinal_em`. | Yes |
+| Terminal webhook ordering | Drain in-flight detached `processing` sends before terminal `done` or `error` | Bubble treats terminal states as closing the version; any later progress event is stale and must not be emitted after the terminal event. | Yes |
 
 **Open questions:** none blocking implementation; unconfirmed Bubble-facing decisions are logged as assumptions above.
 
@@ -77,6 +78,7 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 3. WHEN persistence heartbeat runs before percent advancement THEN the engine SHALL not resend the same `progress_percent` on each short heartbeat.
 4. WHEN an Atividade x Obra lookup is retrying after a retryable Bubble/Cloudflare failure THEN the engine SHALL emit a `processing` webhook using the current `progress` and `progress_percent`, without advancing either value.
 5. WHEN an Atividade x Obra lookup still has retries remaining THEN the engine SHALL NOT emit a terminal `error` webhook before those retries are exhausted.
+6. WHEN a terminal `done` or `error` webhook is required while detached `processing` sends are still in flight THEN the engine SHALL wait for those sends to settle before emitting the terminal webhook.
 
 **Independent Test**: Existing mocked persistence test keeps hanging positive progress webhooks and expects patches plus `done`.
 
@@ -87,6 +89,7 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 - WHEN a stage has no units of persistence work THEN the engine SHALL still emit that stage's `100%` closure before moving on.
 - WHEN calculation throws after stage 1 starts THEN the error webhook SHALL report the last emitted stage and percent.
 - WHEN Bubble rejects an intermediate progress webhook THEN the failure SHALL be logged but not fail the job.
+- WHEN persistence fails after an internal progress send was started but not yet delivered THEN the delayed `processing` webhook SHALL be delivered before the terminal `error`.
 
 ---
 

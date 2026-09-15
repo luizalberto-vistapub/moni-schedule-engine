@@ -108,3 +108,8 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: Any retry/backoff path that blocks writes must still renew Bubble liveness with a `processing` webhook.
 - **Grounding**: Bubble's sentinel marks jobs dead only when both recent `processing` webhooks and new Atividade x Obra writes are absent; a healthy 429/1015 lookup cooldown satisfies both failure proofs unless the engine emits a heartbeat.
 - **Scope**: Bubble watchdog compatibility, retry loops, and schedule progress webhooks.
+
+### L-022
+- **Lesson**: Fire-and-forget progress sends must be drained before terminal job webhooks.
+- **Grounding**: A Live incident showed `processing` webhooks after a final `error` because detached progress requests could finish after the terminal error path.
+- **Scope**: Async webhook ordering, terminal-state contracts, and Bubble schedule job lifecycle.

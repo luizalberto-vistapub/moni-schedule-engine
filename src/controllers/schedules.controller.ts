@@ -1431,6 +1431,7 @@ async function processScheduleJob(
   let failedStep = "calculate";
   let lastProgress: { progress: 1 | 2 | 3 | 4; progress_percent: number } = { progress: 1, progress_percent: 0 };
   const closedProgressStages = new Set<1 | 2 | 3 | 4>();
+  const pendingProcessingWebhooks = new Set<Promise<void>>();
   const baseFields = webhookBaseFields(jobId, payload);
   const webhookOptions = { ...options, bubbleApiVersion: webhookBubbleApiVersion(payload) };
   const processingPayload = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string) => {
@@ -1451,13 +1452,19 @@ async function processScheduleJob(
     await sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions);
   };
   const sendProcessingProgressDetached = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): void => {
-    void sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions).catch((webhookError) => {
+    const sendPromise = sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions).catch((webhookError) => {
       options.log?.warn({
         requestId: options.requestId,
         jobId,
         ...errorLogFields(webhookError)
       }, "schedule processing webhook failed");
     });
+    pendingProcessingWebhooks.add(sendPromise);
+    sendPromise.finally(() => pendingProcessingWebhooks.delete(sendPromise));
+  };
+  const drainProcessingWebhooks = async (): Promise<void> => {
+    if (!pendingProcessingWebhooks.size) return;
+    await Promise.allSettled([...pendingProcessingWebhooks]);
   };
   const closeProgressStage = async (progress: 1 | 2 | 3 | 4, message: string): Promise<void> => {
     if (closedProgressStages.has(progress)) return;
@@ -1503,6 +1510,7 @@ async function processScheduleJob(
         : await persistScheduleBulks(payload, result.lines, persistenceOptions);
 
     failedStep = "finalizing";
+    await drainProcessingWebhooks();
     await closeProgressStage(2, stage2Message);
     await closeProgressStage(3, stage3Message);
     await sendProcessingProgress(4, 0, "Finalizando cronograma");
@@ -1549,6 +1557,7 @@ async function processScheduleJob(
     const message = error instanceof Error ? error.message : "Unexpected error";
     options.log?.error({ requestId: options.requestId, jobId, failedStep, ...errorLogFields(error) }, "schedule job failed");
     try {
+      await drainProcessingWebhooks();
       await sendScheduleWebhook({
         ...baseFields,
         status: "error",

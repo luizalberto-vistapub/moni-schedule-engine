@@ -202,13 +202,21 @@
 - **Date**: 2026-09-15
 - **Status**: active
 
+### AD-026
+- **Decision**: Schedule jobs must drain already-started detached `processing` webhooks before sending terminal `done` or `error`.
+- **Reason**: Bubble treats terminal webhooks as closing the version; a slow detached progress request can otherwise arrive after `error`, making the terminal event not truly final.
+- **Trade-off**: Terminal delivery can wait briefly for in-flight progress sends, while persistence still remains non-blocking during the critical write loop.
+- **Scope**: Schedule controller webhook ordering and Bubble terminal-state contract.
+- **Date**: 2026-09-15
+- **Status**: active
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-15
 
 - **Feature**: Promote Bubble bulk persistence, visible progress, lookup retry, and delta motor recalculation work from `codex/bubble-bulk-persistence` to `main`.
 - **Phase / Task**: Implementation and local promotion complete on `main`; adding lookup-retry heartbeats for Bubble watchdog compatibility.
-- **Completed**: async schedule jobs with progress webhooks; Bubble version-aware webhook routing; retry/cooldown for PATCH loops; retry/cooldown for Atividade x Obra Data API lookups; lookup retry heartbeat with current progress; numeric env defaults now use fallbacks when env vars are absent; initial schedule bulk metrics and dedup protection; localAtuacao guarded fallback; delta motor v3 for dependent activity-date recalculation; optional Atividade x Obra bulk create concurrency via `BUBBLE_BULK_CREATE_CONCURRENCY`; persistence progress now emits `1%`, `3%`, `5%`, then every `5%` through `100%`.
+- **Completed**: async schedule jobs with progress webhooks; Bubble version-aware webhook routing; retry/cooldown for PATCH loops; retry/cooldown for Atividade x Obra Data API lookups; lookup retry heartbeat with current progress; detached processing webhooks drain before terminal `done`/`error`; numeric env defaults now use fallbacks when env vars are absent; initial schedule bulk metrics and dedup protection; localAtuacao guarded fallback; delta motor v3 for dependent activity-date recalculation; optional Atividade x Obra bulk create concurrency via `BUBBLE_BULK_CREATE_CONCURRENCY`; persistence progress now emits `1%`, `3%`, `5%`, then every `5%` through `100%`.
 - **Latest local test branch commits**: `70ac041 feat(progress): add early persistence updates`; `5675fca fix(bulk): retry atividade obra lookups` on `codex/bubble-bulk-persistence`.
 - **Latest local main commits**: `0477bbe feat(progress): add early persistence updates`; `a68939d fix(bulk): retry atividade obra lookups`.
 - **Latest verification before push**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 184 tests; `git diff --check` passed.
