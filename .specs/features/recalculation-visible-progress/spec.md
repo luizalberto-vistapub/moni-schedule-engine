@@ -33,8 +33,8 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 | Snapshot recalculation stage 3 | Emit a zero-work close/open boundary instead of dependency patch progress | Snapshot recalculate only patches dates today, but Bubble still presents four stages. | No |
 | Stage 1 intra-calculation percentage | Boundary progress only in this step | The current calculation path is synchronous; true elapsed-time percentages during calculation require deeper engine instrumentation or worker isolation. | No |
 | Stage ordering | Stage boundary webhooks are serial; intra-stage percentages remain non-blocking | Bubble applies progress by webhook arrival order, so boundary markers must not race each other. | Yes |
-| Repeated stage 2 percentages | Do not resend unchanged percentages on short heartbeats | Bubble logs showed each duplicate costs actions and guardrail rescheduling; one send per 10% is enough unless a rare guardrail renewal is due. | Yes |
-| Stage 2 percentage cadence | Keep 10% increments | Real Bubble logs showed roughly 10 s between visible updates during the heavy phase; 5% or 2% would increase Bubble action cost without enough UX benefit. | Yes |
+| Repeated stage 2 percentages | Do not resend unchanged percentages on short heartbeats | Bubble logs showed each duplicate costs actions and guardrail rescheduling; one send per threshold is enough unless a rare guardrail renewal is due. | Yes |
+| Stage 2/3 percentage cadence | Send 1%, 3%, 5%, then 5% increments | Large Live generation can spend too long before the first 10% signal; early life-sign webhooks keep the locked screen visibly alive. | Yes |
 
 **Open questions:** none blocking implementation; unconfirmed Bubble-facing decisions are logged as assumptions above.
 
@@ -57,6 +57,7 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 5. WHEN the job reaches finalization THEN the engine SHALL emit `processing` progress `4 / 0%` with message `Finalizando cronograma` before terminal `done`.
 6. WHEN terminal completion is sent THEN the engine SHALL continue sending `done` with `progress: 4` and `progress_percent: 100`.
 7. WHEN Bubble webhook responses complete out of order unless awaited THEN the engine SHALL serialize stage boundary webhooks so Bubble applies `1/0 -> 1/100 -> 2/0 -> 2/100 -> 3/100 -> 4/0 -> done` in order.
+8. WHEN a persistence stage has enough units to advance gradually THEN it SHALL report `1%`, `3%`, `5%`, then every `5%` through `100%`.
 
 **Independent Test**: Submit a mocked generate or snapshot recalculate request and assert the ordered webhook payloads.
 

@@ -215,3 +215,75 @@ Sensor ran in a temporary detached worktree at commit `5643503`; the main checko
 ### Gaps
 
 None found for the requested increment. The verified behavior matches the spec and Bubble contract: stage boundaries are serialized, stage 2 stays at 10% increments, short heartbeat duplicate suppression is covered, and terminal/boundary ordering is preserved while non-100 internal progress stays non-blocking.
+
+---
+
+## Follow-up Validation Addendum - Commit `07342c0`
+
+**Date**: 2026-09-15  
+**Commit**: `07342c0` (`feat(progress): add early persistence updates`)  
+**Branch**: `codex/bubble-bulk-persistence`  
+**Verifier**: independent Verifier role  
+**Verdict**: PASS
+
+### Scope Checked
+
+- `.specs/features/recalculation-visible-progress/spec.md`
+- `src/services/bubble-bulk.service.ts`
+- `tests/bubble-bulk.service.test.ts`
+- `README.md`
+- `docs/recalculation-webhook-contract-2026-09-13.md`
+- `docs/bubble-progress-cadence-change-2026-09-15.md`
+
+### Spec-Anchored Acceptance Criteria
+
+| Requirement | Spec-defined outcome | `file:line` + assertion evidence | Result |
+| --- | --- | --- | --- |
+| P1 Visible Stage Boundaries AC8: WHEN a persistence stage has enough units to advance gradually THEN it SHALL report `1%`, `3%`, `5%`, then every `5%` through `100%`. | For a sufficiently large persistence stage, emitted `progress_percent` values must be exactly `[1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]`. | `tests/bubble-bulk.service.test.ts:164-185` creates 100 units, captures persistence progress, defines `expectedPercents` with the exact spec cadence, and asserts both phase 2 and phase 3 emitted percentages equal that array. | PASS |
+| P1 Non-Blocking Progress AC3: WHEN persistence heartbeat runs before percent advancement THEN the engine SHALL not resend the same `progress_percent` on each short heartbeat. | Short heartbeat should not emit duplicate unchanged percentages. | `tests/bubble-bulk.service.test.ts:190-244` holds a patch while heartbeat fires and asserts emitted percentages equal `[100]` only. | PASS |
+
+### Implementation Evidence
+
+- `src/services/bubble-bulk.service.ts:21` defines the early thresholds `[1, 3, 5]`.
+- `src/services/bubble-bulk.service.ts:666-680` computes rounded progress, suppresses unchanged percentages, and emits the rounded `progress_percent`.
+- `src/services/bubble-bulk.service.ts:686-692` maps raw percentage to `1`, `3`, `5` below `10`, then floors to `5%` increments through `100`.
+- `src/services/bubble-bulk.service.ts:2180-2182` wires the reporter to phase 2 bulk persistence.
+- `src/services/bubble-bulk.service.ts:2197-2199` wires the same reporter to phase 3 dependency persistence.
+
+### Bubble-Facing Documentation Evidence
+
+- `README.md:204-205` documents phase 2 and phase 3 as `1%, 3%, 5%, depois 10%, 15%, ... 100%`.
+- `docs/bubble-progress-cadence-change-2026-09-15.md:7-10` announces the same cadence for stages 2 and 3.
+- `docs/bubble-progress-cadence-change-2026-09-15.md:24-26` tells Bubble to accept `1`, `3`, `5`, and multiples of `5`.
+- `docs/recalculation-webhook-contract-2026-09-13.md:149-164` records the applied cadence and expected webhook counts for long persistence stages.
+
+Documentation note resolved after verifier feedback: `README.md:206` now documents the `processing 4 / 0%` finalization marker and keeps `100%` reserved for the final `done` webhook.
+
+### Gate Evidence
+
+| Command | Result |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc` | PASS: exit code 0. |
+| `node node_modules\vitest\vitest.mjs run` | PASS outside sandbox after sandbox config-load failure: 7 files, 181 tests passed, 0 failed. |
+| Post-sensor focused rerun: `node node_modules\vitest\vitest.mjs run tests\bubble-bulk.service.test.ts -t "reports phase 2 and phase 3 persistence progress"` | PASS: 1 focused test passed, 53 skipped by filter. |
+
+Initial Vitest execution inside the managed sandbox failed before tests ran because esbuild could not read `../..` and could not resolve `vitest.config.ts`; the same command passed when rerun outside the sandbox.
+
+### Discrimination Sensor
+
+Sensor ran by temporarily mutating `src/services/bubble-bulk.service.ts` in the working tree, running the focused cadence test, and immediately restoring the file. Final `git status --short` was clean before this report update.
+
+| Mutation | File:line | Description | Killed? |
+| --- | --- | --- | --- |
+| 1 | `src/services/bubble-bulk.service.ts:692` | Changed the post-early cadence from `Math.floor(percent / 5) * 5` to `Math.floor(percent / 10) * 10`, removing `15`, `25`, `35`, etc. | KILLED. The focused test failed at `tests/bubble-bulk.service.test.ts:184`, showing received phase 2 values `[1, 3, 5, 10, 20, 30, ... 100]` instead of the required `[1, 3, 5, 10, 15, 20, 25, ... 100]`. |
+
+**Sensor depth**: lightweight, one behavior-level cadence mutation.  
+**Result**: 1/1 killed.
+
+### Summary
+
+**Overall**: Ready.
+
+**Spec-anchored check**: 2/2 checked acceptance criteria for this commit matched spec outcomes.  
+**Sensor**: 1/1 mutations killed.  
+**Gate**: TypeScript passed; Vitest passed with 181 tests.

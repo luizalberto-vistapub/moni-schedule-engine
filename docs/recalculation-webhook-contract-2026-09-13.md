@@ -131,9 +131,13 @@ esta ordem:
 1 0%    Calculando cronograma
 1 100%  Calculando cronograma
 2 0%    Atualizando datas recalculadas | Criando registros em bulk
+2 1%    Atualizando datas recalculadas | Criando registros em bulk
+2 3%    Atualizando datas recalculadas | Criando registros em bulk
+2 5%    Atualizando datas recalculadas | Criando registros em bulk
 2 10%   Atualizando datas recalculadas | Criando registros em bulk
+2 15%   Atualizando datas recalculadas | Criando registros em bulk
 ...
-2 90%   Atualizando datas recalculadas | Criando registros em bulk
+2 95%   Atualizando datas recalculadas | Criando registros em bulk
 2 100%  Atualizando datas recalculadas | Criando registros em bulk
 3 100%  Atualizando vinculos/dependencias
 4 0%    Finalizando cronograma
@@ -142,25 +146,23 @@ done    Bubble grava 4/100% e fecha a tela
 
 ### Contagem esperada de webhooks
 
-Decisao aplicada: manter a etapa 2 de **10% em 10%**.
+Decisao aplicada: emitir sinais iniciais em **1%**, **3%** e **5%**, depois seguir de **5% em 5%**.
 
 Motivo:
 
-- nos logs reais, 10% em 10% gerou uma atualizacao percebida a cada ~10 s em uma execucao de
-  ~105 s, que e uma cadencia boa para feedback visual;
-- 5% em 5% dobraria o numero de webhooks/acoes Bubble sem ganho proporcional claro;
-- 2% em 2% multiplicaria o custo operacional por 5 e voltaria a criar ruido parecido com o
-  problema de duplicacao;
+- geracoes iniciais grandes podem passar tempo demais sem novo sinal visual antes de 10%;
+- 1%, 3% e 5% confirmam que a persistencia pesada esta viva logo no inicio;
+- depois de 5%, a cadencia de 5% em 5% melhora a percepcao de progresso sem voltar ao ruido de
+  enviar cada linha ou cada lote;
 - o guardrail de 600 s continua protegido por avancos reais e por uma renovacao rara quando o
   percentual fica parado por muito tempo.
 
-Para um recalculo pesado que avanca normalmente de 10 em 10%, o esperado passa a ser:
+Para uma persistencia pesada que avanca normalmente ate 100%, o esperado por etapa longa passa a ser:
 
-- **15 webhooks `processing`**:
-  - 2 da etapa 1 (`0%`, `100%`);
-  - 11 da etapa 2 (`0%`, `10%`, ..., `100%`);
-  - 1 da etapa 3 (`100%`);
-  - 1 da etapa 4 (`0%`);
+- etapa 1: 2 webhooks (`0%`, `100%`);
+- etapa 2: ate 23 webhooks (`0%`, `1%`, `3%`, `5%`, `10%`, `15%`, ..., `100%`);
+- etapa 3: ate 22 webhooks (`1%`, `3%`, `5%`, `10%`, `15%`, ..., `100%`) quando houver muitos vinculos/dependencias;
+- etapa 4: 1 webhook (`0%`);
 - 1 webhook terminal `done`.
 
 Observacao: pode haver um reenvio do mesmo percentual apenas como renovacao rara de guardrail
