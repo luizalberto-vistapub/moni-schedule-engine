@@ -8,6 +8,7 @@ import { nextBusinessDay } from "./business-days.service.js";
 const DEFAULT_BUBBLE_API_BASE_URL = "https://moni-29694.bubbleapps.io";
 const DEFAULT_BUBBLE_API_VERSION = "version-test";
 const DEFAULT_BATCH_SIZE = 500;
+const DEFAULT_BULK_CREATE_CONCURRENCY = 1;
 const DEFAULT_PATCH_CONCURRENCY = 10;
 const DEFAULT_PATCH_MAX_RETRIES = 4;
 const DEFAULT_PATCH_RETRY_BASE_MS = 250;
@@ -15,6 +16,7 @@ const DEFAULT_PATCH_RATE_LIMIT_COOLDOWN_MS = 30000;
 const DEFAULT_PATCH_PROGRESS_INTERVAL_MS = 120000;
 const DEFAULT_BULK_RETRY_LOOKUP_DELAYS_MS = [1500, 3000, 5000];
 const PROGRESS_REPEAT_GUARDRAIL_RENEWAL_MS = 540000;
+const MAX_BULK_CREATE_CONCURRENCY = 5;
 const MAX_PATCH_CONCURRENCY = 25;
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
@@ -48,6 +50,7 @@ interface BubbleBulkConfig {
   cronogramaLinhaType: string;
   atividadeObraType: string;
   eventoCronogramaType: string;
+  bulkCreateConcurrency: number;
   patchConcurrency: number;
   patchMaxRetries: number;
   patchRetryBaseMs: number;
@@ -201,6 +204,7 @@ function readConfig(): BubbleBulkConfig {
     cronogramaLinhaType: process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE || DEFAULT_CRONOGRAMA_LINHA_TYPE,
     atividadeObraType: normalizeAtividadeObraTypeName(process.env.BUBBLE_ATIVIDADE_OBRA_TYPE || DEFAULT_ATIVIDADE_OBRA_TYPE),
     eventoCronogramaType: process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE || DEFAULT_EVENTO_CRONOGRAMA_TYPE,
+    bulkCreateConcurrency: boundedInteger(process.env.BUBBLE_BULK_CREATE_CONCURRENCY, DEFAULT_BULK_CREATE_CONCURRENCY, 1, MAX_BULK_CREATE_CONCURRENCY),
     patchConcurrency: boundedInteger(process.env.BUBBLE_PATCH_CONCURRENCY, DEFAULT_PATCH_CONCURRENCY, 1, MAX_PATCH_CONCURRENCY),
     patchMaxRetries: boundedInteger(process.env.BUBBLE_PATCH_MAX_RETRIES, DEFAULT_PATCH_MAX_RETRIES, 0, 10),
     patchRetryBaseMs: boundedInteger(process.env.BUBBLE_PATCH_RETRY_BASE_MS, DEFAULT_PATCH_RETRY_BASE_MS, 0, 60000),
@@ -1306,113 +1310,57 @@ async function recoverAtividadeObraBulkRetry(
   });
 }
 
-async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
-  const persistedRecords: PersistedBulkRecord[] = [];
+async function postBulkBatch(
+  typeName: string,
+  batch: Record<string, unknown>[],
+  config: BubbleBulkConfig,
+  options: PersistScheduleOptions,
+  batchIndex: number
+): Promise<PersistedBulkRecord[]> {
+  const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
+  if (typeName === config.atividadeObraType && options.bulkMetrics) {
+    options.bulkMetrics.bulkBatchCount += 1;
+  }
 
-  for (const [batchIndex, batch] of chunks(records, config.batchSize).entries()) {
-    const url = `${config.baseUrl}/${config.version}/api/1.1/obj/${typeName}/bulk`;
-    if (typeName === config.atividadeObraType && options.bulkMetrics) {
-      options.bulkMetrics.bulkBatchCount += 1;
-    }
+  options.log?.info({
+    requestId: options.requestId,
+    typeName,
+    url,
+    batchIndex,
+    recordsCount: batch.length
+  }, "bubble bulk batch started");
 
-    options.log?.info({
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`,
+        "Content-Type": "text/plain"
+      },
+      body: ndjson(batch)
+    });
+  } catch (error) {
+    if (typeName !== config.atividadeObraType) throw error;
+    options.log?.warn({
       requestId: options.requestId,
       typeName,
       url,
       batchIndex,
-      recordsCount: batch.length
-    }, "bubble bulk batch started");
+      recordsCount: batch.length,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    }, "atividade obra bulk transport failed; reconciling before retry");
+    return recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false);
+  }
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.apiToken}`,
-          "Content-Type": "text/plain"
-        },
-        body: ndjson(batch)
-      });
-    } catch (error) {
-      if (typeName !== config.atividadeObraType) throw error;
+  const responseText = await response.text();
+  if (!response.ok) {
+    if (
+      typeName === config.atividadeObraType
+      && isMissingAmbienteXObraReference(responseText)
+      && batch.some((record) => record["ambiente x obra"])
+    ) {
       options.log?.warn({
-        requestId: options.requestId,
-        typeName,
-        url,
-        batchIndex,
-        recordsCount: batch.length,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      }, "atividade obra bulk transport failed; reconciling before retry");
-      persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false));
-      continue;
-    }
-
-    const responseText = await response.text();
-    if (!response.ok) {
-      if (
-        typeName === config.atividadeObraType
-        && isMissingAmbienteXObraReference(responseText)
-        && batch.some((record) => record["ambiente x obra"])
-      ) {
-        options.log?.warn({
-          requestId: options.requestId,
-          typeName,
-          url,
-          batchIndex,
-          recordsCount: batch.length,
-          statusCode: response.status,
-          responseText
-        }, "retrying atividade obra bulk without ambiente x obra reference");
-
-        persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, omitAmbienteXObra(batch), config, options, batchIndex));
-        options.log?.info({
-          requestId: options.requestId,
-          typeName,
-          url,
-          batchIndex,
-          recordsCount: batch.length
-        }, "bubble bulk batch persisted without ambiente x obra reference");
-        continue;
-      }
-
-      if (
-        typeName === config.atividadeObraType
-        && batch.some((record) => Object.prototype.hasOwnProperty.call(record, LOCAL_ATUACAO_FIELD))
-      ) {
-        options.log?.warn({
-          requestId: options.requestId,
-          typeName,
-          url,
-          batchIndex,
-          recordsCount: batch.length,
-          statusCode: response.status,
-          responseText
-        }, "retrying atividade obra bulk without local atuacao field");
-
-        try {
-          persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, omitLocalAtuacao(batch), config, options, batchIndex));
-          options.log?.info({
-            requestId: options.requestId,
-            typeName,
-            url,
-            batchIndex,
-            recordsCount: batch.length
-          }, "bubble bulk batch persisted without local atuacao field");
-          continue;
-        } catch (error) {
-          options.log?.error({
-            requestId: options.requestId,
-            typeName,
-            url,
-            batchIndex,
-            recordsCount: batch.length,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          }, "bubble bulk batch failed");
-          throw error;
-        }
-      }
-
-      options.log?.error({
         requestId: options.requestId,
         typeName,
         url,
@@ -1420,31 +1368,112 @@ async function postBulk(typeName: string, records: Record<string, unknown>[], co
         recordsCount: batch.length,
         statusCode: response.status,
         responseText
-      }, "bubble bulk batch failed");
-      if (typeName === config.atividadeObraType) {
-        persistedRecords.push(...await recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false));
-        continue;
-      }
-      throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
-    }
-    assertBulkBodySucceeded(typeName, responseText);
-    const createdIds = parseBulkCreatedIds(responseText, batch.length);
-    persistedRecords.push(...batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null })));
-    if (typeName === config.atividadeObraType && options.bulkMetrics) {
-      options.bulkMetrics.createdCount += batch.length;
-    }
-    await reportPersistenceProgress(options.phase2Progress, batch.length);
+      }, "retrying atividade obra bulk without ambiente x obra reference");
 
-    options.log?.info({
+      const persistedRecords = await recoverAtividadeObraBulkRetry(typeName, url, batch, omitAmbienteXObra(batch), config, options, batchIndex);
+      options.log?.info({
+        requestId: options.requestId,
+        typeName,
+        url,
+        batchIndex,
+        recordsCount: batch.length
+      }, "bubble bulk batch persisted without ambiente x obra reference");
+      return persistedRecords;
+    }
+
+    if (
+      typeName === config.atividadeObraType
+      && batch.some((record) => Object.prototype.hasOwnProperty.call(record, LOCAL_ATUACAO_FIELD))
+    ) {
+      options.log?.warn({
+        requestId: options.requestId,
+        typeName,
+        url,
+        batchIndex,
+        recordsCount: batch.length,
+        statusCode: response.status,
+        responseText
+      }, "retrying atividade obra bulk without local atuacao field");
+
+      try {
+        const persistedRecords = await recoverAtividadeObraBulkRetry(typeName, url, batch, omitLocalAtuacao(batch), config, options, batchIndex);
+        options.log?.info({
+          requestId: options.requestId,
+          typeName,
+          url,
+          batchIndex,
+          recordsCount: batch.length
+        }, "bubble bulk batch persisted without local atuacao field");
+        return persistedRecords;
+      } catch (error) {
+        options.log?.error({
+          requestId: options.requestId,
+          typeName,
+          url,
+          batchIndex,
+          recordsCount: batch.length,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }, "bubble bulk batch failed");
+        throw error;
+      }
+    }
+
+    options.log?.error({
       requestId: options.requestId,
       typeName,
       url,
       batchIndex,
-      recordsCount: batch.length
-    }, "bubble bulk batch persisted");
+      recordsCount: batch.length,
+      statusCode: response.status,
+      responseText
+    }, "bubble bulk batch failed");
+    if (typeName === config.atividadeObraType) {
+      return recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false);
+    }
+    throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
   }
+  assertBulkBodySucceeded(typeName, responseText);
+  const createdIds = parseBulkCreatedIds(responseText, batch.length);
+  const persistedRecords = batch.map((record, index) => ({ record, bubbleId: createdIds[index] || null }));
+  if (typeName === config.atividadeObraType && options.bulkMetrics) {
+    options.bulkMetrics.createdCount += batch.length;
+  }
+  await reportPersistenceProgress(options.phase2Progress, batch.length);
 
+  options.log?.info({
+    requestId: options.requestId,
+    typeName,
+    url,
+    batchIndex,
+    recordsCount: batch.length
+  }, "bubble bulk batch persisted");
   return persistedRecords;
+}
+
+async function postBulk(typeName: string, records: Record<string, unknown>[], config: BubbleBulkConfig, options: PersistScheduleOptions): Promise<PersistedBulkRecord[]> {
+  const batches = chunks(records, config.batchSize);
+  const concurrency = typeName === config.atividadeObraType ? config.bulkCreateConcurrency : 1;
+  const batchResults = new Array<PersistedBulkRecord[]>(batches.length);
+  let nextBatchIndex = 0;
+
+  options.log?.info({
+    requestId: options.requestId,
+    typeName,
+    recordsCount: records.length,
+    batchCount: batches.length,
+    configuredConcurrency: concurrency
+  }, "bubble bulk post started");
+
+  const worker = async (): Promise<void> => {
+    while (nextBatchIndex < batches.length) {
+      const batchIndex = nextBatchIndex;
+      nextBatchIndex += 1;
+      batchResults[batchIndex] = await postBulkBatch(typeName, batches[batchIndex], config, options, batchIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, () => worker()));
+  return batchResults.flat();
 }
 
 async function patchExistingAtividadeObraRecords(

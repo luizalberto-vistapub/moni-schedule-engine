@@ -23,6 +23,7 @@ describe("Bubble bulk persistence", () => {
     delete process.env.BUBBLE_API_BASE_URL;
     delete process.env.BUBBLE_API_VERSION;
     delete process.env.BUBBLE_BULK_BATCH_SIZE;
+    delete process.env.BUBBLE_BULK_CREATE_CONCURRENCY;
     delete process.env.BUBBLE_CRONOGRAMA_LINHA_TYPE;
     delete process.env.BUBBLE_ATIVIDADE_OBRA_TYPE;
     delete process.env.BUBBLE_EVENTO_CRONOGRAMA_TYPE;
@@ -114,6 +115,49 @@ describe("Bubble bulk persistence", () => {
       bulkBatchCount: 1,
       bulkRetryCount: 0,
       dedupDroppedCount: 0
+    });
+  });
+
+  it("can post Atividade x Obra bulk create batches with bounded concurrency", async () => {
+    process.env.BUBBLE_BULK_BATCH_SIZE = "1";
+    process.env.BUBBLE_BULK_CREATE_CONCURRENCY = "2";
+    let activeBulkCreates = 0;
+    let maxActiveBulkCreates = 0;
+    let idIndex = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit): Promise<MockFetchResponse> => {
+      if (init?.method === "GET") return atividadeObraLookupResponse();
+      if (init?.method === "PATCH") return { ok: true, status: 204, text: async () => "" };
+      if (init?.method === "POST" && String(url).includes("/api/1.1/obj/atividadexobra/bulk")) {
+        activeBulkCreates += 1;
+        maxActiveBulkCreates = Math.max(maxActiveBulkCreates, activeBulkCreates);
+        await delay(20);
+        activeBulkCreates -= 1;
+      }
+
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map(() => JSON.stringify({ id: `bubble_${idIndex += 1}` })).join("\n")
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const activities = Array.from({ length: 4 }, (_, index) => ({
+      id: `serv_${index + 1}`,
+      nome: `Servico ${index + 1}`,
+      tipo: "Servico",
+      ordem: index + 1,
+      duracao: 1
+    }));
+    const { payload, lines } = payloadWithOneLine({ atividades_json: activities });
+
+    const summary = await persistScheduleBulks(payload, lines);
+
+    expect(findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(4);
+    expect(maxActiveBulkCreates).toBe(2);
+    expect(summary).toMatchObject({
+      createdCount: 4,
+      bulkBatchCount: 4
     });
   });
 
