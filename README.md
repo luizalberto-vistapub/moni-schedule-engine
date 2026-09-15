@@ -454,6 +454,7 @@ Consequencia:
 
 - um evento novo para a mesma atividade substitui o antigo
 - eventos antigos de outras atividades continuam ativos
+- um novo `work_start_delayed` substitui tambem eventos antigos por atividade, porque define uma nova linha de base para a obra
 
 Essa regra vale tanto para o comportamento do motor quanto para a persistencia posterior em `eventocronograma`.
 
@@ -463,6 +464,7 @@ Essa regra vale tanto para o comportamento do motor quanto para a persistencia p
 
 - aceita `new_start_date`
 - aplica essa data em `obra_json[0].dataInicio` antes de gerar o novo cronograma
+- em `recalculate` com `estrutura_inalterada=true`, exige `obra_json[0].dataInicio`; o motor nao usa a menor data do snapshot como inicio da obra
 
 #### `activity_start_delayed`
 

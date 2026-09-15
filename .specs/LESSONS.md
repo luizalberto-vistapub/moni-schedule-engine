@@ -49,3 +49,52 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Grounding**: A `generate` payload for a new obra produced 4,676 Atividade x Obra records and still needed Etapa 3 to patch master/dependency fields after IDs were returned by bulk create.
 - **Scope**: Schedule persistence flow and progress UI expectations.
 
+### L-010
+- **Lesson**: Long Bubble write loops must treat HTTP 429 and transport exceptions as retryable persistence noise before failing the whole job.
+- **Grounding**: FK0002 heavy recalculations hit Cloudflare 1015 and later `fetch failed` during `patch_dates`; retries and cooldowns allowed subsequent large runs to finish.
+- **Scope**: Bubble PATCH persistence and schedule job error handling.
+
+### L-011
+- **Lesson**: Progress webhooks that only move the UI must not be awaited inside the critical persistence loop.
+- **Grounding**: Intermediate `processing` webhook failures produced many 429 logs during FK0002 recalculation and could mask PATCH timing until progress sends were made non-blocking.
+- **Scope**: Schedule controller progress reporting and Bubble webhook integration.
+
+### L-012
+- **Lesson**: Heavy Bubble API tuning needs separate metrics for attempted requests, explicit rate-limit pauses, and elapsed persistence time.
+- **Grounding**: `patchRequestCount` alone mixed transport retries with rate-limit behavior until `pauseCount` and `pausedMs` were added to the patch pool log.
+- **Scope**: Observability for schedule recalculation persistence.
+
+### L-013
+- **Lesson**: Treat Bubble branch `test` as the validation target until production promotion is explicitly requested.
+- **Grounding**: The recalc optimization cycle required repeated commits and pushes only to `codex/bubble-bulk-persistence` while Render/Bubble branch `test` was being measured.
+- **Scope**: Git workflow and deployment validation.
+
+### L-014
+- **Lesson**: Snapshot-only recalculations must require explicit contract anchors instead of deriving business anchors from incidental snapshot extrema.
+- **Grounding**: FK0002 `work_start_delayed` used the minimum snapshot date `2026-04-06` as the work-start anchor, producing a false +301 day shift; regression coverage now rejects missing `obra_json[0].dataInicio`.
+- **Scope**: Schedule recalculation contracts, snapshot payload normalization, and event precedence.
+
+### L-015
+- **Lesson**: A dedup safety net needs its own dropped-row metric, otherwise it can hide the regression it is containing.
+- **Grounding**: Initial schedule Teste 3 persisted the correct 4,676 rows after duplicate defenses, but Bubble correctly noted that ordinary created/persisted counts would not reveal future duplicate generation once dedup runs before persistence.
+- **Scope**: Bulk Atividade x Obra metrics and Bubble audit checklist.
+
+### L-016
+- **Lesson**: Bubble Data API field names must be verified against Swagger, and bulk endpoints may still need operational fallbacks for fields that object endpoints accept.
+- **Grounding**: Swagger exposed `localAtuacao`, while earlier payloads used the internal key `localatuacao_option_os_localatua__o`; later bulk runs still needed a guarded fallback that removes `localAtuacao` when the bulk rejects a lote.
+- **Scope**: Bubble bulk payload mapping, option-set fields, and field-specific retry logic.
+
+### L-017
+- **Lesson**: Metrics for partial bulk recovery must count rows confirmed by lookup as created rows.
+- **Grounding**: Teste 4 showed `createdCount: 1484` despite 4,676 rows in Bubble because rows created before a 400 bulk response were recovered by idempotency lookup but not counted.
+- **Scope**: Bulk retry/reconciliation metrics.
+
+### L-018
+- **Lesson**: Recalculate payload mode controls whether the engine uses a snapshot or regenerates structure; Bubble must not mix structural mode with snapshot-only inputs.
+- **Grounding**: A recovery payload with `estrutura_inalterada=true` and only 360 snapshot rows returned 360 rows by design, while an aditivo with `estrutura_inalterada=false` and empty `atividades_json`/structure blocks failed because `runScheduleEngine` had no structure to generate.
+- **Scope**: Bubble recalculate/aditivo contract and support triage.
+
+### L-019
+- **Lesson**: Event-sourced recalculation paths must separate replay input from persistence output: replay `events_old`, but persist only the new `events_json` event.
+- **Grounding**: The delta motor v3 work found duplicated `EventoCronograma` history and timezone date drift when old events were re-persisted; regression coverage now asserts one new event and calendar-stable event dates.
+- **Scope**: Schedule recalculation contracts, `EventoCronograma` persistence, and Bubble fallback triage.

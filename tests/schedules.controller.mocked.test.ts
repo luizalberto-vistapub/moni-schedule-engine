@@ -31,11 +31,17 @@ describe("schedule controller non-Error failures", () => {
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-      const webhookCall = calls.find(([url]) => String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1"));
+      const webhookCall = calls.find(([url, init]) => {
+        const body = String((init as RequestInit | undefined)?.body || "");
+        return String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")
+          && body.includes("\"status\":\"error\"");
+      });
       if (webhookCall) {
         expect(JSON.parse(String((webhookCall[1] as RequestInit).body))).toMatchObject({
           job_id: response.body.job_id,
           status: "error",
+          progress: 1,
+          progress_percent: 0,
           error_code: "SCHEDULE_ENGINE_ERROR",
           error_message: "Unexpected error",
           failed_step: "calculate"

@@ -9,6 +9,7 @@ import { runScheduleEngine } from "../src/services/schedule-engine.service.js";
 describe("schedule controllers", () => {
   beforeEach(() => {
     process.env.BUBBLE_API_TOKEN = "test_token";
+    process.env.BUBBLE_BULK_RETRY_LOOKUP_DELAYS_MS = "0,0,0";
     let idIndex = 0;
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "GET") {
@@ -38,6 +39,7 @@ describe("schedule controllers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.BUBBLE_API_TOKEN;
+    delete process.env.BUBBLE_BULK_RETRY_LOOKUP_DELAYS_MS;
   });
 
   function persistedBulkBody(typeName: string): string {
@@ -45,6 +47,24 @@ describe("schedule controllers", () => {
     const call = calls.find(([url]) => String(url).includes(`/obj/${typeName}/bulk`));
     expect(call).toBeTruthy();
     return String((call![1] as { body?: string }).body);
+  }
+
+  function fetchCalls(path: string, method: string): unknown[][] {
+    return (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((call) => {
+      const init = call[1] as RequestInit | undefined;
+      return String(call[0]).includes(path) && init?.method === method;
+    });
+  }
+
+  async function waitForDoneWebhook(): Promise<void> {
+    await waitForFetchCall((call) => {
+      if (!String(call[0]).includes("/api/1.1/wf/api_cronograma__webhook_v1")) return false;
+      try {
+        return JSON.parse(String((call[1] as RequestInit | undefined)?.body || "{}")).status === "done";
+      } catch {
+        return false;
+      }
+    });
   }
 
   async function waitForFetchCall(predicate: (call: unknown[]) => boolean): Promise<unknown[]> {
@@ -68,6 +88,36 @@ describe("schedule controllers", () => {
   async function waitForWebhookBody(status: string): Promise<Record<string, unknown>> {
     const call = await waitForWebhookCall(status);
     return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
+  }
+
+  async function delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function webhookBodies(): Record<string, unknown>[] {
+    return fetchCalls("/api/1.1/wf/api_cronograma__webhook_v1", "POST")
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>);
+  }
+
+  function expectWebhookSequence(expected: Array<Record<string, unknown>>): void {
+    const actual = webhookBodies().map((body) => ({
+      status: body.status,
+      progress: body.progress,
+      progress_percent: body.progress_percent,
+      message: body.message
+    }));
+    let cursor = 0;
+
+    for (const expectedBody of expected) {
+      const foundIndex = actual.slice(cursor).findIndex((body) => (
+        body.status === expectedBody.status
+        && body.progress === expectedBody.progress
+        && body.progress_percent === expectedBody.progress_percent
+        && body.message === expectedBody.message
+      ));
+      expect(foundIndex, `missing ordered webhook ${JSON.stringify(expectedBody)} in ${JSON.stringify(actual)}`).toBeGreaterThanOrEqual(0);
+      cursor += foundIndex + 1;
+    }
   }
 
   it("returns health status", async () => {
@@ -132,15 +182,6 @@ describe("schedule controllers", () => {
     expect(response.body.metrics).toBeUndefined();
     expect(response.body.validations).toBeUndefined();
 
-    const processingBody = await waitForWebhookBody("processing");
-    expect(processingBody).toMatchObject({
-      job_id: response.body.job_id,
-      status: "processing",
-      progress: 2,
-      progress_percent: 0,
-      message: "Criando registros em bulk"
-    });
-
     const webhookCall = await waitForWebhookCall("done");
     expect(webhookCall[0]).toBe("https://moni-29694.bubbleapps.io/version-test/api/1.1/wf/api_cronograma__webhook_v1");
     expect((webhookCall[1] as RequestInit).headers).toMatchObject({
@@ -157,8 +198,91 @@ describe("schedule controllers", () => {
       versao_cronograma_unique_id: "versao_1",
       previous_version_id: null
     });
-    expect(webhookBody.metrics).toMatchObject({ linesCount: 3 });
+    expect(webhookBody.metrics).toMatchObject({
+      linesCount: 3,
+      createdCount: 3,
+      bulkBatchCount: 1,
+      bulkRetryCount: 0,
+      dedupDroppedCount: 0
+    });
     expect(typeof (webhookBody.metrics as { durationMs?: unknown }).durationMs).toBe("number");
+
+    expectWebhookSequence([
+      { status: "processing", progress: 1, progress_percent: 0, message: "Calculando cronograma" },
+      { status: "processing", progress: 1, progress_percent: 100, message: "Calculando cronograma" },
+      { status: "processing", progress: 2, progress_percent: 0, message: "Criando registros em bulk" },
+      { status: "processing", progress: 2, progress_percent: 100, message: "Criando registros em bulk" },
+      { status: "processing", progress: 3, progress_percent: 100, message: "Atualizando vínculos/dependências" },
+      { status: "processing", progress: 4, progress_percent: 0, message: "Finalizando cronograma" },
+      { status: "done", progress: 4, progress_percent: 100, message: undefined }
+    ]);
+  });
+
+  it("delivers stage boundary webhooks in order even when Bubble responds unevenly", async () => {
+    const delivered: string[] = [];
+    let idIndex = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        const key = `${body.status}:${body.progress}:${body.progress_percent}`;
+        if (key === "processing:1:0" || key === "processing:2:100" || key === "processing:3:100") {
+          await delay(20);
+        }
+        delivered.push(key);
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      const rows = String(init?.body || "").split(/\r?\n/).filter(Boolean);
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => rows.map(() => JSON.stringify({ id: `bubble_${idIndex += 1}` })).join("\n")
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        atividades_json: [
+          { id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, atividadeProjeto: [{ idAtividadeProjeto: "proj_1", nomeAtividadeProjeto: "Projeto" }] },
+          { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, atividadeServicoAncoraId: "" },
+          { id: "compra_1", nome: "Compra", tipo: "Compra", ordem: 3, atividadeServicoAncoraId: "serv_1", etapaCompra: "limite de compra" }
+        ]
+      }));
+
+    expect(response.status).toBe(202);
+    await waitForWebhookBody("done");
+    await delay(50);
+
+    expect(delivered.filter((key) => [
+      "processing:1:0",
+      "processing:1:100",
+      "processing:2:0",
+      "processing:2:100",
+      "processing:3:100",
+      "processing:4:0",
+      "done:4:100"
+    ].includes(key))).toEqual([
+      "processing:1:0",
+      "processing:1:100",
+      "processing:2:0",
+      "processing:2:100",
+      "processing:3:100",
+      "processing:4:0",
+      "done:4:100"
+    ]);
   });
 
   it("sends schedule webhooks to the Bubble API version from the payload", async () => {
@@ -214,6 +338,91 @@ describe("schedule controllers", () => {
     expect(JSON.parse(atividadeObraBody.split("\n")[0]!)).toMatchObject({
       versaoCronograma: "versao_2",
       dataInicioPrevista: "2026-05-06T12:00:00.000Z"
+    });
+  });
+
+  it("rejects snapshot work start recalculation without an explicit work start date", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        estrutura_inalterada: true,
+        obra_json: [],
+        atividade_obra_snapshot: [{
+          "unique id": "ao_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          tipo: "Servico",
+          dataInicioPrevista: "2026-04-06",
+          dataFimPrevista: "2026-04-06",
+          status: "Nao iniciada",
+          scopeRole: "editable"
+        }],
+        events_json: [{ type: "work_start_delayed", new_start_date: "2027-02-01" }]
+      }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.validations.errors).toContain("work_start_delayed snapshot recalculation requires obra_json[0].dataInicio");
+  });
+
+  it("lets a new work start reset override stale activity events from previous recalculations", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        estrutura_inalterada: true,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-01" }],
+        atividade_obra_snapshot: [
+          {
+            "unique id": "ao_1",
+            id_atividade_obra_externo: "serv_1|amb_1|1",
+            atividade: "serv_1",
+            tipo: "Servico",
+            dataInicioPrevista: "2026-05-01",
+            dataFimPrevista: "2026-05-01",
+            status: "Nao iniciada",
+            scopeRole: "editable"
+          },
+          {
+            "unique id": "ao_2",
+            id_atividade_obra_externo: "serv_2|amb_1|1",
+            atividade: "serv_2",
+            tipo: "Servico",
+            dataInicioPrevista: "2026-05-02",
+            dataFimPrevista: "2026-05-02",
+            status: "Nao iniciada",
+            scopeRole: "editable"
+          }
+        ],
+        events_old: [{
+          tipo: "activity_date_changed_cascade",
+          atividade: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          data: "2026-05-10"
+        }],
+        events_json: [{ type: "work_start_delayed", new_start_date: "2026-06-01" }]
+      }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    const patchBodies = patchCalls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(patchBodies).toEqual([
+      expect.objectContaining({ dataInicioPrevista: "2026-06-01T12:00:00.000Z" }),
+      expect.objectContaining({ dataInicioPrevista: "2026-06-02T12:00:00.000Z" })
+    ]);
+
+    const eventRecords = persistedBulkBody("eventocronograma").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventRecords).toHaveLength(1);
+    expect(eventRecords[0]).toMatchObject({
+      data: "2026-06-01T12:00:00.000Z"
     });
   });
 
@@ -348,14 +557,874 @@ describe("schedule controllers", () => {
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.find((record) => record.atividade === "serv_1")).toMatchObject({ dataInicioPrevista: "2026-05-04T12:00:00.000Z" });
-    expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({ dataInicioPrevista: "2026-05-10T12:00:00.000Z" });
+    expect(records.find((record) => record.atividade === "serv_2")).toMatchObject({ dataInicioPrevista: "2026-05-11T12:00:00.000Z" });
     expect(records.find((record) => record.atividade === "serv_3")).toMatchObject({ dataInicioPrevista: "2026-05-06T12:00:00.000Z" });
 
     const eventRecords = persistedBulkBody("eventocronograma").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(eventRecords.find((record) => record.tipo === "Alterar somente data da atividade")).toMatchObject({
       atividade: "serv_2",
-      data: "2026-05-10T12:00:00.000Z"
+      data: "2026-05-11T12:00:00.000Z"
     });
+  });
+
+  it("uses snapshot-driven recalculation to patch only changed dates when estrutura is unchanged", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-06",
+        descendentes_count: 1,
+        ancoras_count: 0
+      },
+      obra_ambiente_json: [],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [],
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          duracaoVariavel: false,
+          quantidadeBase: null,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        },
+        {
+          "unique id": "axo_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          atividade: "serv_2",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 2,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          duracaoVariavel: false,
+          quantidadeBase: null,
+          dataInicioPrevista: "2026-05-05",
+          dataFimPrevista: "2026-05-05",
+          status: "",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).obra_ambiente_json;
+    delete (payload as unknown as Record<string, unknown>).obra_ambiente_produto_json;
+    delete (payload as unknown as Record<string, unknown>).obra_ambiente_item_composicao_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const doneBody = await waitForWebhookBody("done");
+
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(0);
+    expect(patchCalls).toHaveLength(2);
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toEqual({
+      dataInicioPrevista: "2026-05-06T12:00:00.000Z",
+      dataFimPrevista: "2026-05-06T12:00:00.000Z"
+    });
+    expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toEqual({
+      dataInicioPrevista: "2026-05-07T12:00:00.000Z",
+      dataFimPrevista: "2026-05-07T12:00:00.000Z"
+    });
+    expect(doneBody.metrics).toMatchObject({
+      linesCount: 2,
+      patchedCount: 2,
+      patchRequestCount: 2,
+      patchBatchCount: 0,
+      eventCount: 0,
+      dependencyPatchCount: 0
+    });
+    expectWebhookSequence([
+      { status: "processing", progress: 1, progress_percent: 0, message: "Calculando cronograma" },
+      { status: "processing", progress: 1, progress_percent: 100, message: "Calculando cronograma" },
+      { status: "processing", progress: 2, progress_percent: 0, message: "Atualizando datas recalculadas" },
+      { status: "processing", progress: 2, progress_percent: 100, message: "Atualizando datas recalculadas" },
+      { status: "processing", progress: 3, progress_percent: 100, message: "Atualizando vínculos/dependências" },
+      { status: "processing", progress: 4, progress_percent: 0, message: "Finalizando cronograma" },
+      { status: "done", progress: 4, progress_percent: 100, message: undefined }
+    ]);
+  });
+
+  it("uses delta_motor v3 to rebuild from base payload, lookup changed rows, patch dates, and persist only the new event", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+      if (init?.method === "GET" && String(url).includes("/api/1.1/obj/atividadexobra")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({
+            response: {
+              cursor: 0,
+              count: 2,
+              remaining: 0,
+              results: [
+                { _id: "axo_1", id_atividade_obra_externo: "serv_1|amb_1|1", dataInicioPrevista: "2026-05-04T12:00:00.000Z", dataFimPrevista: "2026-05-04T12:00:00.000Z" },
+                { _id: "axo_2", id_atividade_obra_externo: "serv_2|amb_1|1", dataInicioPrevista: "2026-05-05T12:00:00.000Z", dataFimPrevista: "2026-05-05T12:00:00.000Z" }
+              ]
+            }
+          })
+        };
+      }
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+      return { ok: true, status: 200, text: async (): Promise<string> => JSON.stringify({ id: "event_1" }) };
+    }));
+
+    const activeBasePayload = basePayload({
+      versao_cronograma_unique_id: "versao_ativa",
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["serv_1"] }
+      ]
+    });
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 3,
+        estrutura_inalterada: true,
+        linhas_esperadas: 2,
+        versao_cronograma_unique_id: "versao_ativa",
+        previous_version_id: "versao_ativa",
+        mode: "activity_date_changed_cascade",
+        scope: {
+          tipo: "delta_motor",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          nova_data: "2026-05-06",
+          data_atual_inicio: "2026-05-04"
+        },
+        base: {
+          versao_id: "versao_ativa",
+          mode: "generate",
+          payload: activeBasePayload
+        },
+        events_old: [{
+          evento_id: "old_1",
+          tipo: "activity_date_changed_only",
+          atividade: "serv_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          data: "2026-05-05",
+          requisicao_data: "2026-05-01",
+          criado_em: "2026-05-01T10:00:00.000Z"
+        }],
+        events_json: [{
+          type: "activity_date_changed_cascade",
+          atividade_id: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          new_start_date: "2026-05-06"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+
+    const lookupCalls = fetchCalls("/api/1.1/obj/atividadexobra", "GET");
+    expect(decodeURIComponent(String(lookupCalls[0]![0]))).toContain('"constraint_type":"in"');
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(0);
+    const patchBodies = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(patchBodies).toEqual([
+      { dataInicioPrevista: "2026-05-06T12:00:00.000Z", dataFimPrevista: "2026-05-06T12:00:00.000Z" },
+      { dataInicioPrevista: "2026-05-07T12:00:00.000Z", dataFimPrevista: "2026-05-07T12:00:00.000Z" }
+    ]);
+    expect(doneBody.metrics).toMatchObject({ linesCount: 2, patchedCount: 2, eventCount: 1 });
+
+    const eventRecords = persistedBulkBody("eventocronograma").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventRecords).toHaveLength(1);
+    expect(eventRecords[0]).toMatchObject({
+      id_atividade_obra_externo: "serv_1|amb_1|1",
+      tipo: "Alterar data da atividade com dependentes"
+    });
+  });
+
+  it("normalizes rebuilt delta_motor v3 base dates before checking Bubble state drift", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+      if (init?.method === "GET" && String(url).includes("/api/1.1/obj/atividadexobra")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({
+            response: {
+              cursor: 0,
+              count: 1,
+              remaining: 0,
+              results: [
+                { _id: "axo_project", id_atividade_obra_externo: "proj_1|amb_1|1", dataInicioPrevista: "2026-08-31T12:00:00.000Z", dataFimPrevista: "2026-08-31T12:00:00.000Z" }
+              ]
+            }
+          })
+        };
+      }
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+      return { ok: true, status: 200, text: async (): Promise<string> => JSON.stringify({ id: "event_1" }) };
+    }));
+
+    const activeBasePayload = basePayload({
+      obra_json: [{ id: "obra_1", dataInicio: "2026-08-31" }],
+      versao_cronograma_unique_id: "versao_ativa",
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1, produtoId: "prod_1" },
+        { id: "proj_1", nome: "Projeto", tipo: "Projeto", ordem: 2, duracao: 1, atividadeServicoAncoraId: "serv_1", offsetDias: 2 }
+      ]
+    });
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 3,
+        estrutura_inalterada: true,
+        linhas_esperadas: 2,
+        versao_cronograma_unique_id: "versao_ativa",
+        previous_version_id: "versao_ativa",
+        mode: "activity_date_changed_only",
+        scope: {
+          tipo: "delta_motor",
+          id_atividade_obra_externo: "proj_1|amb_1|1",
+          nova_data: "2026-09-01",
+          data_atual_inicio: "2026-08-31"
+        },
+        base: {
+          versao_id: "versao_ativa",
+          mode: "generate",
+          payload: activeBasePayload
+        },
+        events_json: [{
+          type: "activity_date_changed_only",
+          atividade_id: "proj_1",
+          id_atividade_obra_externo: "proj_1|amb_1|1",
+          new_start_date: "2026-09-01"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    expect(doneBody.status).toBe("done");
+
+    const patchBodies = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(patchBodies).toEqual([
+      { dataInicioPrevista: "2026-09-01T12:00:00.000Z", dataFimPrevista: "2026-09-01T12:00:00.000Z" }
+    ]);
+  });
+
+  it("returns BASE_STATE_INVALID for delta_motor v3 when rebuilt line count differs", async () => {
+    const activeBasePayload = basePayload({
+      versao_cronograma_unique_id: "versao_ativa",
+      atividades_json: [{ id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 }]
+    });
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 3,
+        estrutura_inalterada: true,
+        linhas_esperadas: 2,
+        versao_cronograma_unique_id: "versao_ativa",
+        previous_version_id: "versao_ativa",
+        mode: "activity_date_changed_cascade",
+        scope: {
+          tipo: "delta_motor",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          data_atual_inicio: "2026-05-04"
+        },
+        base: { versao_id: "versao_ativa", mode: "generate", payload: activeBasePayload },
+        events_json: [{
+          type: "activity_date_changed_cascade",
+          atividade_id: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          new_start_date: "2026-05-06"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    const errorBody = await waitForWebhookBody("error");
+    expect(errorBody.error_code).toBe("BASE_STATE_INVALID");
+    expect(String(errorBody.error_message)).toContain("Base line count mismatch");
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+  });
+
+  it("returns STATE_DRIFT for delta_motor v3 when the replayed target date differs from Bubble scope", async () => {
+    const activeBasePayload = basePayload({
+      versao_cronograma_unique_id: "versao_ativa",
+      atividades_json: [{ id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 }]
+    });
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 3,
+        estrutura_inalterada: true,
+        linhas_esperadas: 1,
+        versao_cronograma_unique_id: "versao_ativa",
+        previous_version_id: "versao_ativa",
+        mode: "activity_date_changed_cascade",
+        scope: {
+          tipo: "delta_motor",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          data_atual_inicio: "2026-05-05"
+        },
+        base: { versao_id: "versao_ativa", mode: "generate", payload: activeBasePayload },
+        events_json: [{
+          type: "activity_date_changed_cascade",
+          atividade_id: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          new_start_date: "2026-05-06"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    const errorBody = await waitForWebhookBody("error");
+    expect(errorBody.error_code).toBe("STATE_DRIFT");
+    expect(String(errorBody.error_message)).toContain("serv_1|amb_1|1");
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+  });
+
+  it("returns STATE_DRIFT for delta_motor v3 when Bubble lookup date differs from replayed current state", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+      if (init?.method === "GET" && String(url).includes("/api/1.1/obj/atividadexobra")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({
+            response: {
+              cursor: 0,
+              count: 1,
+              remaining: 0,
+              results: [
+                { _id: "axo_1", id_atividade_obra_externo: "serv_1|amb_1|1", dataInicioPrevista: "2026-05-05T12:00:00.000Z" }
+              ]
+            }
+          })
+        };
+      }
+      return { ok: true, status: 204, text: async (): Promise<string> => "" };
+    }));
+    const activeBasePayload = basePayload({
+      versao_cronograma_unique_id: "versao_ativa",
+      atividades_json: [{ id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 }]
+    });
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 3,
+        estrutura_inalterada: true,
+        linhas_esperadas: 1,
+        versao_cronograma_unique_id: "versao_ativa",
+        previous_version_id: "versao_ativa",
+        mode: "activity_date_changed_cascade",
+        scope: {
+          tipo: "delta_motor",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          data_atual_inicio: "2026-05-04"
+        },
+        base: { versao_id: "versao_ativa", mode: "generate", payload: activeBasePayload },
+        events_json: [{
+          type: "activity_date_changed_cascade",
+          atividade_id: "serv_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          new_start_date: "2026-05-06"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    const errorBody = await waitForWebhookBody("error");
+    expect(errorBody.error_code).toBe("STATE_DRIFT");
+    expect(String(errorBody.error_message)).toContain("Bubble has 2026-05-05T12:00:00.000Z");
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+  });
+
+  it("does not block patch persistence on processing webhook responses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        if (body.status === "processing" && Number(body.progress_percent) > 0) {
+          return { ok: false, status: 429, text: async (): Promise<string> => "rate limited" };
+        }
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+
+      if (init?.method === "PATCH") {
+        return { ok: true, status: 204, text: async (): Promise<string> => "" };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+      };
+    }));
+
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-06",
+        descendentes_count: 1,
+        ancoras_count: 0
+      },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          scopeRole: "editable"
+        },
+        {
+          "unique id": "axo_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          atividade: "serv_2",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 2,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-05",
+          dataFimPrevista: "2026-05-05",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+
+    const doneBody = await waitForWebhookBody("done");
+
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(2);
+    expect(doneBody.metrics).toMatchObject({
+      patchedCount: 2,
+      patchRequestCount: 2
+    });
+  });
+
+  it("normalizes v2 delta event dates to the next business day and reports them", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      dias_trabalho_semana: 5,
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-10"
+      },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        },
+        {
+          "unique id": "axo_2",
+          id_atividade_obra_externo: "serv_2|amb_1|1",
+          atividade: "serv_2",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 2,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-05",
+          dataFimPrevista: "2026-05-05",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_2", deps: ["serv_1"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-09"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(2);
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toMatchObject({
+      dataInicioPrevista: "2026-05-11T12:00:00.000Z",
+      dataFimPrevista: "2026-05-11T12:00:00.000Z"
+    });
+    expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toMatchObject({
+      dataInicioPrevista: "2026-05-12T12:00:00.000Z",
+      dataFimPrevista: "2026-05-12T12:00:00.000Z"
+    });
+    expect(doneBody.normalizedDates).toEqual([
+      {
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        requested: "2026-05-10",
+        applied: "2026-05-11",
+        reason: "non_working_day"
+      }
+    ]);
+  });
+
+  it("does not normalize or patch delta anchors on non-working days", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      dias_trabalho_semana: 5,
+      scope: {
+        tipo: "delta",
+        atividade_alvo_id: "serv_1",
+        nova_data: "2026-05-06"
+      },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_anchor",
+          id_atividade_obra_externo: "serv_anchor|amb_1|1",
+          atividade: "serv_anchor",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 0,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-10",
+          dataFimPrevista: "2026-05-10",
+          status: "N\u00e3o iniciada",
+          scopeRole: "anchor"
+        },
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_1", deps: ["serv_anchor"] }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(1);
+    expect(String(patchCalls[0]![0])).toContain("axo_1");
+    expect(doneBody.normalizedDates).toEqual([]);
+  });
+
+  it("reports scope insufficient when delta dependencies are outside the snapshot", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "estrutura_delta",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      scope: { tipo: "delta", atividade_alvo_id: "serv_1", nova_data: "2026-05-06" },
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "axo_1",
+          id_atividade_obra_externo: "serv_1|amb_1|1",
+          atividade: "serv_1",
+          ambiente_id: "amb_1",
+          tipo: "Servico",
+          ordem: 1,
+          peso: 1,
+          equipe: "",
+          diasAntecedencia: 0,
+          duracao: 1,
+          duracaoVariavel: false,
+          quantidadeBase: null,
+          dataInicioPrevista: "2026-05-04",
+          dataFimPrevista: "2026-05-04",
+          status: "N\u00e3o iniciada",
+          scopeRole: "editable"
+        }
+      ],
+      master_dependencies: [{ atividade: "serv_1", deps: ["missing_anchor"] }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        atividade_id: "serv_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        new_start_date: "2026-05-06"
+      }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const errorBody = await waitForWebhookBody("error");
+    expect(errorBody).toMatchObject({
+      status: "error",
+      error_code: "SCOPE_INSUFFICIENT",
+      error_message: "Delta scope is missing required schedule lines",
+      failed_step: "calculate",
+      error_details: {
+        missingActivityIds: ["missing_anchor"],
+        missingExternalIds: [],
+        anchorWouldMoveIds: []
+      }
+    });
+  });
+
+  it("accepts v2 snapshot recalculation probes without obra_json when there are no events", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: true,
+      estrutura_id: "1-1-20260911000000",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      atividade_obra_snapshot: [],
+      master_dependencies: [],
+      master_anchors: [],
+      events_json: [],
+      events_old: []
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividades_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+  });
+
+  it("accepts v2 structural recalculation without obra_json using the snapshot as previous structure", async () => {
+    const payload = basePayload({
+      payload_version: 2,
+      estrutura_inalterada: false,
+      estrutura_id: "estrutura_1",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      atividades_json: [
+        { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+        { id: "serv_2", nome: "Servico novo", tipo: "Servico", ordem: 2, duracao: 1 }
+      ],
+      atividade_obra_snapshot: [{
+        "unique id": "previous_axo_1",
+        id_atividade_obra_externo: "serv_1|amb_1|1",
+        atividade: "serv_1",
+        ambienteId: "amb_1",
+        obra: "obra_1",
+        indice_clone: 1,
+        dataInicioPrevista: "2026-05-04",
+        status: "Concluida",
+        observacao: "Preservar do snapshot"
+      }],
+      events_json: [{ type: "activity_inserted", atividade_id: "serv_2" }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+    delete (payload as unknown as Record<string, unknown>).atividade_obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(payload);
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    const doneBody = await waitForWebhookBody("done");
+    const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(records).toEqual([
+      expect.objectContaining({
+        atividade: "serv_1",
+        obra: "obra_1",
+        versaoCronograma: "versao_2",
+        status: "Concluida",
+        observacao: "Preservar do snapshot"
+      }),
+      expect.objectContaining({
+        atividade: "serv_2",
+        obra: "obra_1",
+        versaoCronograma: "versao_2"
+      })
+    ]);
+    expect(doneBody.metrics).toMatchObject({
+      linesCount: 2,
+      patchedCount: 0
+    });
+  });
+
+  it("does not move snapshot lines with started status", async () => {
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        estrutura_inalterada: true,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        obra_json: [{ id: "obra_1", dataInicio: "2026-05-04" }],
+        atividades_json: [],
+        atividade_obra_snapshot: [
+          {
+            "unique id": "axo_started",
+            id_atividade_obra_externo: "serv_started|amb_1|1",
+            atividade: "serv_started",
+            ambiente_id: "amb_1",
+            tipo: "Servico",
+            ordem: 1,
+            peso: 1,
+            equipe: "",
+            diasAntecedencia: 0,
+            duracao: 1,
+            duracaoVariavel: false,
+            quantidadeBase: null,
+            dataInicioPrevista: "2026-05-04",
+            dataFimPrevista: "2026-05-04",
+            status: "Iniciada"
+          }
+        ],
+        events_json: [{
+          type: "activity_date_changed_only",
+          atividade_id: "serv_started",
+          id_atividade_obra_externo: "serv_started|amb_1|1",
+          new_start_date: "2026-05-10"
+        }]
+      }));
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("accepted");
+
+    await waitForDoneWebhook();
+
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(0);
   });
 
   it("changes selected atividade obra date and dependent activities without event date cutoff", async () => {
@@ -402,8 +1471,8 @@ describe("schedule controllers", () => {
     const datesByExternalId = new Map(records.map((record) => [record.id_atividade_obra_externo, record.dataInicioPrevista]));
     expect(datesByExternalId.get("serv_1|amb_1|1")).toBe("2026-05-04T12:00:00.000Z");
     expect(datesByExternalId.get("serv_2|amb_1|1")).toBe("2026-05-05T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-10T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-12T12:00:00.000Z");
     expect(datesByExternalId.get("serv_4|amb_1|1")).toBe("2026-05-08T12:00:00.000Z");
   });
 
@@ -474,9 +1543,9 @@ describe("schedule controllers", () => {
 
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     const datesByActivity = new Map(records.map((record) => [record.atividade, record.dataInicioPrevista]));
-    expect(datesByActivity.get("compra_1")).toBe("2026-05-03T12:00:00.000Z");
-    expect(datesByActivity.get("serv_anchor")).toBe("2026-05-06T12:00:00.000Z");
-    expect(datesByActivity.get("serv_dep")).toBe("2026-05-07T12:00:00.000Z");
+    expect(datesByActivity.get("compra_1")).toBe("2026-05-04T12:00:00.000Z");
+    expect(datesByActivity.get("serv_anchor")).toBe("2026-05-07T12:00:00.000Z");
+    expect(datesByActivity.get("serv_dep")).toBe("2026-05-08T12:00:00.000Z");
     expect(datesByActivity.get("serv_independent")).toBe("2026-05-06T12:00:00.000Z");
   });
 
@@ -639,7 +1708,7 @@ describe("schedule controllers", () => {
       }),
       expect.objectContaining({
         id_atividade_obra_externo: "serv_1|amb_1|1",
-        dataInicioPrevista: "2026-08-09T12:00:00.000Z"
+        dataInicioPrevista: "2026-08-10T12:00:00.000Z"
       })
     ]);
   });
@@ -884,7 +1953,7 @@ describe("schedule controllers", () => {
 
     const eventoCronogramaBody = persistedBulkBody("eventocronograma");
     const eventRecords = eventoCronogramaBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    expect(eventRecords.map((record) => record.atividade)).toEqual(["compra_1", "compra_2"]);
+    expect(eventRecords.map((record) => record.atividade)).toEqual(["compra_2"]);
     expect(eventRecords.every((record) => record.versaoCronograma === "versao_3")).toBe(true);
     expect(eventRecords.every((record) => record.obra === "obra_1")).toBe(true);
   });
@@ -1044,6 +2113,25 @@ describe("schedule controllers", () => {
     expect(response.body.validations.errors.length).toBeGreaterThan(0);
   });
 
+  it("includes Zod issue paths in validation error responses", async () => {
+    const payload = basePayload({
+      cronograma_unique_id: "cronograma_test",
+      mode: "generate",
+      atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+    });
+    delete (payload as unknown as Record<string, unknown>).obra_json;
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(payload);
+
+    expect(response.status).toBe(400);
+    expect(response.body.validations.errors).toContain("obra_json: Required");
+    expect(response.body.error.details.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: ["obra_json"], message: "Required" })
+    ]));
+  });
+
   it("returns structured JSON when the request body is malformed JSON", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
@@ -1144,7 +2232,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "BUBBLE_BULK_REQUEST_ERROR",
-      error_message: "Bubble bulk atividadexobra failed with 401: Unauthorized",
+      error_message: "Bubble atividade obra bulk failed before any created records could be confirmed; refusing blind retry",
       failed_step: "bulk_create"
     });
   });

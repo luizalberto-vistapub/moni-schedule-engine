@@ -1,14 +1,14 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
-import { ZodError } from "zod";
-import { BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks } from "../services/bubble-bulk.service.js";
-import { addBusinessDays } from "../services/business-days.service.js";
-import { normalizePayload, payloadSchema } from "../services/normalize-payload.service.js";
+import { ZodError, type ZodIssue } from "zod";
+import { BaseStateInvalidError, BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches, persistScheduleDeltaMotorPatches, StateDriftError } from "../services/bubble-bulk.service.js";
+import { addBusinessDays, isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
+import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
 import { runScheduleEngine } from "../services/schedule-engine.service.js";
-import type { NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
-import type { EngineResult, ScheduleLine } from "../types/schedule.types.js";
+import type { NormalizedActivityType, NormalizedSchedulePayload, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
+import type { EngineResult, NormalizedDate, ScheduleLine } from "../types/schedule.types.js";
 import { addDays, differenceInCalendarDays, formatDateOnly, parseDateOnly, weekdayName } from "../utils/dates.js";
 import { makeId } from "../utils/ids.js";
 
@@ -42,6 +42,9 @@ function errorLogFields(error: unknown): Record<string, unknown> {
 }
 
 function scheduleErrorCode(error: unknown): string {
+  if (error instanceof BaseStateInvalidError) return "BASE_STATE_INVALID";
+  if (error instanceof StateDriftError) return "STATE_DRIFT";
+  if (error instanceof ScopeInsufficientError) return "SCOPE_INSUFFICIENT";
   if (error instanceof BubbleBulkPayloadError) return "BUBBLE_BULK_PAYLOAD_ERROR";
   if (error instanceof BubbleBulkConfigError) return "BUBBLE_BULK_CONFIG_ERROR";
   if (error instanceof BubbleBulkRequestError) return "BUBBLE_BULK_REQUEST_ERROR";
@@ -55,6 +58,7 @@ function requestLog(req: ObservedRequest): Logger | undefined {
 }
 
 function modeFromRequest(req: ObservedRequest, fallback: ScheduleMode): ScheduleMode {
+  if (fallback === "recalculate" && String(req.body?.payload_version) === "3") return "recalculate";
   return typeof req.body?.mode === "string" && req.body.mode.trim() ? req.body.mode : fallback;
 }
 
@@ -91,8 +95,100 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
   return undefined;
 }
 
+class ScopeInsufficientError extends Error {
+  constructor(public readonly details: ScopeInsufficientDetails) {
+    super("Delta scope is missing required schedule lines");
+    this.name = "ScopeInsufficientError";
+  }
+}
+
+interface ScopeInsufficientDetails {
+  missingActivityIds: string[];
+  missingExternalIds: string[];
+  anchorWouldMoveIds: string[];
+  unsupportedEventTypes?: string[];
+}
+
+function zodIssuePath(path: Array<string | number>): string {
+  return path.reduce<string>((text, part) => {
+    if (typeof part === "number") return `${text}[${part}]`;
+    return text ? `${text}.${part}` : String(part);
+  }, "");
+}
+
+function zodIssueMessage(issue: ZodIssue): string {
+  const path = zodIssuePath(issue.path);
+  if (!path || issue.code === "custom") return issue.message;
+  return `${path}: ${issue.message}`;
+}
+
+function zodErrorDetails(error: ZodError): Record<string, unknown> {
+  return {
+    ...error.flatten(),
+    issues: error.issues.map((issue) => ({
+      code: issue.code,
+      path: issue.path,
+      message: issue.message
+    }))
+  };
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const numeric = Number(stringValue(value));
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function nullableNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const numeric = numberValue(value, Number.NaN);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeText(value: unknown): string {
+  return stringValue(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function snapshotActivityType(value: unknown): NormalizedActivityType {
+  const normalized = normalizeText(value);
+  if (normalized === "compra") return "Compra";
+  if (normalized === "projeto") return "Projeto";
+  return "Servi\u00e7o";
+}
+
+function purchaseStage(value: unknown): string | null {
+  const normalized = normalizeText(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!normalized) return null;
+  if (normalized.includes("AVISO_ORCAMENTO") || normalized.includes("AVISO_DE_ORCAMENTO")) return "AVISO_ORCAMENTO";
+  if (normalized.includes("LIMITE_ORCAMENTO") || normalized.includes("LIMITE_DE_ORCAMENTO")) return "LIMITE_ORCAMENTO";
+  if (normalized.includes("LIMITE_COMPRA") || normalized.includes("LIMITE_DE_COMPRA")) return "LIMITE_COMPRA";
+  if (normalized.includes("RECEBIMENTO")) return "RECEBIMENTO";
+  return null;
+}
+
+function isSnapshotRecalculate(payload: SchedulePayload): boolean {
+  return payload.mode === "recalculate" && payload.estrutura_inalterada === true;
+}
+
+function isDeltaMotorRecalculate(payload: SchedulePayload): boolean {
+  return String(payload.payload_version) === "3"
+    && scopeType(payload) === "delta_motor";
+}
+
 function versionId(payload: SchedulePayload): string {
   return stringValue(field(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
+}
+
+function explicitObraStartDate(payload: SchedulePayload): string {
+  const obra = payload.obra_json[0];
+  return obra ? stringValue(field(obra, "dataInicio", "data_inicio", "startDate")) : "";
 }
 
 function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayload): void {
@@ -101,6 +197,7 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
   const newVersionId = versionId(payload);
   const previousVersionId = stringValue(payload.previous_version_id);
   const issues = [];
+  const snapshot = atividadeObraSnapshot(payload);
 
   if (!newVersionId) {
     issues.push({
@@ -118,11 +215,71 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
     });
   }
 
-  if (newVersionId && previousVersionId && newVersionId === previousVersionId) {
+  if (!isDeltaMotorRecalculate(payload) && newVersionId && previousVersionId && newVersionId === previousVersionId) {
     issues.push({
       code: "custom" as const,
       path: ["versao_cronograma_unique_id"],
       message: "versao_cronograma_unique_id must be different from previous_version_id for recalculate"
+    });
+  }
+
+  if (payload.estrutura_inalterada === true && !isDeltaMotorRecalculate(payload)) {
+    const insertedEventIndex = payload.events_json.findIndex((event) => eventType(event) === "activity_inserted");
+    if (insertedEventIndex !== -1) {
+      issues.push({
+        code: "custom" as const,
+        path: ["events_json", insertedEventIndex, "type"],
+        message: "activity_inserted cannot use estrutura_inalterada=true"
+      });
+    }
+
+    const hasWorkStartDelay = [...payload.events_old, ...payload.events_json]
+      .some((event) => eventType(event) === "work_start_delayed");
+    if (hasWorkStartDelay && !explicitObraStartDate(payload)) {
+      issues.push({
+        code: "custom" as const,
+        path: ["obra_json", 0, "dataInicio"],
+        message: "work_start_delayed snapshot recalculation requires obra_json[0].dataInicio"
+      });
+    }
+
+    if (!snapshot.length && activeRecalculateEvents(payload).length) {
+      issues.push({
+        code: "custom" as const,
+        path: ["atividade_obra_snapshot"],
+        message: "atividade_obra_snapshot is required when estrutura_inalterada=true"
+      });
+    }
+
+    snapshot.forEach((record, index) => {
+      if (!stringValue(field(record, "unique id", "unique_id", "id", "_id"))) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "unique id"],
+          message: "snapshot items must include Bubble unique id when estrutura_inalterada=true"
+        });
+      }
+      if (!snapshotRecordExternalId(record)) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "id_atividade_obra_externo"],
+          message: "snapshot items must include id_atividade_obra_externo when estrutura_inalterada=true"
+        });
+      }
+      if (!snapshotRecordActivityId(record)) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "atividade"],
+          message: "snapshot items must include atividade when estrutura_inalterada=true"
+        });
+      }
+      if (!snapshotRecordDate(record)) {
+        issues.push({
+          code: "custom" as const,
+          path: ["atividade_obra_snapshot", index, "dataInicioPrevista"],
+          message: "snapshot items must include dataInicioPrevista when estrutura_inalterada=true"
+        });
+      }
     });
   }
 
@@ -166,18 +323,75 @@ function eventDays(event: Record<string, unknown>): number {
   return Number.isFinite(days) ? Math.max(0, Math.trunc(days)) : 0;
 }
 
-function eventDateOnly(value: string): string {
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+function eventDateOnly(value: string, payload?: SchedulePayload): string {
+  const trimmed = value.trim();
+  const textDate = trimmed.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})/);
+  if (textDate) {
+    const months: Record<string, string> = {
+      jan: "01",
+      january: "01",
+      feb: "02",
+      february: "02",
+      mar: "03",
+      march: "03",
+      apr: "04",
+      april: "04",
+      may: "05",
+      jun: "06",
+      june: "06",
+      jul: "07",
+      july: "07",
+      aug: "08",
+      august: "08",
+      sep: "09",
+      sept: "09",
+      september: "09",
+      oct: "10",
+      october: "10",
+      nov: "11",
+      november: "11",
+      dec: "12",
+      december: "12"
+    };
+    const month = months[textDate[1]!.toLowerCase()];
+    if (month) return `${textDate[3]}-${month}-${textDate[2]!.padStart(2, "0")}`;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: payload ? stringValue(field(payload as unknown as Record<string, unknown>, "timezone")) || "America/Sao_Paulo" : "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : value;
 }
 
-function recalculatedStartDate(event: Record<string, unknown>): string {
-  return eventDateOnly(eventDate(event));
+function scopeNewDate(payload: SchedulePayload): string {
+  return stringValue(field(payload.scope || {}, "nova_data", "new_start_date", "data"));
+}
+
+function requestedRecalculateDate(payload: SchedulePayload, event: Record<string, unknown>): string {
+  const sourceDate = isSnapshotRecalculate(payload) && payload.events_json.includes(event) && scopeNewDate(payload)
+    ? scopeNewDate(payload)
+    : eventDate(event);
+  return eventDateOnly(sourceDate, payload);
+}
+
+function businessDateOnly(date: string, payload: SchedulePayload): string {
+  if (!date) return "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  return formatDateOnly(nextBusinessDay(parseDateOnly(date), payload.dias_trabalho_semana));
+}
+
+function recalculatedStartDate(payload: SchedulePayload, event: Record<string, unknown>): string {
+  return businessDateOnly(requestedRecalculateDate(payload, event), payload);
 }
 
 function activityStartEventActivityId(event: Record<string, unknown>): string {
@@ -230,9 +444,12 @@ function activeRecalculateEvents(payload: SchedulePayload): Record<string, unkno
       .map(recalculateEventOverrideKey)
       .filter(Boolean)
   );
+  const currentWorkStartResetsTimeline = currentEventKeys.has("schedule")
+    && payload.events_json.some((event) => eventType(event) === "work_start_delayed");
   const oldEvents = currentEventKeys.size
     ? payload.events_old.filter((event) => {
       const key = recalculateEventOverrideKey(event);
+      if (currentWorkStartResetsTimeline && key.startsWith("activity:")) return false;
       return !key || !currentEventKeys.has(key);
     })
     : payload.events_old;
@@ -241,7 +458,7 @@ function activeRecalculateEvents(payload: SchedulePayload): Record<string, unkno
 }
 
 function payloadEventDate(payload: SchedulePayload): string {
-  return eventDateOnly(stringValue(field(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao")));
+  return eventDateOnly(stringValue(field(payload as unknown as Record<string, unknown>, "event_date", "request_date", "requisicao_data", "data_requisicao")), payload);
 }
 
 function lastEventOfType(events: Record<string, unknown>[], ...types: string[]): Record<string, unknown> | undefined {
@@ -263,7 +480,7 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
   const activityStartDateById = new Map(
     activityStartEvents
       .map((event) => {
-        return [activityStartEventActivityId(event), eventDateOnly(eventDate(event))] as const;
+        return [activityStartEventActivityId(event), recalculatedStartDate(payload, event)] as const;
       })
       .filter(([activityId, date]) => activityId && date)
   );
@@ -277,7 +494,7 @@ function applyRecalculateEvents(payload: SchedulePayload): SchedulePayload {
 
   if (!workStartEvent) return { ...payload, atividades_json };
 
-  const newStartDate = recalculatedStartDate(workStartEvent);
+  const newStartDate = recalculatedStartDate(payload, workStartEvent);
 
   return {
     ...payload,
@@ -340,6 +557,103 @@ function activityLineKey(activityId: string, cloneIndex: number): string {
   return `${activityId}:${cloneIndex}`;
 }
 
+function atividadeObraSnapshot(payload: SchedulePayload): Record<string, unknown>[] {
+  if (isSnapshotRecalculate(payload)) return payload.atividade_obra_snapshot || [];
+  return payload.atividade_obra_snapshot?.length ? payload.atividade_obra_snapshot : payload.atividade_obra_json;
+}
+
+function snapshotRecordExternalId(record: Record<string, unknown>): string {
+  return stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+}
+
+function snapshotRecordActivityId(record: Record<string, unknown>): string {
+  return stringValue(field(record, "atividade", "atividade_id", "activity_id", "atividadeId"));
+}
+
+function snapshotRecordDate(record: Record<string, unknown>): string {
+  return recordDateOnly(record);
+}
+
+function snapshotRecordCloneIndex(record: Record<string, unknown>): number {
+  const external = snapshotRecordExternalId(record);
+  return externalActivityParts(external)?.cloneIndex || 1;
+}
+
+function movableSnapshotStatus(status: unknown): boolean {
+  const normalized = normalizeText(status);
+  return !normalized || normalized === "nao iniciada" || normalized === "recalculada";
+}
+
+function scopeType(payload: SchedulePayload): string {
+  return normalizeText(field(payload.scope || {}, "tipo", "type"));
+}
+
+function isDeltaScope(payload: SchedulePayload): boolean {
+  return scopeType(payload) === "delta";
+}
+
+function snapshotScopeRole(record: Record<string, unknown>): string {
+  return normalizeText(field(record, "scopeRole", "scope_role", "scope role"));
+}
+
+function isSnapshotAnchor(record: Record<string, unknown>): boolean {
+  return snapshotScopeRole(record) === "anchor";
+}
+
+function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
+  if (!isSnapshotRecalculate(payload)) return true;
+  if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
+  return movableSnapshotStatus(field(line.raw, "status"));
+}
+
+function masterDependencyEntries(payload: SchedulePayload): Array<{ activityId: string; deps: string[] }> {
+  return (payload.master_dependencies || []).flatMap((record) => {
+    const activityId = stringValue(field(record, "atividade", "atividade_id", "activity_id", "id"));
+    const rawDeps = field(record, "deps", "dependencias", "dependencies", "interdependenciasMasterIds");
+    const deps = Array.isArray(rawDeps) ? rawDeps.map(String).filter(Boolean) : [];
+    return activityId ? [{ activityId, deps }] : [];
+  });
+}
+
+function dependencyIdsByActivity(payload: SchedulePayload): Map<string, string[]> {
+  const dependenciesByActivity = new Map<string, string[]>();
+  for (const activity of payload.atividades_json) {
+    const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+    const dependencyIds = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds.map(String) : [];
+    if (activityId) dependenciesByActivity.set(activityId, dependencyIds);
+  }
+  for (const entry of masterDependencyEntries(payload)) {
+    dependenciesByActivity.set(entry.activityId, entry.deps);
+  }
+  return dependenciesByActivity;
+}
+
+function activityTypesById(payload: SchedulePayload): Map<string, NormalizedActivityType> {
+  const typesByActivity = new Map<string, NormalizedActivityType>();
+  for (const activity of payload.atividades_json) {
+    const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
+    if (activityId) typesByActivity.set(activityId, snapshotActivityType(activity.tipo));
+  }
+  for (const record of atividadeObraSnapshot(payload)) {
+    const activityId = snapshotRecordActivityId(record);
+    if (activityId) typesByActivity.set(activityId, snapshotActivityType(field(record, "tipo")));
+  }
+  for (const anchor of payload.master_anchors || []) {
+    const activityId = stringValue(field(anchor, "atividade", "atividade_id", "activity_id", "id"));
+    if (activityId) typesByActivity.set(activityId, snapshotActivityType(field(anchor, "tipo")));
+  }
+  return typesByActivity;
+}
+
+function masterAnchorsByActivity(payload: SchedulePayload): Map<string, Record<string, unknown>> {
+  const anchorsByActivity = new Map<string, Record<string, unknown>>();
+  for (const anchor of payload.master_anchors || []) {
+    const activityId = stringValue(field(anchor, "atividade", "atividade_id", "activity_id", "id"));
+    if (activityId) anchorsByActivity.set(activityId, anchor);
+  }
+  return anchorsByActivity;
+}
+
 function eventActivityLineKey(event: Record<string, unknown>): string {
   return activityLineKey(activityStartEventActivityId(event), activityRecordCloneIndex(event));
 }
@@ -347,7 +661,7 @@ function eventActivityLineKey(event: Record<string, unknown>): string {
 function previousActivityDates(payload: SchedulePayload): Map<string, string> {
   const datesByActivity = new Map<string, string>();
 
-  for (const record of payload.atividade_obra_json) {
+  for (const record of atividadeObraSnapshot(payload)) {
     const external = stringValue(field(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
     const date = recordDateOnly(record) || externalActivityDate(external);
     if (!date) continue;
@@ -362,7 +676,7 @@ function previousActivityDates(payload: SchedulePayload): Map<string, string> {
 function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string): Map<string, string> {
   const datesByActivity = new Map<string, string>();
 
-  for (const record of payload.atividade_obra_json) {
+  for (const record of atividadeObraSnapshot(payload)) {
     const date = recordDateOnly(record);
     if (!date || date >= fromDate) continue;
     const activityId = activityRecordId(record);
@@ -375,9 +689,14 @@ function previousActivityDatesBefore(payload: SchedulePayload, fromDate: string)
 
 function obraStartDate(payload: SchedulePayload): Date | null {
   const obra = payload.obra_json[0];
-  const date = stringValue(field(obra, "dataInicio", "data_inicio", "startDate"));
-  /* v8 ignore next -- payload validation requires obra_json[0].dataInicio before scheduling. */
-  return date ? parseDateOnly(eventDateOnly(date)) : null;
+  const date = obra ? stringValue(field(obra, "dataInicio", "data_inicio", "startDate")) : "";
+  if (date) return parseDateOnly(eventDateOnly(date, payload));
+
+  const snapshotStart = atividadeObraSnapshot(payload)
+    .map(recordDateOnly)
+    .filter(Boolean)
+    .sort()[0];
+  return snapshotStart ? parseDateOnly(snapshotStart) : null;
 }
 
 function formatCodigoD(daysFromStart: number): string {
@@ -403,14 +722,7 @@ function refreshLineDependencies(payload: SchedulePayload, lines: ScheduleLine[]
     lineIdsByActivity.set(line.atividadeId, [...(lineIdsByActivity.get(line.atividadeId) || []), line.atividade_obra_id_externo]);
   }
 
-  const dependenciesByActivity = new Map(
-    payload.atividades_json.map((activity) => {
-      const activityId = stringValue(field(activity, "id", "unique_id", "unique id"));
-      /* v8 ignore next -- normalized activities always carry dependency arrays. */
-      const dependencyIds = Array.isArray(activity.interdependenciasMasterIds) ? activity.interdependenciasMasterIds : [];
-      return [activityId, dependencyIds] as const;
-    })
-  );
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
 
   return lines.map((line) => ({
     ...line,
@@ -429,7 +741,7 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
   const scheduleStartEvent = lastEventOfType(events, "work_start_delayed", "from_date_delayed");
   if (!scheduleStartEvent || eventType(scheduleStartEvent) !== "from_date_delayed") return result;
 
-  const fromDate = eventDateOnly(eventDate(scheduleStartEvent));
+  const fromDate = recalculatedStartDate(payload, scheduleStartEvent);
   /* v8 ignore next -- validation requires a date for from_date_delayed before this point. */
   if (!fromDate) return result;
 
@@ -437,6 +749,7 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
   const days = eventDays(scheduleStartEvent);
   const lines = result.lines
     .map((line) => {
+      if (!lineCanMove(payload, line)) return line;
       const previousDate = previousDates.get(activityLineKey(line.atividadeId, line.clone_index));
       if (previousDate) return withLineDate(line, previousDate, payload);
       if (line.data_programada < fromDate || days === 0) return line;
@@ -503,6 +816,142 @@ function activityDependencyClosure(payload: SchedulePayload, rootActivityId: str
   return dependents;
 }
 
+function serviceDependencyClosureForRecalculate(payload: SchedulePayload, rootServiceId: string): Set<string> {
+  if (!isSnapshotRecalculate(payload)) return serviceDependencyClosure(payload, rootServiceId);
+  const dependents = new Set<string>([rootServiceId]);
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
+  const typesByActivity = activityTypesById(payload);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const activityId of dependenciesByActivity.keys()) {
+      if (!activityId || dependents.has(activityId)) continue;
+      if (typesByActivity.get(activityId) !== "Servi\u00e7o") continue;
+      const dependencies = dependenciesByActivity.get(activityId) || [];
+      if (!dependencies.some((dependencyId) => dependents.has(String(dependencyId)))) continue;
+      dependents.add(activityId);
+      changed = true;
+    }
+  }
+
+  return dependents;
+}
+
+function activityDependencyClosureForRecalculate(payload: SchedulePayload, rootActivityId: string): Set<string> {
+  if (!isSnapshotRecalculate(payload)) return activityDependencyClosure(payload, rootActivityId);
+  const dependents = new Set<string>([rootActivityId]);
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const activityId of dependenciesByActivity.keys()) {
+      if (!activityId || dependents.has(activityId)) continue;
+      const dependencies = dependenciesByActivity.get(activityId) || [];
+      if (!dependencies.some((dependencyId) => dependents.has(String(dependencyId)))) continue;
+      dependents.add(activityId);
+      changed = true;
+    }
+  }
+
+  return dependents;
+}
+
+function uniqueSorted(values: Iterable<string>): string[] {
+  return [...new Set([...values].filter(Boolean))].sort();
+}
+
+function validateDeltaScope(payload: SchedulePayload): void {
+  if (!isDeltaScope(payload)) return;
+
+  const details: ScopeInsufficientDetails = {
+    missingActivityIds: [],
+    missingExternalIds: [],
+    anchorWouldMoveIds: []
+  };
+  const unsupportedEventTypes = new Set<string>();
+
+  if (!isSnapshotRecalculate(payload)) {
+    throw new ScopeInsufficientError({
+      ...details,
+      unsupportedEventTypes: ["delta scope requires recalculate with estrutura_inalterada=true"]
+    });
+  }
+
+  const snapshot = atividadeObraSnapshot(payload);
+  const recordsByExternalId = new Map<string, Record<string, unknown>>();
+  const recordsByActivity = new Map<string, Record<string, unknown>[]>();
+  const editableActivityIds = new Set<string>();
+  const snapshotActivityIds = new Set<string>();
+  const snapshotExternalIds = new Set<string>();
+
+  for (const record of snapshot) {
+    const externalId = snapshotRecordExternalId(record);
+    const activityId = snapshotRecordActivityId(record);
+    if (externalId) {
+      recordsByExternalId.set(externalId, record);
+      snapshotExternalIds.add(externalId);
+    }
+    if (activityId) {
+      snapshotActivityIds.add(activityId);
+      recordsByActivity.set(activityId, [...(recordsByActivity.get(activityId) || []), record]);
+      if (!isSnapshotAnchor(record)) editableActivityIds.add(activityId);
+    }
+  }
+
+  const dependenciesByActivity = dependencyIdsByActivity(payload);
+
+  for (const event of payload.events_json) {
+    const type = eventType(event);
+    if (type !== "activity_date_changed_cascade" && type !== "activity_date_changed_only") {
+      if (type) unsupportedEventTypes.add(type);
+      continue;
+    }
+
+    const activityId = activityStartEventActivityId(event);
+    const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+    const targetRecord = externalId ? recordsByExternalId.get(externalId) : undefined;
+    const targetIsEditable = targetRecord ? !isSnapshotAnchor(targetRecord) : false;
+
+    if (externalId && (!snapshotExternalIds.has(externalId) || !targetIsEditable)) details.missingExternalIds.push(externalId);
+    if (!activityId || !editableActivityIds.has(activityId)) details.missingActivityIds.push(activityId);
+
+    const affectedActivityIds = type === "activity_date_changed_cascade"
+      ? activityDependencyClosureForRecalculate(payload, activityId)
+      : new Set<string>([activityId]);
+
+    for (const affectedActivityId of affectedActivityIds) {
+      if (!affectedActivityId) continue;
+      if (!editableActivityIds.has(affectedActivityId)) details.missingActivityIds.push(affectedActivityId);
+
+      for (const record of recordsByActivity.get(affectedActivityId) || []) {
+        if (isSnapshotAnchor(record)) details.anchorWouldMoveIds.push(snapshotRecordExternalId(record));
+      }
+
+      for (const dependencyId of dependenciesByActivity.get(affectedActivityId) || []) {
+        if (!snapshotActivityIds.has(String(dependencyId))) details.missingActivityIds.push(String(dependencyId));
+      }
+    }
+  }
+
+  const normalizedDetails: ScopeInsufficientDetails = {
+    missingActivityIds: uniqueSorted(details.missingActivityIds),
+    missingExternalIds: uniqueSorted(details.missingExternalIds),
+    anchorWouldMoveIds: uniqueSorted(details.anchorWouldMoveIds)
+  };
+  if (unsupportedEventTypes.size) normalizedDetails.unsupportedEventTypes = uniqueSorted(unsupportedEventTypes);
+
+  if (
+    normalizedDetails.missingActivityIds.length
+    || normalizedDetails.missingExternalIds.length
+    || normalizedDetails.anchorWouldMoveIds.length
+    || normalizedDetails.unsupportedEventTypes?.length
+  ) {
+    throw new ScopeInsufficientError(normalizedDetails);
+  }
+}
+
 function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
   if (payload.mode !== "recalculate") return result;
 
@@ -519,7 +968,7 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
     const type = eventType(event);
     const activityId = activityStartEventActivityId(event);
     const targetKey = eventActivityLineKey(event);
-    const newDate = recalculatedStartDate(event);
+    const newDate = recalculatedStartDate(payload, event);
     if (!activityId || !newDate) continue;
 
     const targetLine = lines.find((line) => activityLineKey(line.atividadeId, line.clone_index) === targetKey)
@@ -533,15 +982,16 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
 
     const deltaDays = differenceInCalendarDays(parseDateOnly(originalTargetDate), parseDateOnly(newDate));
     const affectedActivityIds = type === "activity_date_changed_cascade"
-      ? activityDependencyClosure(payload, targetLine.atividadeId)
+      ? activityDependencyClosureForRecalculate(payload, targetLine.atividadeId)
       : new Set<string>([targetLine.atividadeId]);
     if (type === "activity_date_changed_cascade" && targetLine.tipo === "Compra" && targetLine.atividadeServicoAncoraId) {
-      for (const serviceId of serviceDependencyClosure(payload, targetLine.atividadeServicoAncoraId)) {
+      for (const serviceId of serviceDependencyClosureForRecalculate(payload, targetLine.atividadeServicoAncoraId)) {
         affectedActivityIds.add(serviceId);
       }
     }
 
     lines = lines.map((line) => {
+      if (!lineCanMove(payload, line)) return line;
       const lineKey = activityLineKey(line.atividadeId, line.clone_index);
       if (type === "activity_date_changed_only") {
         return lineKey === targetKey ? withLineDate(line, newDate, payload) : line;
@@ -574,7 +1024,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
 
   for (const event of events) {
     const activityId = activityStartEventActivityId(event);
-    const newDate = recalculatedStartDate(event);
+    const newDate = recalculatedStartDate(payload, event);
     if (!activityId || !newDate) continue;
 
     const changedLine = lines.find((line) => line.atividadeId === activityId && line.tipo === "Compra");
@@ -589,7 +1039,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
     if (deltaDays === 0) continue;
 
     const anchorServiceId = changedLine.atividadeServicoAncoraId;
-    const affectedServiceIds = serviceDependencyClosure(payload, anchorServiceId);
+    const affectedServiceIds = serviceDependencyClosureForRecalculate(payload, anchorServiceId);
     const purchaseChain = lines.filter((line) => (
       line.tipo === "Compra"
       && line.produtoId === changedLine.produtoId
@@ -602,6 +1052,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
     );
 
     lines = lines.map((line) => {
+      if (!lineCanMove(payload, line)) return line;
       const lineOriginalDate = originalLineDate(line, previousDates);
       if (!lineOriginalDate) return line;
 
@@ -635,6 +1086,342 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
   return { ...result, lines: refreshLineDependencies(payload, lines) };
 }
 
+function snapshotAnchorValue(anchor: Record<string, unknown> | undefined, ...keys: string[]): string | null {
+  return anchor ? stringValue(field(anchor, ...keys)) || null : null;
+}
+
+function snapshotLineFromRecord(
+  record: Record<string, unknown>,
+  payload: SchedulePayload,
+  anchorsByActivity: Map<string, Record<string, unknown>>
+): ScheduleLine | null {
+  const externalId = snapshotRecordExternalId(record);
+  const activityId = snapshotRecordActivityId(record);
+  const date = snapshotRecordDate(record);
+  if (!externalId || !activityId || !date) return null;
+
+  const anchor = anchorsByActivity.get(activityId);
+  const tipo = snapshotActivityType(field(record, "tipo") || field(anchor || {}, "tipo"));
+  const anchorServiceId = snapshotAnchorValue(anchor, "atividadeServicoAncoraId", "atividade_servico_ancora_id", "servico_ancora");
+  const produtoId = snapshotAnchorValue(anchor, "produtoId", "produto_id", "produto", "chainId", "purchaseChainId")
+    || (tipo === "Compra" ? anchorServiceId : null);
+  const cloneIndex = snapshotRecordCloneIndex(record);
+
+  return {
+    atividade_obra_id_externo: externalId,
+    atividadeId: activityId,
+    atividadeNome: activityId,
+    atividadeTipo: tipo,
+    atividadeServicoAncoraId: anchorServiceId,
+    atividadeServicoAncoraNome: null,
+    atividadeServicoAncoraExternoId: null,
+    obraAmbienteProdutoId: null,
+    produtoId,
+    ambienteId: stringValue(field(record, "ambiente_id", "ambiente", "ambienteId")) || null,
+    ambienteItemComposicaoId: null,
+    external_index: cloneIndex,
+    data_programada: date,
+    codigo_d: formatCodigoD(differenceInCalendarDays(obraStartDate(payload)!, parseDateOnly(date)) + 1),
+    dia_semana: weekdayName(parseDateOnly(date)),
+    tipo,
+    subtipo_compra: tipo === "Compra" ? purchaseStage(field(anchor || {}, "etapaCompra", "etapa_compra")) : null,
+    nome_atividade: activityId,
+    equipe: stringValue(field(record, "equipe")) || null,
+    familia: null,
+    nomeFamilia: null,
+    projetoId: null,
+    tipoProjeto: null,
+    localAtuacao: null,
+    diasAntecedencia: nullableNumber(field(record, "diasAntecedencia", "dias_antecedencia"))
+      ?? nullableNumber(field(anchor || {}, "diasAntecedencia", "dias_antecedencia")),
+    projetoResponsavel: null,
+    projetoStatus: null,
+    peso: numberValue(field(record, "peso"), 1),
+    ambiente: stringValue(field(record, "ambiente_id", "ambiente", "ambienteId")) || null,
+    produto: null,
+    ordem: numberValue(field(record, "ordem"), 0),
+    ordemCronograma: numberValue(field(record, "ordemCronograma", "ordem_cronograma", "ordem"), 0),
+    clone_index: cloneIndex,
+    anchor_service_name: null,
+    interdependenciasMasterIds: [],
+    raw: record
+  };
+}
+
+function snapshotEngineResult(payload: SchedulePayload): EngineResult {
+  const anchorsByActivity = masterAnchorsByActivity(payload);
+  const lines = atividadeObraSnapshot(payload)
+    .map((record) => snapshotLineFromRecord(record, payload, anchorsByActivity))
+    .filter((line): line is ScheduleLine => Boolean(line));
+
+  return {
+    lines: refreshLineDependencies(payload, lines),
+    validations: {
+      warnings: [],
+      errors: []
+    }
+  };
+}
+
+function applyWorkStartSnapshotRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
+  if (!isSnapshotRecalculate(payload)) return result;
+  const event = lastEventOfType(activeRecalculateEvents(payload), "work_start_delayed");
+  if (!event) return result;
+
+  const startDate = obraStartDate(payload);
+  const newStartDate = recalculatedStartDate(payload, event);
+  if (!startDate || !newStartDate) return result;
+
+  const deltaDays = differenceInCalendarDays(startDate, parseDateOnly(newStartDate));
+  if (deltaDays === 0) return result;
+
+  const lines = result.lines
+    .map((line) => lineCanMove(payload, line)
+      ? withLineDate(line, formatDateOnly(addDays(parseDateOnly(line.data_programada), deltaDays)), payload)
+      : line)
+    .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
+
+  return { ...result, lines: refreshLineDependencies(payload, lines) };
+}
+
+function eventTargetExternalId(event: Record<string, unknown>, lines: ScheduleLine[]): string {
+  const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  if (externalId) return externalId;
+
+  const activityId = activityStartEventActivityId(event);
+  if (!activityId) return "";
+  return lines.find((line) => line.atividadeId === activityId)?.atividade_obra_id_externo || "";
+}
+
+function inputNormalizedDates(payload: SchedulePayload, result: EngineResult): NormalizedDate[] {
+  if (payload.mode !== "recalculate") return [];
+
+  return activeRecalculateEvents(payload).flatMap((event) => {
+    const requested = requestedRecalculateDate(payload, event);
+    const applied = businessDateOnly(requested, payload);
+    if (!requested || requested === applied) return [];
+
+    return [{
+      id_atividade_obra_externo: eventTargetExternalId(event, result.lines),
+      requested,
+      applied,
+      reason: "non_working_day" as const
+    }];
+  });
+}
+
+function uniqueNormalizedDates(dates: NormalizedDate[]): NormalizedDate[] {
+  const byKey = new Map<string, NormalizedDate>();
+  for (const date of dates) {
+    const key = [
+      date.id_atividade_obra_externo,
+      date.requested,
+      date.applied,
+      date.reason
+    ].join("|");
+    byKey.set(key, date);
+  }
+  return [...byKey.values()];
+}
+
+function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const normalizedDates: NormalizedDate[] = [];
+  const lines = result.lines.map((line) => {
+    if (!lineCanMove(payload, line)) return line;
+
+    const parsedDate = parseDateOnly(line.data_programada);
+    if (isBusinessDay(parsedDate, payload.dias_trabalho_semana)) return line;
+
+    const applied = formatDateOnly(nextBusinessDay(parsedDate, payload.dias_trabalho_semana));
+    normalizedDates.push({
+      id_atividade_obra_externo: line.atividade_obra_id_externo,
+      requested: line.data_programada,
+      applied,
+      reason: "non_working_day"
+    });
+    return withLineDate(line, applied, payload);
+  });
+
+  if (!normalizedDates.length) return result;
+
+  return {
+    ...result,
+    lines: refreshLineDependencies(
+      payload,
+      lines.sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index)
+    ),
+    normalizedDates: uniqueNormalizedDates([...(result.normalizedDates || []), ...normalizedDates])
+  };
+}
+
+function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
+  validateDeltaScope(payload);
+
+  const initialResult = isSnapshotRecalculate(payload)
+    ? snapshotEngineResult(payload)
+    : runScheduleEngine(payload);
+
+  const recalculatedResult = applyActivityDateChangeRecalculation(
+    payload,
+    applyPurchaseChainRecalculation(
+      payload,
+      applyFromDateDelayedRecalculation(
+        payload,
+        applyWorkStartSnapshotRecalculation(payload, initialResult)
+      )
+    )
+  );
+
+  const normalizedInputDates = inputNormalizedDates(payload, recalculatedResult);
+  return normalizeCalculatedLineDates(payload, {
+    ...recalculatedResult,
+    normalizedDates: uniqueNormalizedDates([...(recalculatedResult.normalizedDates || []), ...normalizedInputDates])
+  });
+}
+
+interface DeltaMotorResult {
+  current: EngineResult;
+  next: EngineResult;
+}
+
+function parseDeltaMotorBasePayload(payload: SchedulePayload): SchedulePayload {
+  const rawPayload = payload.base?.payload;
+  if (!rawPayload) throw new BaseStateInvalidError("base.payload is required for payload_version 3 delta_motor");
+
+  let parsedRaw: unknown = rawPayload;
+  if (typeof rawPayload === "string") {
+    try {
+      parsedRaw = JSON.parse(rawPayload);
+    } catch {
+      throw new BaseStateInvalidError("base.payload must be valid JSON");
+    }
+  }
+
+  const baseMode = typeof payload.base?.mode === "string" && payload.base.mode.trim()
+    ? payload.base.mode
+    : (typeof (parsedRaw as Record<string, unknown>)?.mode === "string" ? String((parsedRaw as Record<string, unknown>).mode) : "generate");
+  return parseSchedulePayload(parsedRaw, baseMode);
+}
+
+function eventOrderValue(event: Record<string, unknown>, ...keys: string[]): string {
+  const value = stringValue(field(event, ...keys));
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  if (!Number.isNaN(timestamp)) return new Date(timestamp).toISOString();
+  return eventDateOnly(value);
+}
+
+function compareReplayEvents(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  return eventOrderValue(a, "requisicao_data", "request_date", "event_date", "data_requisicao")
+    .localeCompare(eventOrderValue(b, "requisicao_data", "request_date", "event_date", "data_requisicao"))
+    || eventOrderValue(a, "criado_em", "created_at", "Created Date")
+      .localeCompare(eventOrderValue(b, "criado_em", "created_at", "Created Date"))
+    || stringValue(field(a, "evento_id", "_id", "id", "unique id"))
+      .localeCompare(stringValue(field(b, "evento_id", "_id", "id", "unique id")));
+}
+
+function replayEvent(event: Record<string, unknown>): Record<string, unknown> {
+  return eventType(event) === "activity_start_delayed"
+    ? { ...event, type: "activity_date_changed_cascade", tipo: "activity_date_changed_cascade" }
+    : event;
+}
+
+function lineSnapshotRecord(line: ScheduleLine): Record<string, unknown> {
+  return {
+    "unique id": line.atividade_obra_id_externo,
+    id_atividade_obra_externo: line.atividade_obra_id_externo,
+    atividade: line.atividadeId,
+    ambiente_id: line.ambienteId || "",
+    tipo: line.tipo,
+    ordem: line.ordem,
+    peso: line.peso,
+    equipe: line.equipe || "",
+    diasAntecedencia: line.diasAntecedencia ?? 0,
+    duracao: 1,
+    dataInicioPrevista: line.data_programada,
+    dataFimPrevista: line.data_programada,
+    status: "Nao iniciada",
+    scopeRole: "editable"
+  };
+}
+
+function snapshotPayloadForReplay(basePayload: NormalizedSchedulePayload, requestPayload: NormalizedSchedulePayload, lines: ScheduleLine[], event: Record<string, unknown>): NormalizedSchedulePayload {
+  return normalizePayload({
+    ...basePayload,
+    payload_version: 2,
+    mode: "recalculate",
+    estrutura_inalterada: true,
+    cronograma_unique_id: requestPayload.cronograma_unique_id,
+    versao_cronograma_unique_id: requestPayload.versao_cronograma_unique_id,
+    previous_version_id: requestPayload.previous_version_id,
+    bubble_api_version: requestPayload.bubble_api_version,
+    bubble_version: requestPayload.bubble_version,
+    version: requestPayload.version,
+    timezone: requestPayload.timezone,
+    dias_trabalho_semana: requestPayload.dias_trabalho_semana,
+    event_date: requestPayload.event_date,
+    request_date: requestPayload.request_date,
+    requisicao_data: requestPayload.requisicao_data,
+    data_requisicao: requestPayload.data_requisicao,
+    obra_json: requestPayload.obra_json.length ? requestPayload.obra_json : basePayload.obra_json,
+    atividade_obra_snapshot: lines.map(lineSnapshotRecord),
+    atividade_obra_json: lines.map(lineSnapshotRecord),
+    events_old: [],
+    events_json: [replayEvent(event)]
+  });
+}
+
+function applyReplayEventToLines(basePayload: NormalizedSchedulePayload, requestPayload: NormalizedSchedulePayload, lines: ScheduleLine[], event: Record<string, unknown>): EngineResult {
+  return calculateScheduleResult(snapshotPayloadForReplay(basePayload, requestPayload, lines, event));
+}
+
+function calculateDeltaMotorBaseResult(basePayload: NormalizedSchedulePayload): EngineResult {
+  return calculateScheduleResult({
+    ...basePayload,
+    events_old: [],
+    events_json: []
+  });
+}
+
+function calculateDeltaMotorResult(payload: NormalizedSchedulePayload): DeltaMotorResult {
+  const basePayloadInput = parseDeltaMotorBasePayload(payload);
+  const baseMode = basePayloadInput.mode || "generate";
+  const baseForGeneration = normalizePayload(baseMode === "recalculate" && !isSnapshotRecalculate(basePayloadInput)
+    ? applyRecalculateEvents(basePayloadInput)
+    : basePayloadInput);
+  const baseResult = calculateDeltaMotorBaseResult(baseForGeneration);
+  const expectedLines = Number(payload.linhas_esperadas);
+  if (!Number.isFinite(expectedLines) || expectedLines <= 0) {
+    throw new BaseStateInvalidError("linhas_esperadas is required for payload_version 3 delta_motor");
+  }
+  if (baseResult.lines.length !== Math.trunc(expectedLines)) {
+    throw new BaseStateInvalidError(`Base line count mismatch: rebuilt ${baseResult.lines.length}, expected ${Math.trunc(expectedLines)}`);
+  }
+
+  const targetExternalId = stringValue(field(payload.scope || {}, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  if (!targetExternalId || !baseResult.lines.some((line) => line.atividade_obra_id_externo === targetExternalId)) {
+    throw new BaseStateInvalidError(`Target line not found in rebuilt base: ${targetExternalId || "empty"}`);
+  }
+
+  let current = baseResult;
+  for (const event of [...payload.events_old].sort(compareReplayEvents)) {
+    current = applyReplayEventToLines(baseForGeneration, payload, current.lines, event);
+  }
+
+  const currentTarget = current.lines.find((line) => line.atividade_obra_id_externo === targetExternalId);
+  const expectedCurrentStart = eventDateOnly(stringValue(field(payload.scope || {}, "data_atual_inicio", "current_start_date")), payload);
+  if (expectedCurrentStart && currentTarget?.data_programada !== expectedCurrentStart) {
+    throw new StateDriftError(`State drift for ${targetExternalId}: Bubble target has ${expectedCurrentStart}, reconstructed has ${currentTarget?.data_programada || "missing"}`);
+  }
+
+  let next = current;
+  for (const event of payload.events_json) {
+    next = applyReplayEventToLines(baseForGeneration, payload, next.lines, event);
+  }
+
+  return { current, next };
+}
+
 async function processScheduleJob(
   jobId: string,
   payload: NormalizedSchedulePayload,
@@ -642,12 +1429,46 @@ async function processScheduleJob(
 ): Promise<void> {
   const startedAt = new Date();
   let failedStep = "calculate";
-  let lastProgress: { progress: 2 | 3 | 4; progress_percent: number } = { progress: 2, progress_percent: 0 };
+  let lastProgress: { progress: 1 | 2 | 3 | 4; progress_percent: number } = { progress: 1, progress_percent: 0 };
+  const closedProgressStages = new Set<1 | 2 | 3 | 4>();
   const baseFields = webhookBaseFields(jobId, payload);
   const webhookOptions = { ...options, bubbleApiVersion: webhookBubbleApiVersion(payload) };
+  const processingPayload = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string) => {
+    lastProgress = {
+      progress,
+      progress_percent: progressPercent
+    };
+    if (progressPercent === 100) closedProgressStages.add(progress);
+    return {
+      ...baseFields,
+      status: "processing",
+      progress,
+      progress_percent: progressPercent,
+      message
+    } as const;
+  };
+  const sendProcessingProgress = async (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): Promise<void> => {
+    await sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions);
+  };
+  const sendProcessingProgressDetached = (progress: 1 | 2 | 3 | 4, progressPercent: number, message: string): void => {
+    void sendScheduleWebhook(processingPayload(progress, progressPercent, message), webhookOptions).catch((webhookError) => {
+      options.log?.warn({
+        requestId: options.requestId,
+        jobId,
+        ...errorLogFields(webhookError)
+      }, "schedule processing webhook failed");
+    });
+  };
+  const closeProgressStage = async (progress: 1 | 2 | 3 | 4, message: string): Promise<void> => {
+    if (closedProgressStages.has(progress)) return;
+    await sendProcessingProgress(progress, 100, message);
+  };
 
   try {
-    const result = applyActivityDateChangeRecalculation(payload, applyPurchaseChainRecalculation(payload, applyFromDateDelayedRecalculation(payload, runScheduleEngine(payload))));
+    await sendProcessingProgress(1, 0, "Calculando cronograma");
+    const deltaMotorResult = isDeltaMotorRecalculate(payload) ? calculateDeltaMotorResult(payload) : null;
+    const result = deltaMotorResult?.next || calculateScheduleResult(payload);
+    await closeProgressStage(1, "Calculando cronograma");
 
     options.log?.info({
       requestId: options.requestId,
@@ -659,35 +1480,32 @@ async function processScheduleJob(
       errorsCount: result.validations.errors.length
     }, "schedule job calculation finished");
 
-    failedStep = "bulk_create";
-    await sendScheduleWebhook({
-      ...baseFields,
-      status: "processing",
-      progress: 2,
-      progress_percent: 0,
-      message: "Criando registros em bulk"
-    }, webhookOptions);
+    failedStep = isSnapshotRecalculate(payload) ? "patch_dates" : "bulk_create";
+    const stage2Message = isSnapshotRecalculate(payload) ? "Atualizando datas recalculadas" : "Criando registros em bulk";
+    const stage3Message = "Atualizando vínculos/dependências";
+    await sendProcessingProgress(2, 0, stage2Message);
 
-    await persistScheduleBulks(payload, result.lines, {
+    const persistenceOptions = {
       requestId: options.requestId,
       log: options.log,
-      onStep: (step) => {
+      onStep: (step: "bulk_create" | "patch_dependencies" | "patch_dates") => {
         failedStep = step;
       },
-      onProgress: async (progress) => {
-        lastProgress = {
-          progress: progress.progress,
-          progress_percent: progress.progress_percent
-        };
-        await sendScheduleWebhook({
-          ...baseFields,
-          status: "processing",
-          ...progress
-        }, webhookOptions);
+      onProgress: (progress: { progress: 1 | 2 | 3 | 4; progress_percent: number; message: string }) => {
+        if (progress.progress_percent === 100) return sendProcessingProgress(progress.progress, progress.progress_percent, progress.message);
+        sendProcessingProgressDetached(progress.progress, progress.progress_percent, progress.message);
       }
-    });
+    };
+    const persistenceSummary = deltaMotorResult
+      ? await persistScheduleDeltaMotorPatches(payload, deltaMotorResult.current.lines, deltaMotorResult.next.lines, persistenceOptions)
+      : isSnapshotRecalculate(payload)
+        ? await persistScheduleDatePatches(payload, result.lines, persistenceOptions)
+        : await persistScheduleBulks(payload, result.lines, persistenceOptions);
 
     failedStep = "finalizing";
+    await closeProgressStage(2, stage2Message);
+    await closeProgressStage(3, stage3Message);
+    await sendProcessingProgress(4, 0, "Finalizando cronograma");
     const durationMs = new Date().getTime() - startedAt.getTime();
     await sendScheduleWebhook({
       ...baseFields,
@@ -696,8 +1514,18 @@ async function processScheduleJob(
       progress_percent: 100,
       metrics: {
         linesCount: result.lines.length,
+        patchedCount: persistenceSummary.patchedCount,
+        patchRequestCount: persistenceSummary.patchRequestCount,
+        patchBatchCount: persistenceSummary.patchBatchCount,
+        eventCount: persistenceSummary.eventCount,
+        dependencyPatchCount: persistenceSummary.dependencyPatchCount,
+        createdCount: persistenceSummary.createdCount,
+        bulkBatchCount: persistenceSummary.bulkBatchCount,
+        bulkRetryCount: persistenceSummary.bulkRetryCount,
+        dedupDroppedCount: persistenceSummary.dedupDroppedCount,
         durationMs
-      }
+      },
+      normalizedDates: result.normalizedDates || []
     }, webhookOptions);
 
     options.log?.info({
@@ -706,6 +1534,15 @@ async function processScheduleJob(
       cronogramaUniqueId: payload.cronograma_unique_id,
       mode: payload.mode,
       linesCount: result.lines.length,
+      patchedCount: persistenceSummary.patchedCount,
+      patchRequestCount: persistenceSummary.patchRequestCount,
+      patchBatchCount: persistenceSummary.patchBatchCount,
+      eventCount: persistenceSummary.eventCount,
+      dependencyPatchCount: persistenceSummary.dependencyPatchCount,
+      createdCount: persistenceSummary.createdCount,
+      bulkBatchCount: persistenceSummary.bulkBatchCount,
+      bulkRetryCount: persistenceSummary.bulkRetryCount,
+      dedupDroppedCount: persistenceSummary.dedupDroppedCount,
       durationMs
     }, "schedule job finished");
   } catch (error) {
@@ -719,6 +1556,7 @@ async function processScheduleJob(
         progress_percent: lastProgress.progress_percent,
         error_code: scheduleErrorCode(error),
         error_message: message,
+        error_details: error instanceof ScopeInsufficientError ? error.details : undefined,
         failed_step: failedStep
       }, webhookOptions);
     } catch (webhookError) {
@@ -731,8 +1569,8 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
   const log = requestLog(req);
 
   try {
-    const parsedPayload = payloadSchema.parse(req.body);
     const requestMode = modeFromRequest(req, mode);
+    const parsedPayload = parseSchedulePayload(req.body, requestMode);
     validateRecalculateEvents(requestMode, parsedPayload.events_json);
     validateRecalculateEvents(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateEventTypes(requestMode, parsedPayload.events_json);
@@ -740,7 +1578,8 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     validateRecalculateEventFields(requestMode, parsedPayload.events_json);
     validateRecalculateEventFields(requestMode, parsedPayload.events_old, "events_old");
     validateRecalculateContract(requestMode, parsedPayload);
-    const payload = normalizePayload(applyRecalculateEvents({ ...parsedPayload, mode: requestMode }));
+    const payloadInput = { ...parsedPayload, mode: requestMode };
+    const payload = normalizePayload(isSnapshotRecalculate(payloadInput) ? payloadInput : applyRecalculateEvents(payloadInput));
     const jobId = makeId("schedule_job");
     const acceptedResponse = buildScheduleAcceptedResponse(jobId, payload.cronograma_unique_id, versionId(payload));
 
@@ -761,7 +1600,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
   } catch (error) {
     if (error instanceof ZodError) {
       log?.warn({ requestId: req.id, issues: error.issues, ...errorLogFields(error) }, "schedule payload validation failed");
-      res.status(400).json(buildScheduleErrorResponse("Invalid payload", "INVALID_PAYLOAD", error.flatten(), error.issues.map((issue) => issue.message)));
+      res.status(400).json(buildScheduleErrorResponse("Invalid payload", "INVALID_PAYLOAD", zodErrorDetails(error), error.issues.map(zodIssueMessage)));
       return;
     }
 

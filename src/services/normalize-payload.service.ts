@@ -1,9 +1,22 @@
 import { z } from "zod";
-import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, PurchaseStage, SchedulePayload } from "../types/payload.types.js";
+import type { ActivityPayload, NormalizedActivity, NormalizedSchedulePayload, ObraAmbienteItemComposicaoPayload, ObraAmbienteProdutoPayload, ObraPayload, PurchaseStage, ScheduleMode, SchedulePayload } from "../types/payload.types.js";
 
 const recordArray = z.array(z.record(z.unknown())).default([]);
 
-export const payloadSchema = z.object({
+const payloadEnvelopeSchema = z.object({
+  payload_version: z.union([z.number(), z.string()]).optional(),
+  estrutura_inalterada: z.boolean().optional(),
+  mode: z.string().optional()
+}).passthrough();
+
+const payloadShape = {
+  payload_version: z.union([z.number(), z.string()]).optional(),
+  estrutura_inalterada: z.boolean().optional(),
+  estrutura_id: z.string().optional(),
+  linhas_esperadas: z.number().optional(),
+  structure_version_id: z.string().optional(),
+  scope: z.record(z.unknown()).optional(),
+  base: z.unknown().optional(),
   cronograma_unique_id: z.string().min(1),
   mode: z.string().default("generate"),
   dias_trabalho_semana: z.union([z.literal(5), z.literal(6)]).default(5),
@@ -16,15 +29,39 @@ export const payloadSchema = z.object({
   request_date: z.string().nullable().optional(),
   requisicao_data: z.string().nullable().optional(),
   data_requisicao: z.string().nullable().optional(),
-  obra_json: z.array(z.record(z.unknown())).min(1),
+  obra_json: recordArray,
   obra_ambiente_json: recordArray,
   obra_ambiente_produto_json: recordArray,
   obra_ambiente_item_composicao_json: recordArray,
   atividades_json: z.array(z.record(z.unknown())).default([]),
   atividade_obra_json: recordArray,
+  atividade_obra_snapshot: recordArray,
+  master_dependencies: recordArray,
+  master_anchors: recordArray,
   events_old: recordArray,
   events_json: recordArray
+};
+
+export const payloadSchema = z.object({
+  ...payloadShape,
+  obra_json: z.array(z.record(z.unknown())).min(1)
 }).passthrough() as unknown as z.ZodType<SchedulePayload>;
+
+const payloadV2SnapshotRecalculateSchema = z.object({
+  ...payloadShape,
+  obra_json: recordArray
+}).passthrough() as unknown as z.ZodType<SchedulePayload>;
+
+export function parseSchedulePayload(input: unknown, routeMode: ScheduleMode): SchedulePayload {
+  const envelope = payloadEnvelopeSchema.safeParse(input);
+  if (!envelope.success) return payloadSchema.parse(input);
+
+  const bodyMode = envelope.data.mode?.trim() || routeMode;
+  const isV2Recalculate = String(envelope.data.payload_version) === "2"
+    && bodyMode === "recalculate";
+
+  return (isV2Recalculate ? payloadV2SnapshotRecalculateSchema : payloadSchema).parse(input);
+}
 
 function normalizeActivityType(value: unknown): NormalizedActivity["tipo"] {
   const text = String(value || "")
@@ -92,6 +129,46 @@ function field(record: Record<string, unknown>, ...keys: string[]): unknown {
     if (record[key] !== undefined) return record[key];
   }
   return undefined;
+}
+
+function snapshotRecords(payload: SchedulePayload): Record<string, unknown>[] {
+  return payload.atividade_obra_snapshot?.length ? payload.atividade_obra_snapshot : payload.atividade_obra_json;
+}
+
+function snapshotString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = field(record, key);
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function snapshotDateOnly(record: Record<string, unknown>): string | undefined {
+  const date = snapshotString(record, "dataInicioPrevista", "data_inicio_prevista", "data_programada", "data", "date");
+  return date?.slice(0, 10);
+}
+
+function obraFromSnapshot(payload: SchedulePayload): ObraPayload | null {
+  if (payload.obra_json.length) return null;
+  if (String(payload.payload_version) !== "2" || payload.mode !== "recalculate") return null;
+
+  const snapshot = snapshotRecords(payload);
+  const firstRecordWithObra = snapshot.find((record) => snapshotString(record, "obra", "obra_id", "id_obra", "obraId", "obraUniqueId"));
+  const obraId = firstRecordWithObra
+    ? snapshotString(firstRecordWithObra, "obra", "obra_id", "id_obra", "obraId", "obraUniqueId")
+    : undefined;
+  const dataInicio = snapshot
+    .map(snapshotDateOnly)
+    .filter((date): date is string => Boolean(date))
+    .sort()[0];
+
+  if (!obraId && !dataInicio) return null;
+
+  return {
+    ...(obraId ? { id: obraId, unique_id: obraId, "unique id": obraId } : {}),
+    ...(dataInicio ? { dataInicio, data_inicio: dataInicio, startDate: dataInicio } : {})
+  };
 }
 
 function normalizeActivity(activity: ActivityPayload, index: number): NormalizedActivity {
@@ -229,6 +306,11 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
 }
 
 export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
+  const synthesizedObra = obraFromSnapshot(payload);
+  const obraJson = synthesizedObra ? [synthesizedObra] : payload.obra_json;
+  const previousAtividadeObraJson = payload.atividade_obra_json.length
+    ? payload.atividade_obra_json
+    : payload.atividade_obra_snapshot || [];
   const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
   const obraAmbienteProdutoJson = payload.obra_ambiente_produto_json || [];
   const obraAmbienteProdutos = obraAmbienteProdutoJson.length
@@ -254,8 +336,10 @@ export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePa
 
   return {
     ...payload,
+    obra_json: obraJson,
     obra_ambiente_produto_json: obraAmbienteProdutos,
     obra_ambiente_item_composicao_json: compositionProducts,
+    atividade_obra_json: previousAtividadeObraJson,
     atividades_json: [...baseActivities, ...projectActivities]
   };
 }

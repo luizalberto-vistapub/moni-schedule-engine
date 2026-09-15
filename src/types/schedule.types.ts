@@ -45,4 +45,12 @@ export interface EngineResult {
     warnings: string[];
     errors: string[];
   };
+  normalizedDates?: NormalizedDate[];
+}
+
+export interface NormalizedDate {
+  id_atividade_obra_externo: string;
+  requested: string;
+  applied: string;
+  reason: "non_working_day";
 }
