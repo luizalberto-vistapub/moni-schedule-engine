@@ -18,6 +18,7 @@ const DEFAULT_BULK_RETRY_LOOKUP_DELAYS_MS = [1500, 3000, 5000];
 const PROGRESS_REPEAT_GUARDRAIL_RENEWAL_MS = 540000;
 const MAX_BULK_CREATE_CONCURRENCY = 5;
 const MAX_PATCH_CONCURRENCY = 25;
+const EARLY_PROGRESS_THRESHOLDS = [1, 3, 5];
 const DEFAULT_CRONOGRAMA_LINHA_TYPE = "cronogramalinha";
 const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
@@ -663,7 +664,7 @@ function createProgressReporter(
     if (!options.onProgress || total <= 0) return;
 
     const percent = Math.min(100, Math.floor((completed / total) * 100));
-    const roundedPercent = Math.floor(percent / 10) * 10;
+    const roundedPercent = progressThreshold(percent);
     const now = Date.now();
     const percentAdvanced = roundedPercent > lastPercent;
     const guardrailRenewalDue = force
@@ -680,6 +681,15 @@ function createProgressReporter(
       message
     });
   };
+}
+
+function progressThreshold(percent: number): number {
+  let earlyThreshold = 0;
+  for (const threshold of EARLY_PROGRESS_THRESHOLDS) {
+    if (percent >= threshold) earlyThreshold = threshold;
+  }
+  if (earlyThreshold && percent < 10) return earlyThreshold;
+  return Math.floor(percent / 5) * 5;
 }
 
 async function reportPersistenceProgress(progress: PersistencePhaseProgress | undefined, completedCount: number): Promise<void> {

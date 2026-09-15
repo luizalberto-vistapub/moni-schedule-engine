@@ -161,10 +161,10 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
-  it("reports phase 2 and phase 3 persistence progress in 10 percent increments", async () => {
+  it("reports phase 2 and phase 3 persistence progress with early life signs and 5 percent increments", async () => {
     const fetchMock = successfulBubbleFetchMock();
     vi.stubGlobal("fetch", fetchMock);
-    const activities = Array.from({ length: 10 }, (_, index) => ({
+    const activities = Array.from({ length: 100 }, (_, index) => ({
       id: `serv_${index + 1}`,
       nome: `Servico ${index + 1}`,
       tipo: "Servico",
@@ -180,8 +180,9 @@ describe("Bubble bulk persistence", () => {
       }
     });
 
-    expect(progressEvents.filter((event) => event.progress === 2).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
-    expect(progressEvents.filter((event) => event.progress === 3).map((event) => event.progress_percent)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    const expectedPercents = [1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
+    expect(progressEvents.filter((event) => event.progress === 2).map((event) => event.progress_percent)).toEqual(expectedPercents);
+    expect(progressEvents.filter((event) => event.progress === 3).map((event) => event.progress_percent)).toEqual(expectedPercents);
     expect(progressEvents.find((event) => event.progress === 2)?.message).toBe("Criando registros em bulk");
     expect(progressEvents.find((event) => event.progress === 3)?.message).toBe("Atualizando vínculos/dependências");
   });

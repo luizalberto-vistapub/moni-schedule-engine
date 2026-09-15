@@ -201,9 +201,9 @@ Webhooks intermediarios usam `status: "processing"` e atualizam progresso visual
 Regras de progresso:
 
 ```yaml
-progress 2: bulk create, enviar 10% em 10%
-progress 3: vinculos/dependencias, enviar 10% em 10%
-progress 4: finalizando, enviar 100% somente
+progress 2: bulk create, enviar 1%, 3%, 5%, depois 10%, 15%, ... 100%
+progress 3: vinculos/dependencias, enviar 1%, 3%, 5%, depois 10%, 15%, ... 100%
+progress 4: finalizando, enviar processing 0%; 100% somente no webhook final done
 ```
 
 Webhook final de sucesso:
