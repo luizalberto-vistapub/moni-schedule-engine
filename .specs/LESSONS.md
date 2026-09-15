@@ -83,3 +83,8 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: Numeric environment defaults must distinguish missing values from zero, and every Bubble Data API persistence lookup needs retry handling for HTTP 429/Cloudflare 1015.
 - **Grounding**: A Live initial-generation failure returned `Bubble atividade obra lookup failed with 429` during `bulk_create`; investigation found lookup did not retry and `boundedInteger(undefined, ...)` collapsed defaults to minimum values because `Number(null) === 0`.
 - **Scope**: Bubble Data API lookup retry, environment parsing, and schedule persistence defaults.
+
+### L-021
+- **Lesson**: Any retry/backoff path that blocks writes must still renew Bubble liveness with a `processing` webhook.
+- **Grounding**: Bubble's sentinel marks jobs dead only when both recent `processing` webhooks and new Atividade x Obra writes are absent; a healthy 429/1015 lookup cooldown satisfies both failure proofs unless the engine emits a heartbeat.
+- **Scope**: Bubble watchdog compatibility, retry loops, and schedule progress webhooks.

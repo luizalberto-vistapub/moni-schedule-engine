@@ -35,6 +35,7 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 | Stage ordering | Stage boundary webhooks are serial; intra-stage percentages remain non-blocking | Bubble applies progress by webhook arrival order, so boundary markers must not race each other. | Yes |
 | Repeated stage 2 percentages | Do not resend unchanged percentages on short heartbeats | Bubble logs showed each duplicate costs actions and guardrail rescheduling; one send per threshold is enough unless a rare guardrail renewal is due. | Yes |
 | Stage 2/3 percentage cadence | Send 1%, 3%, 5%, then 5% increments | Large Live generation can spend too long before the first 10% signal; early life-sign webhooks keep the locked screen visibly alive. | Yes |
+| Lookup retry heartbeat | Resend `processing` with the current stage and percent during retry/backoff | Bubble sentinels cannot distinguish a healthy lookup cooldown from a dead motor unless the engine renews `ultimo_sinal_em`. | Yes |
 
 **Open questions:** none blocking implementation; unconfirmed Bubble-facing decisions are logged as assumptions above.
 
@@ -74,6 +75,8 @@ Bubble currently shows schedule recalculation progress as four stages, but the e
 1. WHEN a non-initial `processing` webhook hangs or fails during PATCH persistence THEN the engine SHALL continue persistence and still send terminal `done`.
 2. WHEN terminal `done` or `error` is required THEN the engine SHALL continue awaiting the terminal webhook sender.
 3. WHEN persistence heartbeat runs before percent advancement THEN the engine SHALL not resend the same `progress_percent` on each short heartbeat.
+4. WHEN an Atividade x Obra lookup is retrying after a retryable Bubble/Cloudflare failure THEN the engine SHALL emit a `processing` webhook using the current `progress` and `progress_percent`, without advancing either value.
+5. WHEN an Atividade x Obra lookup still has retries remaining THEN the engine SHALL NOT emit a terminal `error` webhook before those retries are exhausted.
 
 **Independent Test**: Existing mocked persistence test keeps hanging positive progress webhooks and expects patches plus `done`.
 
