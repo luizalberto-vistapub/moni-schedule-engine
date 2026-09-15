@@ -39,6 +39,7 @@ describe("schedule controllers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.BUBBLE_API_TOKEN;
+    delete process.env.BUBBLE_BULK_BATCH_SIZE;
     delete process.env.BUBBLE_BULK_RETRY_LOOKUP_DELAYS_MS;
   });
 
@@ -283,6 +284,56 @@ describe("schedule controllers", () => {
       "processing:4:0",
       "done:4:100"
     ]);
+  });
+
+  it("waits for detached processing webhooks before sending a terminal error", async () => {
+    process.env.BUBBLE_BULK_BATCH_SIZE = "1";
+    const delivered: string[] = [];
+    let atividadeObraPostCount = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/1.1/wf/api_cronograma__webhook_v1")) {
+        const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        const key = `${body.status}:${body.progress}:${body.progress_percent}`;
+        if (key === "processing:2:50") await delay(20);
+        delivered.push(key);
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+
+      if (init?.method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          text: async (): Promise<string> => JSON.stringify({ response: { cursor: 0, count: 0, remaining: 0, results: [] } })
+        };
+      }
+      if (init?.method === "PATCH") return { ok: true, status: 204, text: async (): Promise<string> => "" };
+
+      if (String(url).includes("/api/1.1/obj/atividadexobra/bulk")) {
+        atividadeObraPostCount += 1;
+        return atividadeObraPostCount === 1
+          ? { ok: true, status: 200, text: async (): Promise<string> => "{\"id\":\"bubble_1\"}\n" }
+          : { ok: false, status: 401, text: async (): Promise<string> => "Unauthorized" };
+      }
+
+      return { ok: true, status: 200, text: async (): Promise<string> => "{\"id\":\"event_1\"}\n" };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        atividades_json: [
+          { id: "serv_1", nome: "Servico 1", tipo: "Servico", ordem: 1, duracao: 1 },
+          { id: "serv_2", nome: "Servico 2", tipo: "Servico", ordem: 2, duracao: 1 }
+        ]
+      }));
+
+    expect(response.status).toBe(202);
+    await waitForWebhookBody("error");
+    await delay(30);
+
+    expect(delivered).toContain("processing:2:50");
+    expect(delivered.at(-1)).toBe("error:2:50");
   });
 
   it("sends schedule webhooks to the Bubble API version from the payload", async () => {

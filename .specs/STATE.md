@@ -162,15 +162,23 @@
 - **Date**: 2026-09-15
 - **Status**: active
 
+### AD-026
+- **Decision**: Schedule jobs must drain already-started detached `processing` webhooks before sending terminal `done` or `error`.
+- **Reason**: Bubble treats terminal webhooks as closing the version; a slow detached progress request can otherwise arrive after `error`, making the terminal event not truly final.
+- **Trade-off**: Terminal delivery can wait briefly for in-flight progress sends, while persistence still remains non-blocking during the critical write loop.
+- **Scope**: Schedule controller webhook ordering and Bubble terminal-state contract.
+- **Date**: 2026-09-15
+- **Status**: active
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-15
 
 - **Feature**: Delta motor recalculation v3 / Bubble bulk persistence.
-- **Phase / Task**: Implementation complete and pushed to Bubble test branch `codex/bubble-bulk-persistence`; adding lookup-retry heartbeats for Bubble watchdog compatibility.
-- **Completed**: Implemented `payload_version=3` + `scope.tipo="delta_motor"` on `POST /api/v1/schedules/recalculate`; v3 accepts `base.payload`, `linhas_esperadas`, target/date scope, `events_old`, and `events_json`; reconstructs base lines deterministically; replays `events_old` ordered by `requisicao_data`, `criado_em`, then `evento_id`; validates target current date via `scope.data_atual_inicio`; applies the new event; diffs current vs next state; looks up changed Bubble rows by `obra`, `desatualizado (deletar)=false`, and `id_atividade_obra_externo in [...]`; rejects drift with `STATE_DRIFT`; rejects invalid base/targets/missing rows with `BASE_STATE_INVALID`; PATCHes only changed rows; persists only new `events_json`; fixes event date persistence to preserve the received calendar day; rebuilds the v3 base through the same calculated-date normalization used by generation so non-working-day adjustments do not create false `STATE_DRIFT`; Atividade x Obra Data API lookups retry `429`/Cloudflare 1015 and emit `processing` heartbeats with current progress during backoff; added spec and validation artifacts.
-- **Latest commit to push**: lookup retry heartbeat commit after cherry-pick continuation.
-- **Latest verification**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 185 tests; focused lookup retry tests passed; `git diff --check` passed before commit on main.
+- **Phase / Task**: Implementation complete and pushed to Bubble test branch `codex/bubble-bulk-persistence`; adding lookup-retry heartbeats and terminal-webhook ordering fixes for Bubble watchdog compatibility.
+- **Completed**: Implemented `payload_version=3` + `scope.tipo="delta_motor"` on `POST /api/v1/schedules/recalculate`; v3 accepts `base.payload`, `linhas_esperadas`, target/date scope, `events_old`, and `events_json`; reconstructs base lines deterministically; replays `events_old` ordered by `requisicao_data`, `criado_em`, then `evento_id`; validates target current date via `scope.data_atual_inicio`; applies the new event; diffs current vs next state; looks up changed Bubble rows by `obra`, `desatualizado (deletar)=false`, and `id_atividade_obra_externo in [...]`; rejects drift with `STATE_DRIFT`; rejects invalid base/targets/missing rows with `BASE_STATE_INVALID`; PATCHes only changed rows; persists only new `events_json`; fixes event date persistence to preserve the received calendar day; rebuilds the v3 base through the same calculated-date normalization used by generation so non-working-day adjustments do not create false `STATE_DRIFT`; Atividade x Obra Data API lookups retry `429`/Cloudflare 1015 and emit `processing` heartbeats with current progress during backoff; already-started detached `processing` webhooks drain before terminal `done`/`error`; added spec and validation artifacts.
+- **Latest commit to push**: terminal webhook ordering commit after cherry-pick continuation.
+- **Latest verification**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 186 tests; focused terminal ordering test passed; focused lookup retry tests passed; `git diff --check` passed before commit on main.
 - **Bubble v3 test payload requirements**: send `payload_version: 3`, `estrutura_inalterada: true`, `scope.tipo: "delta_motor"`, `scope.id_atividade_obra_externo`, `scope.nova_data`, `scope.data_atual_inicio`, `linhas_esperadas`, `base.versao_id`, `base.mode`, complete `base.payload` from the active schedule version, `events_old` with `requisicao_data`/`criado_em`/`evento_id`, and `events_json` containing only the new pencil event.
 - **Bubble expected behavior**: A valid dependent activity-date change should receive `202`, then normal processing webhooks, then `done` with `metrics.patchedCount` equal to changed rows and `metrics.eventCount: 1`; Bubble should not send `atividade_obra_snapshot`, `master_dependencies`, or `master_anchors` for this v3 path.
 - **Fallback behavior**: On webhook `error_code: "BASE_STATE_INVALID"` or `"STATE_DRIFT"`, Bubble should automatically retry the same recalculation with the existing v2 full payload fallback. These errors mean base count/target/lookup mismatch or current Bubble dates no longer match reconstructed state.
@@ -179,7 +187,7 @@
 - **Next step**: Bubble should retest on branch `test` using a real active-version payload for an activity with dependents. If v3 errors, capture the final webhook body (`error_code`, `error_message`, `failed_step`) and the exact v3 request payload sent.
 - **Blockers**: none on the engine side for the v3 dependent-activity test; Bubble must ensure active versions preserve `payload_requisicao_json` and event history is cleaned of known duplicate Teste Recalculo events before using v3 as source of truth.
 - **Recommended future engine improvement**: add clearer early validation for structural recalculations where `estrutura_inalterada=false` but structural inputs are empty.
-- **Uncommitted files**: resolving cherry-pick of lookup heartbeat onto `codex/bubble-bulk-persistence`.
+- **Uncommitted files**: resolving cherry-pick of terminal webhook ordering onto `codex/bubble-bulk-persistence`.
 - **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
 
 ### Previous Snapshot

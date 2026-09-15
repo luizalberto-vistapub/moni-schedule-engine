@@ -344,3 +344,54 @@ PASS. No blocking findings. The verifier confirmed:
 
 **Spec-anchored check**: 2/2 new acceptance criteria passed.
 **Gate**: TypeScript passed; Vitest passed with 185 tests.
+
+---
+
+## Validation Report - 2026-09-15 Terminal Webhook Ordering
+
+**Spec**: `.specs/features/recalculation-visible-progress/spec.md`
+**Author**: Codex
+**Verifier**: independent verifier agent `01a0a4e2-b3d5-7d01-8668-362df0e75eb5`
+**Commit**: pending at validation time
+
+### Scope
+
+- `src/controllers/schedules.controller.ts`
+- `tests/schedules.controller.test.ts`
+- `docs/bubble-cloudflare-1015-lookup-retry-2026-09-15.md`
+- `.specs/features/recalculation-visible-progress/spec.md`
+- `.specs/STATE.md`
+- `.specs/LESSONS.md`
+
+### Spec-Anchored Acceptance Criteria
+
+| Requirement | Spec-defined outcome | Evidence | Result |
+| --- | --- | --- | --- |
+| P1 Non-Blocking Progress AC6: terminal `done` or `error` waits for already-started detached `processing` sends to settle. | No previously started `processing` webhook is delivered after a terminal webhook for the same job. | `src/controllers/schedules.controller.ts:1434` tracks pending processing sends; `src/controllers/schedules.controller.ts:1465-1468` drains them; `src/controllers/schedules.controller.ts:1513` drains before terminal `done`; `src/controllers/schedules.controller.ts:1560` drains before terminal `error`; `tests/schedules.controller.test.ts:289-336` delays `processing:2:50`, forces a later bulk error, and asserts `delivered.at(-1)` is `error:2:50`. | PASS |
+| Existing non-blocking persistence behavior remains intact. | Persistence callbacks still do not await non-100 `processing` sends during the critical write loop. | `src/controllers/schedules.controller.ts:1501-1503` still sends non-100 progress through `sendProcessingProgressDetached(...)`; full controller and suite gates passed. | PASS |
+
+### Gate Evidence
+
+| Command | Result |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc` | PASS: exit code 0. |
+| `node node_modules\vitest\vitest.mjs run tests\schedules.controller.test.ts -t "waits for detached processing"` before implementation | FAIL as expected: received final delivered event `processing:2:50` instead of `error:2:50`. |
+| `node node_modules\vitest\vitest.mjs run tests\schedules.controller.test.ts -t "waits for detached processing"` after implementation | PASS: 1 focused test passed, 57 skipped. |
+| `node node_modules\vitest\vitest.mjs run` | PASS: 7 files, 186 tests passed, 0 failed. |
+| `git diff --check` | PASS: no whitespace errors. |
+
+### Independent Verifier
+
+PASS. No blocking findings. The verifier confirmed:
+
+- detached `processing` sends are tracked;
+- persistence still uses fire-and-forget for non-100 progress;
+- terminal `done` and `error` both drain pending progress first;
+- Bubble-facing documentation states `done` and `error` are again the last observable event for the job.
+
+### Summary
+
+**Overall**: Ready.
+
+**Spec-anchored check**: 2/2 checked criteria passed.
+**Gate**: TypeScript passed; Vitest passed with 186 tests.

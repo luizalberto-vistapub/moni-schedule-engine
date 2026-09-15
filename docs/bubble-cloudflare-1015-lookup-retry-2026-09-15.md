@@ -52,6 +52,14 @@ Esse webhook nao avanca progresso. Ele repete `progress` e `progress_percent` do
 
 Um webhook final `error` continua sendo terminal: se o motor ainda vai tentar novamente, ele permanece em `processing` e nao envia `error` antes do fim dos retries.
 
+## Correcao De Ordem Terminal
+
+Depois da correcao de heartbeat, revisamos tambem o ponto observado no incidente de 15/09/2026: o motor podia iniciar webhooks `processing` sem bloquear a persistencia e, se a persistencia falhasse logo depois, enviar o webhook final `error` antes desses `processing` pendentes terminarem.
+
+Isso foi corrigido no motor. Antes de enviar qualquer terminal `done` ou `error`, o job agora espera os `processing` ja iniciados terminarem. Assim, para o Bubble, `done` e `error` voltam a ser o ultimo evento observavel daquele job.
+
+Nao ha mudanca obrigatoria no Bubble: continuar ignorando webhooks de jobs/versoes ja encerrados segue correto como protecao defensiva. A diferenca e que o motor nao deve mais produzir progresso depois de um terminal.
+
 ## O Que Observar Nos Logs
 
 Durante rate limit transitorio, podem aparecer logs como:
