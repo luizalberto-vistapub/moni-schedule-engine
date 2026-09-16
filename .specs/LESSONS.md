@@ -113,3 +113,8 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: Fire-and-forget progress sends must be drained before terminal job webhooks.
 - **Grounding**: A Live incident showed `processing` webhooks after a final `error` because detached progress requests could finish after the terminal error path.
 - **Scope**: Async webhook ordering, terminal-state contracts, and Bubble schedule job lifecycle.
+
+### L-023
+- **Lesson**: Public schedule errors should summarize upstream HTML responses instead of forwarding them.
+- **Grounding**: Bubble displays `error_message` in the UI, and Cloudflare/Bubble HTML error pages are too noisy for users while the full body is still available in engine logs.
+- **Scope**: Schedule webhook error messages, API error responses, and external-service failure handling.

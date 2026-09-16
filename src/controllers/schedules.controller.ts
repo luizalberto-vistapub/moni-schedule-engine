@@ -52,6 +52,23 @@ function scheduleErrorCode(error: unknown): string {
   return "SCHEDULE_ENGINE_ERROR";
 }
 
+function looksLikeHtml(text: string): boolean {
+  return /<\s*(?:!doctype|html|head|body|title|div|span|p|br)\b/i.test(text) || /<\/[a-z][^>]*>/i.test(text);
+}
+
+function publicScheduleErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return "Unexpected error";
+  if (error instanceof BubbleBulkRequestError) {
+    if (/cloudflare|error 1015|rate limited|with 429/i.test(error.message)) {
+      return "Bubble limitou temporariamente as chamadas do cronograma. Tente novamente em alguns minutos.";
+    }
+    if (looksLikeHtml(error.message)) {
+      return "Bubble retornou uma resposta inesperada ao gravar o cronograma.";
+    }
+  }
+  return error.message;
+}
+
 function requestLog(req: ObservedRequest): Logger | undefined {
   /* v8 ignore next -- Express request logs are optional in production wiring. */
   return req.log;
@@ -1554,7 +1571,7 @@ async function processScheduleJob(
       durationMs
     }, "schedule job finished");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
+    const message = publicScheduleErrorMessage(error);
     options.log?.error({ requestId: options.requestId, jobId, failedStep, ...errorLogFields(error) }, "schedule job failed");
     try {
       await drainProcessingWebhooks();
@@ -1620,7 +1637,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }
 
     if (error instanceof BubbleBulkConfigError || error instanceof BubbleBulkRequestError) {
-      const message = error.message;
+      const message = publicScheduleErrorMessage(error);
       const statusCode = error instanceof BubbleBulkRequestError ? 502 : 500;
       log?.error({ requestId: req.id, ...errorLogFields(error) }, "schedule bulk persistence failed");
       res.status(statusCode).json(buildScheduleErrorResponse(message, error instanceof BubbleBulkRequestError ? "BUBBLE_BULK_REQUEST_ERROR" : "BUBBLE_BULK_CONFIG_ERROR"));

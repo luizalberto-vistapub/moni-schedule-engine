@@ -210,6 +210,14 @@
 - **Date**: 2026-09-15
 - **Status**: active
 
+### AD-027
+- **Decision**: Public schedule `error_message` values must not include raw upstream HTML responses.
+- **Reason**: Bubble displays `error_message` to the user; Cloudflare/Bubble HTML pages are noisy and leak implementation details.
+- **Trade-off**: Operators see a shorter public message and must use engine logs for the full upstream response body.
+- **Scope**: Schedule controller error webhooks and synchronous schedule error responses.
+- **Date**: 2026-09-16
+- **Status**: active
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-15

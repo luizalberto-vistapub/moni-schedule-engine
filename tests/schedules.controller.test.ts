@@ -2288,6 +2288,46 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("sends a short public error message when Bubble returns HTML", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/wf/api_cronograma__webhook_v1")) {
+        return { ok: true, status: 200, text: async (): Promise<string> => "" };
+      }
+      if (init?.method === "GET") {
+        return {
+          ok: false,
+          status: 400,
+          text: async (): Promise<string> => "<html><body>Cloudflare Error 1015: You are being rate limited</body></html>"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async (): Promise<string> => "{\"id\":\"should_not_create\"}\n"
+      };
+    }));
+
+    const response = await request(app)
+      .post("/api/v1/schedules/generate")
+      .send(basePayload({
+        versao_cronograma_unique_id: "versao_1",
+        atividades_json: [{ id: "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1 }]
+      }));
+
+    expect(response.status).toBe(202);
+
+    const webhookBody = await waitForWebhookBody("error");
+    expect(webhookBody).toMatchObject({
+      job_id: response.body.job_id,
+      status: "error",
+      error_code: "BUBBLE_BULK_REQUEST_ERROR",
+      error_message: "Bubble limitou temporariamente as chamadas do cronograma. Tente novamente em alguns minutos.",
+      failed_step: "bulk_create"
+    });
+    expect(String(webhookBody.error_message)).not.toContain("<html");
+    expect(String(webhookBody.error_message)).not.toContain("Cloudflare Error 1015");
+  });
+
   it("accepts and sends an error webhook when Bubble API token is not configured", async () => {
     delete process.env.BUBBLE_API_TOKEN;
 
