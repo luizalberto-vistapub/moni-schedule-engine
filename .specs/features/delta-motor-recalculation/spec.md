@@ -1,6 +1,6 @@
 # Delta Motor Recalculation Specification
 
-> **Operational status (2026-09-17): superseded and disabled.** The payload v3 fast path remains implemented for historical compatibility but must not be enabled. Real Bubble runs showed recurring `STATE_DRIFT` because the latest active request was not a stable structural base, event history had no cutoff, date-only events could shift calendar day, and delta requests could become nested bases. The replacement is the guardian-based payload v4 contract recorded in `docs/delta-v4-guardian-contract-2026-09-17.md` and decisions AD-028 through AD-033.
+> **Operational status (2026-09-17): superseded and disabled.** The payload v3 fast path remains implemented for historical compatibility but must not be enabled. Real Bubble runs proved recurring `STATE_DRIFT` from date/event replay; the investigation also exposed latent risks from selecting active-version requests as structural bases and allowing delta payloads to become nested bases. The replacement is the guardian-based payload v4 contract recorded in `docs/delta-v4-guardian-contract-2026-09-17.md` and decisions AD-028 through AD-033.
 
 ## Problem Statement
 

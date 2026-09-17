@@ -188,7 +188,7 @@ The guardian is not the source of current dates. The motor must:
 
 1. Determine the structurally affected external IDs from the guardian graph and the new event.
 2. Fetch the corresponding active Atividade x Obra rows from Bubble.
-3. Hydrate the calculation with their current persisted dates and relevant status.
+3. Hydrate the calculation with their current persisted dates and status. Status is mandatory because started/non-movable rows must retain the same protection as the v2 path.
 4. Apply only `events_json`.
 5. Patch only rows whose dates change.
 6. Persist only the new event.
@@ -245,7 +245,7 @@ generation -> first v4 delta -> second v4 delta
 
 Run first on a small obra, then on a large real obra. Test warm cache, cold cache, stale hash, missing guardian, Bubble 429/1015 during guardian/current-row lookup, and concurrent row changes.
 
-Do not enable v4 against the current motor. Because `estrutura_inalterada=true` is already a v2 snapshot signal, an unsupported v4 request could be interpreted as an empty snapshot recalculation.
+Do not enable v4 against the current motor. Because `estrutura_inalterada=true` is already a v2 snapshot signal, the documented v4 request is synchronously rejected with `atividade_obra_snapshot is required when estrutura_inalterada=true`; it cannot reach the intended delta flow.
 
 ## Repository And Deployment
 
@@ -269,5 +269,5 @@ Required release order:
 - Canonical JSON normalization and hash algorithm.
 - Maximum guardian payload size returned by Bubble object GET.
 - Candidate affected-row calculation for each event type before date hydration.
-- Whether current status is required alongside dates to preserve started/non-movable rows.
+- Exact Data API status values and normalization needed to preserve started/non-movable rows; live status hydration itself is required.
 - Historical midnight-event cleanup policy.

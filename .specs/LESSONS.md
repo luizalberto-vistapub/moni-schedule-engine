@@ -141,7 +141,7 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 
 ### L-028
 - **Lesson**: Treat in-memory schedule bases as disposable accelerators and recover cold caches from a durable source inside the same job.
-- **Grounding**: Render instance recycling already interrupted long jobs, so a motor-only memory cache cannot safely own guardian bases or require users to resend them manually after restart.
+- **Grounding**: A Live job lost all signals and the instance was later observed with recent uptime; this does not prove restart causality, but it confirms that motor memory cannot be treated as durable across instance lifecycles.
 - **Scope**: Render lifecycle, motor caching, guardian payload resolution, and `BASE_UNKNOWN` handling.
 
 ### L-029
