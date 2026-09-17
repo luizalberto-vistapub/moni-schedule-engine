@@ -273,6 +273,13 @@
 - **Date**: 2026-09-17
 - **Status**: active
 
+### AD-035
+- **Decision**: After each cascaded activity date change, revalidate finish-to-start service dependencies against the latest date of all predecessor occurrences, including clones. Shift only movable affected service rows, preserving business-day spacing and later valid dates; only-date events remain non-cascading.
+- **Reason**: FK0002's structural payload has a duration-five master but only its first occurrence in historical rows. Zero-delta historical replay restored release 2026-09-16 while generated clones ended 2026-09-21, undoing the generator's correct release date 2026-09-22.
+- **Scope**: Structural and snapshot cascade date recalculation; guardian v4 must preserve the same finish-to-start boundary.
+- **Date**: 2026-09-17
+- **Status**: active
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-17
@@ -280,6 +287,7 @@
 - **Feature**: Replace the unreliable event-replay delta v3 with a guardian-based payload v4 while keeping full v2 recalculation stable.
 - **Phase / Task**: Diagnosis and Bubble-side containment/design complete; motor v4 implementation has not started.
 - **V2 follow-up**: `702ec3f` implements calendar-day paralysis and ordered new-event application over current snapshots. Build and 191 sequential tests pass, including delay/paralysis/delay/paralysis across separate requests and within one request. Local implementation only; not pushed or deployed. Feature evidence: `.specs/features/paralysis-calendar-days/`.
+- **Clone-boundary follow-up**: `dc71b0e` repairs cascade dependency dates after historical/current shifting. FK0002 Live attachment confirmed duration-five master, release dependency, sparse predecessor history, and zero-delta old event; local synthetic regressions reproduced release 2026-09-16 and now require 2026-09-22 after final occurrence 2026-09-21. Build and 194 sequential tests pass. Local only, no push/deploy; feature evidence: `.specs/features/cascade-clone-boundary/`.
 - **Completed**: v3 root-cause analysis; v3 disabled in Bubble Test; Bubble reports guardian fields/workflows and v4 payload builder applied behind the disabled key; recoverable refusal codes configured for silent full fallback; current motor HTML error sanitization, lookup retry heartbeat, and terminal webhook ordering are on `main`; first full-path work-start payload inspected and accepted as valid v2 input.
 - **Verified Test payload**: `payload_version=2`, `mode=recalculate`, `estrutura_inalterada=true`, explicit obra start `2026-10-01`, one `work_start_delayed` event for `2026-10-16`, zero old events, 4,676 editable/not-started snapshot rows, 4,676 unique external IDs, and no duplicates. Expected result is 4,676 date patches plus one new event.
 - **Target v4 contract**: request sends `base.base_id`, `base.base_hash`, target external ID, new date/type, and only `events_json`; motor resolves/validates the guardian, reads current affected-row dates from Bubble, applies the event, and patches only changed rows.
