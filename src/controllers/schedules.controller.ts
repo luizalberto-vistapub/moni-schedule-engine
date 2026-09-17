@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError, type ZodIssue } from "zod";
 import { BaseStateInvalidError, BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches, persistScheduleDeltaMotorPatches, StateDriftError } from "../services/bubble-bulk.service.js";
-import { addBusinessDays, isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
+import { isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
 import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
@@ -456,6 +456,8 @@ function recalculateEventOverrideKey(event: Record<string, unknown>): string {
 }
 
 function activeRecalculateEvents(payload: SchedulePayload): Record<string, unknown>[] {
+  // Snapshot dates already include the historical events.
+  if (isSnapshotRecalculate(payload)) return payload.events_json;
   const currentEventKeys = new Set(
     payload.events_json
       .map(recalculateEventOverrideKey)
@@ -770,7 +772,8 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
       const previousDate = previousDates.get(activityLineKey(line.atividadeId, line.clone_index));
       if (previousDate) return withLineDate(line, previousDate, payload);
       if (line.data_programada < fromDate || days === 0) return line;
-      return withLineDate(line, formatDateOnly(addBusinessDays(parseDateOnly(line.data_programada), days, payload.dias_trabalho_semana)), payload);
+      const delayedDate = addDays(parseDateOnly(line.data_programada), days);
+      return withLineDate(line, formatDateOnly(nextBusinessDay(delayedDate, payload.dias_trabalho_semana)), payload);
     })
     /* v8 ignore next -- deterministic tie-breaker fallback for equal generated dates and orders. */
     .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
@@ -1272,17 +1275,41 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
 }
 
 function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
+  if (isSnapshotRecalculate(payload) && payload.events_json.length > 1) {
+    let currentPayload = payload;
+    let result = snapshotEngineResult(payload);
+    const normalizedDates: NormalizedDate[] = [];
+    for (const event of payload.events_json) {
+      const eventPayload = { ...currentPayload, events_old: [], events_json: [event] };
+      result = calculateScheduleResult(eventPayload);
+      normalizedDates.push(...(result.normalizedDates || []));
+      const snapshot = result.lines.map((line) => ({
+        ...line.raw,
+        dataInicioPrevista: line.data_programada,
+        dataFimPrevista: line.data_programada
+      }));
+      currentPayload = {
+        ...currentPayload,
+        obra_json: eventType(event) === "work_start_delayed"
+          ? applyRecalculateEvents(eventPayload).obra_json
+          : currentPayload.obra_json,
+        atividade_obra_snapshot: snapshot,
+        atividade_obra_json: snapshot
+      };
+    }
+    return { ...result, normalizedDates: uniqueNormalizedDates(normalizedDates) };
+  }
   validateDeltaScope(payload);
 
   const initialResult = isSnapshotRecalculate(payload)
     ? snapshotEngineResult(payload)
     : runScheduleEngine(payload);
 
-  const recalculatedResult = applyActivityDateChangeRecalculation(
+  const recalculatedResult = applyFromDateDelayedRecalculation(
     payload,
-    applyPurchaseChainRecalculation(
+    applyActivityDateChangeRecalculation(
       payload,
-      applyFromDateDelayedRecalculation(
+      applyPurchaseChainRecalculation(
         payload,
         applyWorkStartSnapshotRecalculation(payload, initialResult)
       )

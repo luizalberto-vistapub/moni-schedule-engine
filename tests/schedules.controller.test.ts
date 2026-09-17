@@ -477,6 +477,101 @@ describe("schedule controllers", () => {
     });
   });
 
+  it.each([5, 6] as const)("applies ten calendar days after historical adjustments for a %i-day week", async (weekDays) => {
+    const dates = ["2026-10-15", "2026-10-23", "2026-10-19", "2026-10-21", "2026-10-22", "2026-10-23"];
+    const snapshot = dates.map((date, index) => ({
+      "unique id": `ao_${index}`,
+      id_atividade_obra_externo: `serv_${index}|amb_1|1`,
+      atividade: `serv_${index}`,
+      tipo: "Servico",
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: index === 5 ? "Concluida" : "Nao iniciada",
+      scopeRole: "editable"
+    }));
+    const response = await request(app)
+      .post("/api/v1/schedules/recalculate")
+      .send(basePayload({
+        payload_version: 2,
+        versao_cronograma_unique_id: "versao_2",
+        previous_version_id: "versao_1",
+        mode: "recalculate",
+        estrutura_inalterada: true,
+        dias_trabalho_semana: weekDays,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-10-16" }],
+        atividade_obra_snapshot: snapshot,
+        master_dependencies: [{ atividade: "serv_4", deps: ["serv_1"] }],
+        events_old: [
+          { tipo: "work_start_delayed", data: "2026-10-16" },
+          { tipo: "activity_date_changed_cascade", atividade: "serv_1", id_atividade_obra_externo: "serv_1|amb_1|1", data: "2026-10-23" },
+          { tipo: "activity_date_changed_only", atividade: "serv_2", id_atividade_obra_externo: "serv_2|amb_1|1", data: "2026-10-19" }
+        ],
+        events_json: [{ type: "from_date_delayed", from: "2026-10-16", days: 10 }]
+      }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+    expect(patches.ao_1).toEqual({ dataInicioPrevista: "2026-11-02T12:00:00.000Z", dataFimPrevista: "2026-11-02T12:00:00.000Z" });
+    expect(patches.ao_2).toEqual({ dataInicioPrevista: "2026-10-29T12:00:00.000Z", dataFimPrevista: "2026-10-29T12:00:00.000Z" });
+    const saturdayResult = weekDays === 5 ? "2026-11-02T12:00:00.000Z" : "2026-10-31T12:00:00.000Z";
+    expect(patches.ao_3).toEqual({ dataInicioPrevista: saturdayResult, dataFimPrevista: saturdayResult });
+    expect(patches.ao_4).toEqual({ dataInicioPrevista: "2026-11-02T12:00:00.000Z", dataFimPrevista: "2026-11-02T12:00:00.000Z" });
+    expect(patches.ao_0).toBeUndefined();
+    expect(patches.ao_5).toBeUndefined();
+  });
+
+  it.each([false, true])("preserves delay/paralysis/delay/paralysis order (single request: %s)", async (singleRequest) => {
+    let snapshot = ["2026-10-19", "2026-10-20"].map((date, index) => ({
+      "unique id": `seq_${index}`,
+      id_atividade_obra_externo: `serv_${index}|amb_1|1`,
+      atividade: `serv_${index}`,
+      tipo: "Servico",
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Nao iniciada",
+      scopeRole: "editable"
+    }));
+    const events = [
+      { type: "activity_date_changed_only", atividade: "serv_0", id_atividade_obra_externo: "serv_0|amb_1|1", data: "2026-10-23" },
+      { type: "from_date_delayed", from: "2026-10-16", days: 10 },
+      { type: "activity_date_changed_only", atividade: "serv_0", id_atividade_obra_externo: "serv_0|amb_1|1", data: "2026-11-04" },
+      { type: "from_date_delayed", from: "2026-10-16", days: 10 }
+    ];
+    const expected = [
+      ["2026-10-23", "2026-10-20"],
+      ["2026-11-02", "2026-10-30"],
+      ["2026-11-04", "2026-10-30"],
+      ["2026-11-16", "2026-11-09"]
+    ];
+    const batches = singleRequest ? [events] : events.map((event) => [event]);
+    for (let index = 0; index < batches.length; index += 1) {
+      vi.mocked(fetch).mockClear();
+      const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+        payload_version: 2,
+        mode: "recalculate",
+        estrutura_inalterada: true,
+        versao_cronograma_unique_id: `version_${index + 1}`,
+        previous_version_id: `version_${index}`,
+        obra_json: [{ id: "obra_1", dataInicio: "2026-10-16" }],
+        atividade_obra_snapshot: snapshot,
+        events_old: singleRequest ? [] : events.slice(0, index),
+        events_json: batches[index]
+      }));
+      expect(response.status).toBe(202);
+      await waitForDoneWebhook();
+      for (const [url, init] of fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")) {
+        const row = snapshot.find((record) => String(url).endsWith(`/${record["unique id"]}`))!;
+        const patch = JSON.parse(String((init as RequestInit).body));
+        row.dataInicioPrevista = patch.dataInicioPrevista.slice(0, 10);
+        row.dataFimPrevista = patch.dataFimPrevista.slice(0, 10);
+      }
+      expect(snapshot.map((row) => row.dataInicioPrevista)).toEqual(expected[singleRequest ? 3 : index]);
+      expect(snapshot.map((row) => row.dataFimPrevista)).toEqual(expected[singleRequest ? 3 : index]);
+    }
+  });
+
   it("applies from date paralysis days during recalculation", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")
