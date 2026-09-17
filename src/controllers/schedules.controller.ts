@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError, type ZodIssue } from "zod";
 import { BaseStateInvalidError, BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches, persistScheduleDeltaMotorPatches, StateDriftError } from "../services/bubble-bulk.service.js";
-import { isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
+import { addBusinessDays, isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
 import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
@@ -972,6 +972,46 @@ function validateDeltaScope(payload: SchedulePayload): void {
   }
 }
 
+function enforceCascadeServiceDependencies(payload: SchedulePayload, lines: ScheduleLine[], affectedActivityIds: Set<string>): ScheduleLine[] {
+  const dependencies = dependencyIdsByActivity(payload);
+  const linesByActivity = new Map<string, ScheduleLine[]>();
+  for (const line of lines) {
+    if (line.tipo !== "Servi\u00e7o") continue;
+    linesByActivity.set(line.atividadeId, [...(linesByActivity.get(line.atividadeId) || []), line]);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (activityId: string): void => {
+    if (visited.has(activityId) || visiting.has(activityId) || !affectedActivityIds.has(activityId)) return;
+    visiting.add(activityId);
+    const predecessorIds = dependencies.get(activityId) || [];
+    for (const predecessorId of predecessorIds) visit(predecessorId);
+    const predecessorDates = predecessorIds.flatMap((id) => (linesByActivity.get(id) || []).map((line) => line.data_programada));
+    const movable = (linesByActivity.get(activityId) || []).filter((line) => lineCanMove(payload, line));
+    if (predecessorDates.length && movable.length) {
+      const endDate = predecessorDates.sort().at(-1)!;
+      const earliest = movable.map((line) => line.data_programada).sort()[0]!;
+      const required = formatDateOnly(addBusinessDays(parseDateOnly(endDate), 1, payload.dias_trabalho_semana));
+      if (earliest < required) {
+        let businessDays = 0;
+        let cursor = nextBusinessDay(parseDateOnly(earliest), payload.dias_trabalho_semana);
+        while (formatDateOnly(cursor) < required) {
+          cursor = addBusinessDays(cursor, 1, payload.dias_trabalho_semana);
+          businessDays += 1;
+        }
+        linesByActivity.set(activityId, (linesByActivity.get(activityId) || []).map((line) => lineCanMove(payload, line)
+          ? withLineDate(line, formatDateOnly(addBusinessDays(parseDateOnly(line.data_programada), businessDays, payload.dias_trabalho_semana)), payload)
+          : line));
+      }
+    }
+    visiting.delete(activityId);
+    visited.add(activityId);
+  };
+  for (const activityId of affectedActivityIds) visit(activityId);
+  const updated = new Map([...linesByActivity.values()].flat().map((line) => [line.atividade_obra_id_externo, line]));
+  return lines.map((line) => updated.get(line.atividade_obra_id_externo) || line);
+}
+
 function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
   if (payload.mode !== "recalculate") return result;
 
@@ -1024,6 +1064,9 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
       if (!lineOriginalDate) return line;
       return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
     });
+    if (type === "activity_date_changed_cascade") {
+      lines = enforceCascadeServiceDependencies(payload, lines, affectedActivityIds);
+    }
   }
 
   lines = lines

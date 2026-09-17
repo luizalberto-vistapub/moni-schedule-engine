@@ -665,6 +665,95 @@ describe("schedule controllers", () => {
     });
   });
 
+  it.each([false, true])("keeps cascade release after all predecessor clones (snapshot: %s)", async (snapshotMode) => {
+    const dates = ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18", "2026-09-21"];
+    const snapshot = [
+      { atividade: "root", "unique id": "axo_root", id_atividade_obra_externo: "root|amb_1|1", tipo: "Servico", dataInicioPrevista: "2026-09-14", status: "Nao iniciada" },
+      ...dates.slice(0, snapshotMode ? 5 : 1).map((date, index) => ({ atividade: "mount", "unique id": `axo_mount_${index + 1}`, id_atividade_obra_externo: `mount|amb_1|${index + 1}`, tipo: "Servico", dataInicioPrevista: date, status: "Nao iniciada" })),
+      { atividade: "release", "unique id": "axo_release", id_atividade_obra_externo: "release|amb_1|1", tipo: "Servico", dataInicioPrevista: "2026-09-16", status: "Nao iniciada" },
+      { atividade: "next", "unique id": "axo_next", id_atividade_obra_externo: "next|amb_1|1", tipo: "Servico", dataInicioPrevista: "2026-09-17", status: "Nao iniciada" }
+    ];
+    const event = { tipo: "activity_date_changed_cascade", atividade: "root", id_atividade_obra_externo: "root|amb_1|1", data: "2026-09-14" };
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      mode: "recalculate",
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      estrutura_inalterada: snapshotMode,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-09-14" }],
+      atividades_json: [
+        { id: "next", nome: "Next", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["release"] },
+        { id: "release", nome: "Release", tipo: "Servico", ordem: 2, duracao: 1, interdependenciasMasterIds: ["mount"] },
+        { id: "mount", nome: "Mount", tipo: "Servico", ordem: 2, duracao: 5, interdependenciasMasterIds: ["root"] },
+        { id: "root", nome: "Root", tipo: "Servico", ordem: 1, duracao: 1 }
+      ],
+      atividade_obra_json: snapshotMode ? [] : snapshot,
+      atividade_obra_snapshot: snapshotMode ? snapshot : [],
+      events_old: snapshotMode ? [] : [event],
+      events_json: snapshotMode ? [event] : []
+    }));
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    if (snapshotMode) {
+      const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+        .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+      expect(patches.axo_release).toMatchObject({ dataInicioPrevista: "2026-09-22T12:00:00.000Z" });
+      expect(patches.axo_next).toMatchObject({ dataInicioPrevista: "2026-09-23T12:00:00.000Z" });
+    } else {
+      const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      expect(records.filter((row) => row.id_atividade_obra_externo.startsWith("mount|")).map((row) => row.dataInicioPrevista.slice(0, 10))).toEqual(dates);
+      expect(records.find((row) => row.id_atividade_obra_externo === "release|amb_1|1")).toMatchObject({ dataInicioPrevista: "2026-09-22T12:00:00.000Z" });
+      expect(records.find((row) => row.id_atividade_obra_externo === "next|amb_1|1")).toMatchObject({ dataInicioPrevista: "2026-09-23T12:00:00.000Z" });
+    }
+  });
+
+  it("preserves working-day clone spacing, later dates and completed rows in cascade repair", async () => {
+    const rows = [
+      ["root", 1, "2026-09-14", "Nao iniciada"],
+      ["mount", 1, "2026-09-18", "Nao iniciada"],
+      ["mount", 2, "2026-09-21", "Nao iniciada"],
+      ["release", 1, "2026-09-16", "Nao iniciada"],
+      ["release", 2, "2026-09-17", "Nao iniciada"],
+      ["next", 1, "2026-09-18", "Nao iniciada"],
+      ["late", 1, "2026-09-29", "Nao iniciada"],
+      ["done", 1, "2026-09-16", "Concluida"]
+    ] as const;
+    const snapshot = rows.map(([activity, clone, date, status]) => ({
+      "unique id": `${activity}_${clone}`,
+      atividade: activity,
+      id_atividade_obra_externo: `${activity}|amb_1|${clone}`,
+      tipo: "Servico",
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status
+    }));
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      mode: "recalculate",
+      payload_version: 2,
+      estrutura_inalterada: true,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-09-14" }],
+      atividade_obra_snapshot: snapshot,
+      master_dependencies: [
+        { atividade: "next", deps: ["release"] },
+        { atividade: "release", deps: ["mount"] },
+        { atividade: "late", deps: ["mount"] },
+        { atividade: "done", deps: ["mount"] },
+        { atividade: "mount", deps: ["root"] }
+      ],
+      events_json: [{ type: "activity_date_changed_cascade", atividade: "root", id_atividade_obra_externo: "root|amb_1|1", data: "2026-09-14" }]
+    }));
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+    expect(patches.release_1).toEqual({ dataInicioPrevista: "2026-09-22T12:00:00.000Z", dataFimPrevista: "2026-09-22T12:00:00.000Z" });
+    expect(patches.release_2).toEqual({ dataInicioPrevista: "2026-09-23T12:00:00.000Z", dataFimPrevista: "2026-09-23T12:00:00.000Z" });
+    expect(patches.next_1).toEqual({ dataInicioPrevista: "2026-09-24T12:00:00.000Z", dataFimPrevista: "2026-09-24T12:00:00.000Z" });
+    expect(patches.late_1).toBeUndefined();
+    expect(patches.done_1).toBeUndefined();
+  });
+
   it("changes only the selected atividade obra date without dependents", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       const rows = String((init as { body?: string })?.body || "").split("\n").filter(Boolean);
