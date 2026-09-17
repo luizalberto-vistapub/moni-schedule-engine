@@ -60,6 +60,22 @@ Isso foi corrigido no motor. Antes de enviar qualquer terminal `done` ou `error`
 
 Nao ha mudanca obrigatoria no Bubble: continuar ignorando webhooks de jobs/versoes ja encerrados segue correto como protecao defensiva. A diferenca e que o motor nao deve mais produzir progresso depois de um terminal.
 
+## Mensagem Publica De Erro
+
+O motor tambem passou a sanitizar `error_message` antes de enviar para o Bubble. Se o Bubble/Data API ou Cloudflare devolver HTML, esse HTML fica apenas nos logs internos do motor e nao vai mais para a tela.
+
+Para Cloudflare/rate limit, a mensagem publica passa a ser curta:
+
+```text
+Bubble limitou temporariamente as chamadas do cronograma. Tente novamente em alguns minutos.
+```
+
+Para outro HTML inesperado, a mensagem publica tambem fica curta:
+
+```text
+Bubble retornou uma resposta inesperada ao gravar o cronograma.
+```
+
 ## O Que Observar Nos Logs
 
 Durante rate limit transitorio, podem aparecer logs como:

@@ -52,6 +52,23 @@ function scheduleErrorCode(error: unknown): string {
   return "SCHEDULE_ENGINE_ERROR";
 }
 
+function looksLikeHtml(text: string): boolean {
+  return /<\s*(?:!doctype|html|head|body|title|div|span|p|br)\b/i.test(text) || /<\/[a-z][^>]*>/i.test(text);
+}
+
+function publicScheduleErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return "Unexpected error";
+  if (error instanceof BubbleBulkRequestError) {
+    if (/cloudflare|error 1015|rate limited|with 429/i.test(error.message)) {
+      return "Bubble limitou temporariamente as chamadas do cronograma. Tente novamente em alguns minutos.";
+    }
+    if (looksLikeHtml(error.message)) {
+      return "Bubble retornou uma resposta inesperada ao gravar o cronograma.";
+    }
+  }
+  return error.message;
+}
+
 function requestLog(req: ObservedRequest): Logger | undefined {
   /* v8 ignore next -- Express request logs are optional in production wiring. */
   return req.log;
@@ -439,6 +456,8 @@ function recalculateEventOverrideKey(event: Record<string, unknown>): string {
 }
 
 function activeRecalculateEvents(payload: SchedulePayload): Record<string, unknown>[] {
+  // Snapshot dates already include the historical events.
+  if (isSnapshotRecalculate(payload)) return payload.events_json;
   const currentEventKeys = new Set(
     payload.events_json
       .map(recalculateEventOverrideKey)
@@ -753,7 +772,8 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
       const previousDate = previousDates.get(activityLineKey(line.atividadeId, line.clone_index));
       if (previousDate) return withLineDate(line, previousDate, payload);
       if (line.data_programada < fromDate || days === 0) return line;
-      return withLineDate(line, formatDateOnly(addBusinessDays(parseDateOnly(line.data_programada), days, payload.dias_trabalho_semana)), payload);
+      const delayedDate = addDays(parseDateOnly(line.data_programada), days);
+      return withLineDate(line, formatDateOnly(nextBusinessDay(delayedDate, payload.dias_trabalho_semana)), payload);
     })
     /* v8 ignore next -- deterministic tie-breaker fallback for equal generated dates and orders. */
     .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
@@ -952,6 +972,46 @@ function validateDeltaScope(payload: SchedulePayload): void {
   }
 }
 
+function enforceCascadeServiceDependencies(payload: SchedulePayload, lines: ScheduleLine[], affectedActivityIds: Set<string>): ScheduleLine[] {
+  const dependencies = dependencyIdsByActivity(payload);
+  const linesByActivity = new Map<string, ScheduleLine[]>();
+  for (const line of lines) {
+    if (line.tipo !== "Servi\u00e7o") continue;
+    linesByActivity.set(line.atividadeId, [...(linesByActivity.get(line.atividadeId) || []), line]);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (activityId: string): void => {
+    if (visited.has(activityId) || visiting.has(activityId) || !affectedActivityIds.has(activityId)) return;
+    visiting.add(activityId);
+    const predecessorIds = dependencies.get(activityId) || [];
+    for (const predecessorId of predecessorIds) visit(predecessorId);
+    const predecessorDates = predecessorIds.flatMap((id) => (linesByActivity.get(id) || []).map((line) => line.data_programada));
+    const movable = (linesByActivity.get(activityId) || []).filter((line) => lineCanMove(payload, line));
+    if (predecessorDates.length && movable.length) {
+      const endDate = predecessorDates.sort().at(-1)!;
+      const earliest = movable.map((line) => line.data_programada).sort()[0]!;
+      const required = formatDateOnly(addBusinessDays(parseDateOnly(endDate), 1, payload.dias_trabalho_semana));
+      if (earliest < required) {
+        let businessDays = 0;
+        let cursor = nextBusinessDay(parseDateOnly(earliest), payload.dias_trabalho_semana);
+        while (formatDateOnly(cursor) < required) {
+          cursor = addBusinessDays(cursor, 1, payload.dias_trabalho_semana);
+          businessDays += 1;
+        }
+        linesByActivity.set(activityId, (linesByActivity.get(activityId) || []).map((line) => lineCanMove(payload, line)
+          ? withLineDate(line, formatDateOnly(addBusinessDays(parseDateOnly(line.data_programada), businessDays, payload.dias_trabalho_semana)), payload)
+          : line));
+      }
+    }
+    visiting.delete(activityId);
+    visited.add(activityId);
+  };
+  for (const activityId of affectedActivityIds) visit(activityId);
+  const updated = new Map([...linesByActivity.values()].flat().map((line) => [line.atividade_obra_id_externo, line]));
+  return lines.map((line) => updated.get(line.atividade_obra_id_externo) || line);
+}
+
 function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
   if (payload.mode !== "recalculate") return result;
 
@@ -1004,6 +1064,9 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
       if (!lineOriginalDate) return line;
       return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
     });
+    if (type === "activity_date_changed_cascade") {
+      lines = enforceCascadeServiceDependencies(payload, lines, affectedActivityIds);
+    }
   }
 
   lines = lines
@@ -1255,17 +1318,41 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
 }
 
 function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
+  if (isSnapshotRecalculate(payload) && payload.events_json.length > 1) {
+    let currentPayload = payload;
+    let result = snapshotEngineResult(payload);
+    const normalizedDates: NormalizedDate[] = [];
+    for (const event of payload.events_json) {
+      const eventPayload = { ...currentPayload, events_old: [], events_json: [event] };
+      result = calculateScheduleResult(eventPayload);
+      normalizedDates.push(...(result.normalizedDates || []));
+      const snapshot = result.lines.map((line) => ({
+        ...line.raw,
+        dataInicioPrevista: line.data_programada,
+        dataFimPrevista: line.data_programada
+      }));
+      currentPayload = {
+        ...currentPayload,
+        obra_json: eventType(event) === "work_start_delayed"
+          ? applyRecalculateEvents(eventPayload).obra_json
+          : currentPayload.obra_json,
+        atividade_obra_snapshot: snapshot,
+        atividade_obra_json: snapshot
+      };
+    }
+    return { ...result, normalizedDates: uniqueNormalizedDates(normalizedDates) };
+  }
   validateDeltaScope(payload);
 
   const initialResult = isSnapshotRecalculate(payload)
     ? snapshotEngineResult(payload)
     : runScheduleEngine(payload);
 
-  const recalculatedResult = applyActivityDateChangeRecalculation(
+  const recalculatedResult = applyFromDateDelayedRecalculation(
     payload,
-    applyPurchaseChainRecalculation(
+    applyActivityDateChangeRecalculation(
       payload,
-      applyFromDateDelayedRecalculation(
+      applyPurchaseChainRecalculation(
         payload,
         applyWorkStartSnapshotRecalculation(payload, initialResult)
       )
@@ -1554,7 +1641,7 @@ async function processScheduleJob(
       durationMs
     }, "schedule job finished");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
+    const message = publicScheduleErrorMessage(error);
     options.log?.error({ requestId: options.requestId, jobId, failedStep, ...errorLogFields(error) }, "schedule job failed");
     try {
       await drainProcessingWebhooks();
@@ -1620,7 +1707,7 @@ async function handleSchedule(req: ObservedRequest, res: Response, mode: Schedul
     }
 
     if (error instanceof BubbleBulkConfigError || error instanceof BubbleBulkRequestError) {
-      const message = error.message;
+      const message = publicScheduleErrorMessage(error);
       const statusCode = error instanceof BubbleBulkRequestError ? 502 : 500;
       log?.error({ requestId: req.id, ...errorLogFields(error) }, "schedule bulk persistence failed");
       res.status(statusCode).json(buildScheduleErrorResponse(message, error instanceof BubbleBulkRequestError ? "BUBBLE_BULK_REQUEST_ERROR" : "BUBBLE_BULK_CONFIG_ERROR"));

@@ -30,56 +30,76 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Scope**: Skill packaging and release artifacts.
 
 ### L-006
+- **Lesson**: Route Bubble webhooks with the same Bubble version used by the Data API request.
+- **Grounding**: The schedule engine sent bulk writes to `version-63jmi` but webhooks to fixed `version-test`, causing Bubble to return `404 Workflow not found`.
+- **Scope**: Schedule webhooks and Bubble environment routing.
+
+### L-007
+- **Lesson**: Emit a progress webhook before a long persistence phase starts, not only after a successful batch finishes.
+- **Grounding**: A first Atividade x Obra bulk failure prevented any progress webhook from reaching Bubble before the error path.
+- **Scope**: Schedule job progress reporting.
+
+### L-008
+- **Lesson**: Treat rejected optional Bubble metadata fields as retryable omissions when the core record remains valid.
+- **Grounding**: Bubble rejected `localatuacao_option_os_localatua__o` as an unrecognized Atividade x Obra field; retrying without it preserves schedule creation.
+- **Scope**: Bubble bulk and idempotent patch persistence.
+
+### L-009
+- **Lesson**: New schedule creation can still require post-create relation patches when Bubble IDs are needed for self-references.
+- **Grounding**: A `generate` payload for a new obra produced 4,676 Atividade x Obra records and still needed Etapa 3 to patch master/dependency fields after IDs were returned by bulk create.
+- **Scope**: Schedule persistence flow and progress UI expectations.
+
+### L-010
 - **Lesson**: Long Bubble write loops must treat HTTP 429 and transport exceptions as retryable persistence noise before failing the whole job.
 - **Grounding**: FK0002 heavy recalculations hit Cloudflare 1015 and later `fetch failed` during `patch_dates`; retries and cooldowns allowed subsequent large runs to finish.
 - **Scope**: Bubble PATCH persistence and schedule job error handling.
 
-### L-007
+### L-011
 - **Lesson**: Progress webhooks that only move the UI must not be awaited inside the critical persistence loop.
 - **Grounding**: Intermediate `processing` webhook failures produced many 429 logs during FK0002 recalculation and could mask PATCH timing until progress sends were made non-blocking.
 - **Scope**: Schedule controller progress reporting and Bubble webhook integration.
 
-### L-008
+### L-012
 - **Lesson**: Heavy Bubble API tuning needs separate metrics for attempted requests, explicit rate-limit pauses, and elapsed persistence time.
 - **Grounding**: `patchRequestCount` alone mixed transport retries with rate-limit behavior until `pauseCount` and `pausedMs` were added to the patch pool log.
 - **Scope**: Observability for schedule recalculation persistence.
 
-### L-009
+### L-013
 - **Lesson**: Treat Bubble branch `test` as the validation target until production promotion is explicitly requested.
 - **Grounding**: The recalc optimization cycle required repeated commits and pushes only to `codex/bubble-bulk-persistence` while Render/Bubble branch `test` was being measured.
 - **Scope**: Git workflow and deployment validation.
 
-### L-010
+### L-014
 - **Lesson**: Snapshot-only recalculations must require explicit contract anchors instead of deriving business anchors from incidental snapshot extrema.
 - **Grounding**: FK0002 `work_start_delayed` used the minimum snapshot date `2026-04-06` as the work-start anchor, producing a false +301 day shift; regression coverage now rejects missing `obra_json[0].dataInicio`.
 - **Scope**: Schedule recalculation contracts, snapshot payload normalization, and event precedence.
 
-### L-011
+### L-015
 - **Lesson**: A dedup safety net needs its own dropped-row metric, otherwise it can hide the regression it is containing.
 - **Grounding**: Initial schedule Teste 3 persisted the correct 4,676 rows after duplicate defenses, but Bubble correctly noted that ordinary created/persisted counts would not reveal future duplicate generation once dedup runs before persistence.
 - **Scope**: Bulk Atividade x Obra metrics and Bubble audit checklist.
 
-### L-012
+### L-016
 - **Lesson**: Bubble Data API field names must be verified against Swagger, and bulk endpoints may still need operational fallbacks for fields that object endpoints accept.
 - **Grounding**: Swagger exposed `localAtuacao`, while earlier payloads used the internal key `localatuacao_option_os_localatua__o`; later bulk runs still needed a guarded fallback that removes `localAtuacao` when the bulk rejects a lote.
 - **Scope**: Bubble bulk payload mapping, option-set fields, and field-specific retry logic.
 
-### L-013
+### L-017
 - **Lesson**: Metrics for partial bulk recovery must count rows confirmed by lookup as created rows.
 - **Grounding**: Teste 4 showed `createdCount: 1484` despite 4,676 rows in Bubble because rows created before a 400 bulk response were recovered by idempotency lookup but not counted.
 - **Scope**: Bulk retry/reconciliation metrics.
 
-### L-014
+### L-018
 - **Lesson**: Recalculate payload mode controls whether the engine uses a snapshot or regenerates structure; Bubble must not mix structural mode with snapshot-only inputs.
 - **Grounding**: A recovery payload with `estrutura_inalterada=true` and only 360 snapshot rows returned 360 rows by design, while an aditivo with `estrutura_inalterada=false` and empty `atividades_json`/structure blocks failed because `runScheduleEngine` had no structure to generate.
 - **Scope**: Bubble recalculate/aditivo contract and support triage.
 
-### L-015
+### L-019
 - **Lesson**: Event-sourced recalculation paths must separate replay input from persistence output: replay `events_old`, but persist only the new `events_json` event.
 - **Grounding**: The delta motor v3 work found duplicated `EventoCronograma` history and timezone date drift when old events were re-persisted; regression coverage now asserts one new event and calendar-stable event dates.
 - **Scope**: Schedule recalculation contracts, `EventoCronograma` persistence, and Bubble fallback triage.
 
-### L-016
+### L-020
 - **Lesson**: Numeric environment defaults must distinguish missing values from zero, and every Bubble Data API persistence lookup needs retry handling for HTTP 429/Cloudflare 1015.
 - **Grounding**: A Live initial-generation failure returned `Bubble atividade obra lookup failed with 429` during `bulk_create`; investigation found lookup did not retry and `boundedInteger(undefined, ...)` collapsed defaults to minimum values because `Number(null) === 0`.
 - **Scope**: Bubble Data API lookup retry, environment parsing, and schedule persistence defaults.
@@ -93,3 +113,48 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: Fire-and-forget progress sends must be drained before terminal job webhooks.
 - **Grounding**: A Live incident showed `processing` webhooks after a final `error` because detached progress requests could finish after the terminal error path.
 - **Scope**: Async webhook ordering, terminal-state contracts, and Bubble schedule job lifecycle.
+
+### L-023
+- **Lesson**: Public schedule errors should summarize upstream HTML responses instead of forwarding them.
+- **Grounding**: Bubble displays `error_message` in the UI, and Cloudflare/Bubble HTML error pages are too noisy for users while the full body is still available in engine logs.
+- **Scope**: Schedule webhook error messages, API error responses, and external-service failure handling.
+
+### L-024
+- **Lesson**: A fast recalculation base must be the immutable structural materialization, never whichever request happens to belong to the latest active version.
+- **Grounding**: Repeated v3 `STATE_DRIFT` runs used active-version requests from retry/retomada flows and could later nest one delta payload inside another, while the complete v2 fallback succeeded.
+- **Scope**: Bubble version lifecycle, delta base selection, and schedule reconstruction.
+
+### L-025
+- **Lesson**: Event replay over a persisted base requires an explicit event watermark; never replay the entire history when the base request may already contain events.
+- **Grounding**: FK0002 sent all obra events in `events_old` even when an event was already present in the selected base request, allowing the same logical change to be incorporated twice.
+- **Scope**: Event-sourced recalculation contracts and Bubble payload assembly.
+
+### L-026
+- **Lesson**: Calendar-only values must be serialized independently of execution timezone and must not be stored at a UTC day boundary.
+- **Grounding**: The same EventoCronograma record stored at `2026-09-07T00:00:00Z` appeared as both `2026-09-07` and `2026-09-06` in different payloads, changing business-day normalization.
+- **Scope**: Bubble date formatting, EventoCronograma persistence, and schedule date parsing.
+
+### L-027
+- **Lesson**: Use Bubble's current persisted dates as the source of truth for affected rows; historical replay is suitable for audit but not for proving current schedule state.
+- **Grounding**: v3 could only proceed when `base.payload + events_old` reproduced every date exactly, so missing, duplicated, timezone-shifted, or newly interpreted events caused recurring `STATE_DRIFT` despite a healthy full fallback.
+- **Scope**: Delta calculation, Bubble Data API hydration, and drift guards.
+
+### L-028
+- **Lesson**: Treat in-memory schedule bases as disposable accelerators and recover cold caches from a durable source inside the same job.
+- **Grounding**: A Live job lost all signals and the instance was later observed with recent uptime; this does not prove restart causality, but it confirms that motor memory cannot be treated as durable across instance lifecycles.
+- **Scope**: Render lifecycle, motor caching, guardian payload resolution, and `BASE_UNKNOWN` handling.
+
+### L-029
+- **Lesson**: Test stateful recalculation contracts as a sequence of generation, first recalculation, and second recalculation, not only as isolated requests.
+- **Grounding**: Existing v3 tests covered individual success and drift branches but did not catch that a successful delta could become the next base or that event history could be reapplied on the following recalculation.
+- **Scope**: Schedule controller integration tests and Bubble Test acceptance.
+
+### L-030
+- **Lesson**: Do not surface a recoverable optimization failure when the authoritative fallback can complete the same user action.
+- **Grounding**: Bubble displayed `STATE_DRIFT` before automatically succeeding through the full recalculation, making a working operation appear broken.
+- **Scope**: Bubble fallback workflows, webhook error classification, and loading UI.
+
+### L-031
+- **Lesson**: An idempotent bulk retry must prove remote uniqueness after ambiguous partial writes, not only deduplicate the generated input before persistence.
+- **Grounding**: Job `schedule_job_mu2rz12w_pft6xlf5` generated and reported 4,676 unique rows with `dedupDroppedCount=0`, but Bubble held 4,802 rows after 10 retries because 126 external IDs were persisted twice.
+- **Scope**: Atividade x Obra bulk retry reconciliation, eventual-consistency lookups, and terminal persistence verification.

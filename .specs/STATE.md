@@ -8,7 +8,7 @@
 - **Trade-off**: Branch operations must include an explicit equality check before declaring the work done.
 - **Scope**: Git workflow for Bubble bulk persistence and schedule recalculation fixes.
 - **Date**: 2026-08-21
-- **Status**: superseded by AD-008
+- **Status**: superseded by AD-012 and the 2026-09-15 merge to `main`
 
 ### AD-002
 - **Decision**: The Bubble field `ambiente x obra` must be populated from `obra_ambiente_json[]."id ambiente x obra"` only.
@@ -59,14 +59,46 @@
 - **Status**: active
 
 ### AD-008
-- **Decision**: Schedule recalculation changes must be committed and pushed only to `codex/bubble-bulk-persistence` until the user explicitly promotes them.
-- **Reason**: The current validation cycle is happening against Bubble branch `test`, and the user repeatedly requested that `main` remain untouched.
-- **Trade-off**: Branch equality with `main` is no longer the completion criterion for this workstream.
-- **Scope**: Git workflow for schedule recalculation, Bubble persistence, and webhook contract changes.
-- **Date**: 2026-09-13
+- **Decision**: Schedule generation and recalculation endpoints must return HTTP 202 with `job_id` after synchronous payload validation, then continue processing asynchronously and report completion by webhook.
+- **Reason**: Bubble API Connector calls can time out on long schedule jobs; the app needs a quick accepted response while the screen remains locked by the recorded job state.
+- **Trade-off**: The Bubble app must track job state and handle delayed or repeated webhooks instead of relying on the original POST response for final success/failure.
+- **Scope**: `POST /api/v1/schedules/generate`, `POST /api/v1/schedules/recalculate`, response contract, Bubble workflow integration.
+- **Date**: 2026-09-10
 - **Status**: active
 
 ### AD-009
+- **Decision**: Schedule job progress is reported by intermediate webhooks using `status: "processing"`, with final webhooks restricted to `status: "done"` or `status: "error"`.
+- **Reason**: Bubble uses processing webhooks only to update the locked-screen progress UI, while final webhooks close the job lifecycle.
+- **Trade-off**: Consumers must distinguish lifecycle status from progress stage and ignore non-final `processing` updates for completion logic.
+- **Scope**: Schedule webhook payloads and Bubble progress UI.
+- **Date**: 2026-09-10
+- **Status**: active
+
+### AD-010
+- **Decision**: Webhook URLs must be derived from the same Bubble API version sent in the payload unless `BUBBLE_SCHEDULE_WEBHOOK_URL` explicitly overrides it.
+- **Reason**: A fixed `version-test` webhook URL returned 404 when the real test branch payload used `version-63jmi`, even though Data API bulk calls targeted the correct version.
+- **Trade-off**: Payloads must keep carrying the correct `bubble_api_version`; manual URL override should be reserved for exceptional deployments.
+- **Scope**: `src/services/schedule-webhook.service.ts` and Bubble environment routing.
+- **Date**: 2026-09-10
+- **Status**: active
+
+### AD-011
+- **Decision**: Optional Bubble fields rejected as unrecognized by the Data API may be retried without that field when the omission preserves the core schedule record.
+- **Reason**: `localatuacao_option_os_localatua__o` was rejected by Bubble in Atividade x Obra bulk writes; failing the full job for that optional field blocked schedule creation.
+- **Trade-off**: Optional metadata may be omitted in that environment until the Bubble field exists, but schedule persistence continues.
+- **Scope**: Bubble Atividade x Obra create/patch persistence and retry handling.
+- **Date**: 2026-09-10
+- **Status**: active
+
+### AD-012
+- **Decision**: Schedule recalculation changes must be committed and pushed only to `codex/bubble-bulk-persistence` until the user explicitly promotes them.
+- **Reason**: The validation cycle happened against Bubble branch `test`, and the user kept `main` untouched until explicitly requesting promotion.
+- **Trade-off**: Branch equality with `main` was not the completion criterion until production promotion was requested.
+- **Scope**: Git workflow for schedule recalculation, Bubble persistence, and webhook contract changes.
+- **Date**: 2026-09-13
+- **Status**: superseded by the 2026-09-15 merge to `main`
+
+### AD-013
 - **Decision**: Recalculation completion depends on terminal webhooks (`done`/`error`), while intermediate `processing` webhooks must not block PATCH persistence.
 - **Reason**: Bubble uses `processing` only to move the screen and renew the 600 s guardrail; a failed/intermittent progress webhook should not stop thousands of successful PATCHes.
 - **Trade-off**: The UI can miss an intermediate progress update and still rely on the terminal webhook to close or fail the loading state.
@@ -74,7 +106,7 @@
 - **Date**: 2026-09-13
 - **Status**: active
 
-### AD-010
+### AD-014
 - **Decision**: Bubble PATCH persistence must retry both HTTP 429 and transport failures, logging `patchRequestCount`, `pauseCount`, and `pausedMs` for heavy recalculations.
 - **Reason**: Real FK0002 tests showed Cloudflare 1015 rate limits, transient `fetch failed` transport errors, and the need to distinguish retry overhead from pause overhead.
 - **Trade-off**: Final job duration may include deliberate waits, but the process avoids aborting large recalculations because of recoverable network noise.
@@ -82,7 +114,7 @@
 - **Date**: 2026-09-13
 - **Status**: active
 
-### AD-011
+### AD-015
 - **Decision**: The current Bubble webhook contract for branch `test` is documented in `docs/recalculation-webhook-contract-2026-09-13.md`.
 - **Reason**: Bubble currently accepts a specific field set and treats `processing`, `done`, and other statuses differently; the engine needs this explicit contract to design visible progress correctly.
 - **Trade-off**: Future Bubble workflow changes must update the document or supersede this decision.
@@ -90,7 +122,7 @@
 - **Date**: 2026-09-13
 - **Status**: active
 
-### AD-012
+### AD-016
 - **Decision**: Schedule progress stages 1, 3, and 4 are UI milestones, while stage 2 carries the real long-running persistence progress.
 - **Reason**: Bubble logs from 13/09 showed stages 1, 3, and 4 completing in milliseconds and almost all elapsed work happening in stage 2; inventing artificial duration in the engine would make the UI less truthful.
 - **Trade-off**: Bubble should render stages 1, 3, and 4 as fast transitions, or separately choose a single global progress bar if it wants proportional elapsed-time UX.
@@ -98,7 +130,7 @@
 - **Date**: 2026-09-13
 - **Status**: active
 
-### AD-013
+### AD-017
 - **Decision**: Snapshot-only `work_start_delayed` recalculations must require an explicit `obra_json[0].dataInicio`, and a new work-start event resets prior activity-level events.
 - **Reason**: FK0002 showed that deriving the work start from the minimum snapshot date can anchor on an old isolated line and apply a huge false delta; stale activity events can then pull part of the schedule back to the old timeline.
 - **Trade-off**: Bubble must include the current real work start when sending `work_start_delayed`; snapshot-only payloads missing that field now fail fast instead of guessing.
@@ -106,7 +138,7 @@
 - **Date**: 2026-09-14
 - **Status**: active
 
-### AD-014
+### AD-018
 - **Decision**: Initial schedule duplicate protection uses pre-persistence deduplication plus a separate `dedupDroppedCount` metric.
 - **Reason**: Real Bubble branch `test` runs showed duplicate Atividade x Obra rows in purchase/project lines derived from service anchors. Deduplication prevents bad writes, but without a separate metric the safety net would hide a generator regression.
 - **Trade-off**: A healthy run should report `dedupDroppedCount: 0`; any value above zero means the defect was contained but still needs investigation.
@@ -114,7 +146,7 @@
 - **Date**: 2026-09-14
 - **Status**: active
 
-### AD-015
+### AD-019
 - **Decision**: `createdCount` must include Atividade x Obra rows recovered by idempotency lookup after a failed/partial bulk response.
 - **Reason**: Teste 4 persisted 4,676 rows, but `createdCount` reported only 1,484 because rows created by the first POST and later recovered by lookup were not counted.
 - **Trade-off**: `createdCount` now represents successful row creation from both direct success responses and confirmed partial-create recovery.
@@ -122,15 +154,15 @@
 - **Date**: 2026-09-14
 - **Status**: active
 
-### AD-016
+### AD-020
 - **Decision**: Send Bubble Data API field `localAtuacao` for Atividade x Obra, not the internal option-set key `localatuacao_option_os_localatua__o`; if a bulk containing `localAtuacao` is rejected, retry without the field through the guarded idempotency path.
-- **Reason**: Bubble Swagger exposes `localAtuacao`, while production logs showed bulk rejections around the old/internal key and later around the field in bulk context. The fallback keeps schedule generation available while Bubble can backfill Local de Atuação afterward.
-- **Trade-off**: Some rows may persist without Local de Atuação when Bubble bulk rejects the field; Bubble must run "Preencher Local de Atuação da obra" afterward. `bulkRetryCount` can be high for this operational fallback and should not be confused with duplicate generation.
+- **Reason**: Bubble Swagger exposes `localAtuacao`, while production logs showed bulk rejections around the old/internal key and later around the field in bulk context. The fallback keeps schedule generation available while Bubble can backfill Local de Atuacao afterward.
+- **Trade-off**: Some rows may persist without Local de Atuacao when Bubble bulk rejects the field; Bubble must run "Preencher Local de Atuacao da obra" afterward. `bulkRetryCount` can be high for this operational fallback and should not be confused with duplicate generation.
 - **Scope**: Bubble Atividade x Obra bulk payload mapping and fallback behavior.
 - **Date**: 2026-09-14
 - **Status**: active
 
-### AD-017
+### AD-021
 - **Decision**: For `payload_version=2`, `mode="recalculate"`, `estrutura_inalterada=true`, the snapshot is the complete universe of the recalculation; for `estrutura_inalterada=false`, Bubble must send the full structural inputs needed by `runScheduleEngine`.
 - **Reason**: A "recalculate after error" payload with only 360 snapshot rows returned 360 rows by design, and an aditivo payload with `estrutura_inalterada=false` but empty `atividades_json`/environment/composition inputs failed at stage 2.
 - **Trade-off**: Bubble cannot use a partial failed-version snapshot to recover a failed initial build, and structural aditivos require payloads closer to initial generation.
@@ -138,15 +170,23 @@
 - **Date**: 2026-09-14
 - **Status**: active
 
-### AD-018
+### AD-022
 - **Decision**: `payload_version=3` with `scope.tipo="delta_motor"` is the supported fast path for pencil activity-date recalculations with dependents, using `base.payload + events_old` replay and in-place PATCH of only changed Atividade x Obra rows.
 - **Reason**: Bubble graph traversal for dependent activities times out on large works; the engine can rebuild the active structure deterministically, replay the event history, compute the delta, and validate drift before writing.
 - **Trade-off**: The v3 path depends on complete preserved active-version payloads and trustworthy event history; when `BASE_STATE_INVALID` or `STATE_DRIFT` occurs, Bubble must fall back to the v2 full payload path.
 - **Scope**: Schedule recalculation contracts, event persistence, Bubble fallback behavior, and Atividade x Obra date patching.
 - **Date**: 2026-09-15
+- **Status**: superseded by AD-028
+
+### AD-023
+- **Decision**: Atividade x Obra bulk create concurrency is opt-in through `BUBBLE_BULK_CREATE_CONCURRENCY`, with default `1`.
+- **Reason**: Bubble bulk create is slow on large initial schedules, but increasing parallelism can hit Bubble/Cloudflare limits; production behavior must remain unchanged unless the environment explicitly opts in.
+- **Trade-off**: Test environments can tune throughput with low concurrency values while retaining guarded bulk retry/reconciliation.
+- **Scope**: Bubble Atividade x Obra bulk create persistence and schedule creation performance.
+- **Date**: 2026-09-15
 - **Status**: active
 
-### AD-019
+### AD-024
 - **Decision**: Atividade x Obra Data API lookups must retry retryable Bubble/Cloudflare failures before failing the schedule job.
 - **Reason**: Live showed `BUBBLE_BULK_REQUEST_ERROR` during `bulk_create` because the idempotency lookup received Cloudflare 1015/HTTP 429 and failed immediately, even though PATCH paths already treated 429 as transient persistence noise.
 - **Trade-off**: A rate-limited lookup can add retry/cooldown time, but avoids failing long initial schedule generation on a temporary Cloudflare ban.
@@ -170,40 +210,90 @@
 - **Date**: 2026-09-15
 - **Status**: active
 
+### AD-027
+- **Decision**: Public schedule `error_message` values must not include raw upstream HTML responses.
+- **Reason**: Bubble displays `error_message` to the user; Cloudflare/Bubble HTML pages are noisy and leak implementation details.
+- **Trade-off**: Operators see a shorter public message and must use engine logs for the full upstream response body.
+- **Scope**: Schedule controller error webhooks and synchronous schedule error responses.
+- **Date**: 2026-09-16
+- **Status**: active
+
+### AD-028
+- **Decision**: Disable the payload v3 delta shortcut and route date recalculations through the complete payload v2 path until the guardian-based v4 contract passes sequential recalculation tests.
+- **Reason**: Real Bubble runs repeatedly entered `STATE_DRIFT` and then succeeded through the complete fallback, so the shortcut added latency and a visible false failure without providing a reliable fast path.
+- **Trade-off**: Recalculations remain slower and carry the complete snapshot while v4 is built, but users receive one authoritative result without the known failing preflight.
+- **Scope**: Bubble feature flags, date recalculation routing, user-visible error handling, and motor compatibility.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-029
+- **Decision**: Payload v4 uses the last successfully completed structural version as an immutable guardian, identified by `base_id` and a motor-produced canonical `base_hash`; delta executions never replace the guardian.
+- **Reason**: The latest active request can be a retry, fallback, or nested delta, while the last structural materialization is the stable source for identities and dependencies. Bubble already retains one payload per obra, so protecting the guardian does not require a second persisted payload.
+- **Trade-off**: Bubble cleanup must preserve the guardian until a replacement structural version is confirmed, and the motor must validate the referenced payload before using it.
+- **Scope**: Bubble `VersaoCronograma` lifecycle, payload cleanup, structural recalculation contract, and v4 base resolution.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-030
+- **Decision**: In v4, the motor must use the guardian for structure and dependencies but read current dates for the affected Atividade x Obra rows from Bubble before applying the new event; `events_old` is not part of the v4 request.
+- **Reason**: Reconstructing current dates from a historical request plus an unbounded event stream fails when an event is duplicated, formatted on another calendar day, omitted, or replayed by a newer algorithm.
+- **Trade-off**: Each delta requires Data API reads for the affected rows, but it removes historical replay as the source of truth and limits drift checks to real concurrent changes.
+- **Scope**: Delta calculation, Bubble Data API lookups, event contract, and `STATE_DRIFT` semantics.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-031
+- **Decision**: Bubble remains the durable source for guardian payloads; motor caches are optional accelerators and a cold cache must recover automatically by fetching `VersaoCronograma/<base_id>` through the Bubble Data API and verifying `base_hash`.
+- **Reason**: Render instances can restart, so an in-memory cache cannot provide durable base storage and must not turn a healthy recalculation into a manual retry.
+- **Trade-off**: A cold cache transfers the large guardian payload again and costs an extra Bubble read, but no new persistence service is required.
+- **Scope**: Motor caching, Render lifecycle, Bubble Data API, and v4 `BASE_UNKNOWN` behavior.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-032
+- **Decision**: Recoverable fast-path refusal codes (`STATE_DRIFT`, `BASE_STATE_INVALID`, `SCOPE_INSUFFICIENT`, and `BASE_UNKNOWN`) must remain invisible to users when Bubble can automatically complete the same operation through the full path.
+- **Reason**: Showing the first-attempt error before a successful fallback makes a working recalculation appear broken.
+- **Trade-off**: Technical refusal details move to version audit/logs; the UI reports an error only when the authoritative fallback also fails.
+- **Scope**: Bubble webhook handling, fallback orchestration, and schedule loading UI.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-033
+- **Decision**: Calendar dates crossing Bubble and the motor must use a timezone-stable representation, with new motor-written dates normalized to noon UTC and Bubble serialization fixed to the obra timezone or an explicit calendar-day format.
+- **Reason**: The same historical event stored at midnight UTC was serialized as both `2026-09-07` and `2026-09-06`, which changes weekend/holiday normalization and cascaded dates.
+- **Trade-off**: Historical midnight events require controlled cleanup or compatibility handling even after all new writes are stable.
+- **Scope**: EventoCronograma persistence, Bubble payload builders, date parsing, and historical data repair.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-034
+- **Decision**: Paralysis (`from_date_delayed`) adds calendar days and advances the resulting date to the next working day for the obra's five- or six-day week. Snapshot v2 dates already contain history; apply only new events, in received order, carrying each result into the next operation.
+- **Reason**: Reapplying historical activity dates after a paralysis undoes the shift. Grouping operations by type also breaks delay/paralysis/delay/paralysis sequences.
+- **Scope**: Full snapshot v2 date recalculation and paralysis calendar arithmetic; guardian v4 must preserve the same semantics when implemented.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-035
+- **Decision**: After each cascaded activity date change, revalidate finish-to-start service dependencies against the latest date of all predecessor occurrences, including clones. Shift only movable affected service rows, preserving business-day spacing and later valid dates; only-date events remain non-cascading.
+- **Reason**: FK0002's structural payload has a duration-five master but only its first occurrence in historical rows. Zero-delta historical replay restored release 2026-09-16 while generated clones ended 2026-09-21, undoing the generator's correct release date 2026-09-22.
+- **Scope**: Structural and snapshot cascade date recalculation; guardian v4 must preserve the same finish-to-start boundary.
+- **Date**: 2026-09-17
+- **Status**: active
+
 ## Handoff
 
-### Current Snapshot - 2026-09-15
+### Current Snapshot - 2026-09-17
 
-- **Feature**: Delta motor recalculation v3 / Bubble bulk persistence.
-- **Phase / Task**: Implementation complete and pushed to Bubble test branch `codex/bubble-bulk-persistence`; adding lookup-retry heartbeats and terminal-webhook ordering fixes for Bubble watchdog compatibility.
-- **Completed**: Implemented `payload_version=3` + `scope.tipo="delta_motor"` on `POST /api/v1/schedules/recalculate`; v3 accepts `base.payload`, `linhas_esperadas`, target/date scope, `events_old`, and `events_json`; reconstructs base lines deterministically; replays `events_old` ordered by `requisicao_data`, `criado_em`, then `evento_id`; validates target current date via `scope.data_atual_inicio`; applies the new event; diffs current vs next state; looks up changed Bubble rows by `obra`, `desatualizado (deletar)=false`, and `id_atividade_obra_externo in [...]`; rejects drift with `STATE_DRIFT`; rejects invalid base/targets/missing rows with `BASE_STATE_INVALID`; PATCHes only changed rows; persists only new `events_json`; fixes event date persistence to preserve the received calendar day; rebuilds the v3 base through the same calculated-date normalization used by generation so non-working-day adjustments do not create false `STATE_DRIFT`; Atividade x Obra Data API lookups retry `429`/Cloudflare 1015 and emit `processing` heartbeats with current progress during backoff; already-started detached `processing` webhooks drain before terminal `done`/`error`; added spec and validation artifacts.
-- **Latest commit to push**: terminal webhook ordering commit after cherry-pick continuation.
-- **Latest verification**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 186 tests; focused terminal ordering test passed; focused lookup retry tests passed; `git diff --check` passed before commit on main.
-- **Bubble v3 test payload requirements**: send `payload_version: 3`, `estrutura_inalterada: true`, `scope.tipo: "delta_motor"`, `scope.id_atividade_obra_externo`, `scope.nova_data`, `scope.data_atual_inicio`, `linhas_esperadas`, `base.versao_id`, `base.mode`, complete `base.payload` from the active schedule version, `events_old` with `requisicao_data`/`criado_em`/`evento_id`, and `events_json` containing only the new pencil event.
-- **Bubble expected behavior**: A valid dependent activity-date change should receive `202`, then normal processing webhooks, then `done` with `metrics.patchedCount` equal to changed rows and `metrics.eventCount: 1`; Bubble should not send `atividade_obra_snapshot`, `master_dependencies`, or `master_anchors` for this v3 path.
-- **Fallback behavior**: On webhook `error_code: "BASE_STATE_INVALID"` or `"STATE_DRIFT"`, Bubble should automatically retry the same recalculation with the existing v2 full payload fallback. These errors mean base count/target/lookup mismatch or current Bubble dates no longer match reconstructed state.
-- **Known previous findings still relevant**: Initial schedule target remains 4,676 rows; healthy initial runs should keep `dedupDroppedCount: 0`; structural aditivo/recovery payloads must not mix `estrutura_inalterada=false` with snapshot-only inputs.
-- **In-progress** (file:line): none.
-- **Next step**: Bubble should retest on branch `test` using a real active-version payload for an activity with dependents. If v3 errors, capture the final webhook body (`error_code`, `error_message`, `failed_step`) and the exact v3 request payload sent.
-- **Blockers**: none on the engine side for the v3 dependent-activity test; Bubble must ensure active versions preserve `payload_requisicao_json` and event history is cleaned of known duplicate Teste Recalculo events before using v3 as source of truth.
-- **Recommended future engine improvement**: add clearer early validation for structural recalculations where `estrutura_inalterada=false` but structural inputs are empty.
-- **Uncommitted files**: resolving cherry-pick of terminal webhook ordering onto `codex/bubble-bulk-persistence`.
-- **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
-
-### Previous Snapshot
-
-- **Feature**: Bubble bulk persistence / schedule recalculation contract.
-- **Phase / Task**: Branch `codex/bubble-bulk-persistence` is validating Bubble branch `test` for initial schedule, localAtuacao bulk fallback, metrics, and aditivo/recalculate contract.
-- **Completed**: fixed duplicated purchase/project Atividade x Obra creation with pre-persistence deduplication; added `dedupDroppedCount`; added bulk metrics `createdCount`, `bulkBatchCount`, and `bulkRetryCount`; corrected `createdCount` for rows recovered by idempotency lookup; switched Local de Atuação payload field to `localAtuacao`; broadened the guarded fallback to retry bulk without `localAtuacao`; kept progress at 10% increments for stages 2 and 3; clarified that `patchBatchCount` is legacy/non-applicable while Etapa 3 PATCHes are individual pool requests; confirmed TypeScript and the full Vitest suite pass after each commit; pushed all related commits to `codex/bubble-bulk-persistence`.
-- **Latest pushed commits**: `3f49256 Broaden localAtuacao bulk fallback`; `64acbac Count recovered bulk creates`; `612242e Use Data API localAtuacao field`; `0fa577e Add dedup dropped metric`; `1672c44 Deduplicate Bubble bulk records before persistence`; `1e98f99 Add Bubble bulk create metrics`; `6111f29 Reconcile failed Bubble bulk batches before retry`.
-- **Latest verification**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 174 tests.
-- **Bubble test findings**: Initial schedule target remains 4,676 rows. Healthy runs should show persisted rows 4,676, distinct identities 4,676, `dedupDroppedCount: 0`, and `dependencyPatchCount === patchRequestCount === 4676`. `patchBatchCount` remains 0 because Etapa 3 uses individual PATCH requests in a concurrency pool, not PATCH batches.
-- **LocalAtuacao finding**: Obra 6 initial payload had `localAtuacao` in all 1,725 `atividades_json` rows: 1,345 Compra blank, 348 Serviço with 228 `Indoor` and 120 `Outdoor`, and 32 Projeto blank. The engine should emit `localAtuacao` only when it normalizes to `indoor` or `outdoor`; blank Compra/Projeto values should not be sent in Atividade x Obra bulk records. If Bubble bulk rejects a lote containing `localAtuacao`, the engine now retries without that field through the guarded idempotency path.
-- **Partial recovery finding**: The "recalculate after failed initial schedule" payload attached as `a8238b9a-5552-42a3-8dbd-785173ac8fa0` had `estrutura_inalterada=true`, `atividade_obra_snapshot: 360`, `atividades_json: 0`, `events_json: 0`, and `scope: null`; returning 360 rows is expected because snapshot recalculation treats the provided snapshot as the full universe. Bubble should not use partial failed-version snapshots to recover failed initial schedule creation.
-- **Aditivo finding**: The Obra 6 aditivo payload attached as `2156c940-5e15-48d2-8428-e92cc8de3841` had `estrutura_inalterada=false`, `atividade_obra_snapshot: 4676`, but `atividades_json: 0`, `atividade_obra_json: 0`, and `events_json: 0`. With `estrutura_inalterada=false`, the engine calls `runScheduleEngine` and needs full structural inputs; a snapshot alone is not enough.
-- **In-progress** (file:line): none.
-- **Next step**: Bubble should retest initial schedule/aditivo on branch `test` after commit `3f49256`; if aditivo still fails, collect the preceding `schedule job failed` log line and the exact raw Bubble response/body from the failed bulk. Bubble must also fix the aditivo payload contract: structural aditivo (`estrutura_inalterada=false`) needs full structural inputs, while snapshot recalculation (`estrutura_inalterada=true`) needs a complete snapshot and events.
-- **Blockers**: Bubble-side payloads currently show two invalid recovery/aditivo patterns: a partial snapshot of 360 rows after a failed initial build, and an aditivo with `estrutura_inalterada=false` but empty `atividades_json`/environment/composition inputs. The engine cannot infer the full structure from those payloads.
-- **Recommended future engine improvement**: add a fast validation error when `mode="recalculate"` and `estrutura_inalterada=false` but structural inputs are empty, so Bubble receives a clearer contract error instead of a stage 2 persistence failure.
-- **Uncommitted files**: none before this documentation update.
-- **Branch**: `codex/bubble-bulk-persistence`; do not push these changes to `main` without explicit user instruction.
+- **Feature**: Replace the unreliable event-replay delta v3 with a guardian-based payload v4 while keeping full v2 recalculation stable.
+- **Phase / Task**: Diagnosis and Bubble-side containment/design complete; motor v4 implementation has not started.
+- **V2 follow-up**: `702ec3f` implements calendar-day paralysis and ordered new-event application over current snapshots. Build and 191 sequential tests pass, including delay/paralysis/delay/paralysis across separate requests and within one request. Local implementation only; not pushed or deployed. Feature evidence: `.specs/features/paralysis-calendar-days/`.
+- **Clone-boundary follow-up**: `dc71b0e` repairs cascade dependency dates after historical/current shifting. FK0002 Live attachment confirmed duration-five master, release dependency, sparse predecessor history, and zero-delta old event; local synthetic regressions reproduced release 2026-09-16 and now require 2026-09-22 after final occurrence 2026-09-21. Build and 194 sequential tests pass. Local only, no push/deploy; feature evidence: `.specs/features/cascade-clone-boundary/`.
+- **Completed**: v3 root-cause analysis; v3 disabled in Bubble Test; Bubble reports guardian fields/workflows and v4 payload builder applied behind the disabled key; recoverable refusal codes configured for silent full fallback; current motor HTML error sanitization, lookup retry heartbeat, and terminal webhook ordering are on `main`; first full-path work-start payload inspected and accepted as valid v2 input.
+- **Verified Test payload**: `payload_version=2`, `mode=recalculate`, `estrutura_inalterada=true`, explicit obra start `2026-10-01`, one `work_start_delayed` event for `2026-10-16`, zero old events, 4,676 editable/not-started snapshot rows, 4,676 unique external IDs, and no duplicates. Expected result is 4,676 date patches plus one new event.
+- **Target v4 contract**: request sends `base.base_id`, `base.base_hash`, target external ID, new date/type, and only `events_json`; motor resolves/validates the guardian, reads current affected-row dates from Bubble, applies the event, and patches only changed rows.
+- **Durability rule**: Bubble is the source of truth for guardian payloads. Cache miss must fetch and validate the guardian inside the same job; `BASE_UNKNOWN` is reserved for failed resolution, not ordinary cold cache.
+- **Next step**: finish sequential v2 regression tests in Bubble Test, then specify and implement motor payload v4 on `codex/bubble-bulk-persistence` before enabling the flag.
+- **Open risks / blockers**: v4 motor support is absent; exact Bubble Data API type/field names for guardian retrieval must be confirmed during implementation. Never enable the v4 flag against the current motor because the current contract synchronously rejects events with `estrutura_inalterada=true` when `atividade_obra_snapshot` is absent. Separately, the 4,676-line initial generation that left 4,802 Bubble rows after 10 bulk retries still needs a persistence-level duplicate prevention/post-write verification fix.
+- **Repository state at capture**: `main` and `origin/main` point to `ef8debf`; `c8f8b39` is the earlier merge commit that promoted the Bubble bulk persistence updates.
+- **Uncommitted files**: none after the documentation review commits.
+- **Branch**: `main`.
