@@ -24,7 +24,6 @@ const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
 const ATIVIDADE_OBRA_MASTER_FIELD = "Atividade x Obra Master";
-const LOCAL_ATUACAO_FIELD = "localAtuacao";
 const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "responsavel",
   "responsavelFranqueado",
@@ -39,8 +38,7 @@ const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "dataExecu\u00e7\u00e3o",
   "dataAprovacao",
   "dataReprovacao",
-  "observacao",
-  "localAtuacao"
+  "observacao"
 ] as const;
 
 interface BubbleBulkConfig {
@@ -385,18 +383,6 @@ function atividadeObraNomeAtividade(line: ScheduleLine): string {
 function activityResponsibleFields(line: ScheduleLine): Record<string, unknown> {
   const responsavel = stringValue(recordValue(line.raw, "responsavel", "respons\u00e1vel"));
   return responsavel ? { responsavel } : {};
-}
-
-function localAtuacaoSlug(value: unknown): "indoor" | "outdoor" | null {
-  const normalized = stringValue(value)?.toLowerCase();
-  if (normalized === "indoor") return "indoor";
-  if (normalized === "outdoor") return "outdoor";
-  return null;
-}
-
-function atividadeObraLocalAtuacaoFields(line: ScheduleLine, previousFields: Record<string, unknown>): Record<string, unknown> {
-  const slug = localAtuacaoSlug(recordValue(previousFields, "localAtuacao") ?? line.localAtuacao);
-  return slug ? { [LOCAL_ATUACAO_FIELD]: slug } : {};
 }
 
 function numberValue(value: unknown): number {
@@ -918,17 +904,6 @@ function omitAmbienteXObra(records: Record<string, unknown>[]): Record<string, u
   });
 }
 
-function isUnrecognizedLocalAtuacaoField(responseText: string): boolean {
-  return responseText.includes(`Unrecognized field: ${LOCAL_ATUACAO_FIELD}`);
-}
-
-function omitLocalAtuacao(records: Record<string, unknown>[]): Record<string, unknown>[] {
-  return records.map((record) => {
-    const { [LOCAL_ATUACAO_FIELD]: _localAtuacao, ...rest } = record;
-    return rest;
-  });
-}
-
 function atividadeObraLookupUrl(config: BubbleBulkConfig, versionId: string, cursor: number): string {
   const constraints = encodeURIComponent(JSON.stringify([
     { key: "versaoCronograma", constraint_type: "equals", value: versionId }
@@ -1110,7 +1085,6 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
     const previousFields = previousFieldsByLine.get(activityLineEquivalentKey(line))
       || previousFieldsByLine.get(activityLineKey(line.atividadeId, line.clone_index))
       || {};
-    const { localAtuacao: _localAtuacao, ...bubblePreviousFields } = previousFields;
 
     return {
       copyDuracao: line.clone_index > 1,
@@ -1144,9 +1118,8 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       "ambiente x obra": line.ambienteId || "",
       icon: iconFromAmbiente(ambiente) || "",
       master: false,
-      ...bubblePreviousFields,
+      ...previousFields,
       ...activityResponsibleFields(line),
-      ...atividadeObraLocalAtuacaoFields(line, previousFields),
       valorRaiz: valorRaizForLine(line, values, copyCounts)
     };
   });
@@ -1494,43 +1467,6 @@ async function postBulkBatch(
       return persistedRecords;
     }
 
-    if (
-      typeName === config.atividadeObraType
-      && batch.some((record) => Object.prototype.hasOwnProperty.call(record, LOCAL_ATUACAO_FIELD))
-    ) {
-      options.log?.warn({
-        requestId: options.requestId,
-        typeName,
-        url,
-        batchIndex,
-        recordsCount: batch.length,
-        statusCode: response.status,
-        responseText
-      }, "retrying atividade obra bulk without local atuacao field");
-
-      try {
-        const persistedRecords = await recoverAtividadeObraBulkRetry(typeName, url, batch, omitLocalAtuacao(batch), config, options, batchIndex);
-        options.log?.info({
-          requestId: options.requestId,
-          typeName,
-          url,
-          batchIndex,
-          recordsCount: batch.length
-        }, "bubble bulk batch persisted without local atuacao field");
-        return persistedRecords;
-      } catch (error) {
-        options.log?.error({
-          requestId: options.requestId,
-          typeName,
-          url,
-          batchIndex,
-          recordsCount: batch.length,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        }, "bubble bulk batch failed");
-        throw error;
-      }
-    }
-
     options.log?.error({
       requestId: options.requestId,
       typeName,
@@ -1700,35 +1636,6 @@ async function patchExistingAtividadeObraRecords(
             url,
             patchIndex: index
           }, "atividade obra idempotent patch persisted without ambiente x obra reference");
-          return;
-        }
-
-        options.log?.error({
-          requestId: options.requestId,
-          typeName: config.atividadeObraType,
-          url,
-          patchIndex: index,
-          statusCode: retryResponse.status,
-          responseText: retryResponse.text
-        }, "atividade obra idempotent patch failed");
-        throw new BubbleBulkRequestError(`Bubble atividade obra idempotent patch failed with ${retryResponse.status}: ${retryResponse.text}`);
-      }
-
-      if (
-        isUnrecognizedLocalAtuacaoField(response.text)
-        && Object.prototype.hasOwnProperty.call(update.record, LOCAL_ATUACAO_FIELD)
-      ) {
-        const retryRecord = omitLocalAtuacao([update.record])[0]!;
-        const retryResponse = await patchRecord(url, retryRecord, index);
-        if (retryResponse.ok) {
-          results[index] = { record: update.record, bubbleId: update.id };
-          await reportPersistenceProgress(options.phase2Progress, 1);
-          options.log?.info({
-            requestId: options.requestId,
-            typeName: config.atividadeObraType,
-            url,
-            patchIndex: index
-          }, "atividade obra idempotent patch persisted without local atuacao field");
           return;
         }
 

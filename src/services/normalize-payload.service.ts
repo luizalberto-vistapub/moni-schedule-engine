@@ -181,7 +181,6 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
   const rawNomeFamilia = activity.nomeFamilia || field(activity, "nome familia", "nome família", "nomeFamilia") || rawFamilia;
   const projetoId = nullableString(activity.projetoId, field(activity, "projeto", "Projeto", "id projeto"));
   const tipoProjeto = nullableString(activity.tipoProjeto, field(activity, "tipo projeto", "tipo_projeto"));
-  const localAtuacao = nullableString(activity.localAtuacao, field(activity, "local_atuacao"));
   const projetoResponsavel = nullableString(activity.projetoResponsavel, field(activity, "responsavelFranqueado", "responsávelFranqueado", "responsavel projeto", "responsável projeto"));
   const projetoStatus = nullableString(activity.projetoStatus, field(activity, "statusProjeto", "status projeto", "status_projeto"));
 
@@ -201,7 +200,6 @@ function normalizeActivity(activity: ActivityPayload, index: number): Normalized
     nomeFamilia: typeof rawNomeFamilia === "string" && rawNomeFamilia ? rawNomeFamilia : null,
     projetoId,
     tipoProjeto,
-    localAtuacao,
     projetoResponsavel,
     projetoStatus,
     atividadeServicoAncoraId: tipo === "Compra" || tipo === "Projeto" ? activity.atividadeServicoAncoraId || null : null,
@@ -221,7 +219,6 @@ function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActi
       const nome = asString(field(project, "nomeAtividadeProjeto", "nome", "name"), id);
       const projetoId = nullableString(field(project, "projetoId", "projeto", "Projeto", "id projeto"));
       const tipoProjeto = nullableString(field(project, "tipoProjeto", "tipo projeto", "tipo_projeto"));
-      const localAtuacao = nullableString(field(project, "localAtuacao", "local_atuacao"));
       const projetoResponsavel = nullableString(field(project, "projetoResponsavel", "responsavelFranqueado", "responsávelFranqueado", "responsavel projeto", "responsável projeto"));
       const projetoStatus = nullableString(field(project, "projetoStatus", "statusProjeto", "status projeto", "status_projeto"));
 
@@ -240,7 +237,6 @@ function normalizeActivityProjects(activity: NormalizedActivity): NormalizedActi
         nomeFamilia: null,
         projetoId,
         tipoProjeto,
-        localAtuacao,
         projetoResponsavel,
         projetoStatus,
         offsetDias: project.diasAntecedencia === undefined || project.diasAntecedencia === null || project.diasAntecedencia === "" ? undefined : Number(project.diasAntecedencia),
@@ -263,7 +259,6 @@ function mergeDirectProjectWithReference(directProject: NormalizedActivity, link
     produtoId: directProject.produtoId || linkedProject.produtoId,
     projetoId: directProject.projetoId || linkedProject.projetoId,
     tipoProjeto: directProject.tipoProjeto || linkedProject.tipoProjeto,
-    localAtuacao: directProject.localAtuacao || linkedProject.localAtuacao,
     projetoResponsavel: directProject.projetoResponsavel || linkedProject.projetoResponsavel,
     projetoStatus: directProject.projetoStatus || linkedProject.projetoStatus,
     raw: {

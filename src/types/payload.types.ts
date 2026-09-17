@@ -69,7 +69,6 @@ export interface ActivityPayload {
   nomeFamilia?: string | null;
   projetoId?: string | null;
   tipoProjeto?: string | null;
-  localAtuacao?: string | null;
   projetoResponsavel?: string | null;
   projetoStatus?: string | null;
   offsetDias?: number;
@@ -91,7 +90,6 @@ export interface NormalizedActivity extends Omit<ActivityPayload, "tipo" | "quan
   nomeFamilia: string | null;
   projetoId: string | null;
   tipoProjeto: string | null;
-  localAtuacao: string | null;
   projetoResponsavel: string | null;
   projetoStatus: string | null;
   atividadeServicoAncoraId: string | null;

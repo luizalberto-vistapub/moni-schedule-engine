@@ -1194,7 +1194,6 @@ function snapshotLineFromRecord(
     nomeFamilia: null,
     projetoId: null,
     tipoProjeto: null,
-    localAtuacao: null,
     diasAntecedencia: nullableNumber(field(record, "diasAntecedencia", "dias_antecedencia"))
       ?? nullableNumber(field(anchor || {}, "diasAntecedencia", "dias_antecedencia")),
     projetoResponsavel: null,

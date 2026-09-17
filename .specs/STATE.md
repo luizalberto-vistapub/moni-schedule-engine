@@ -160,7 +160,7 @@
 - **Trade-off**: Some rows may persist without Local de Atuacao when Bubble bulk rejects the field; Bubble must run "Preencher Local de Atuacao da obra" afterward. `bulkRetryCount` can be high for this operational fallback and should not be confused with duplicate generation.
 - **Scope**: Bubble Atividade x Obra bulk payload mapping and fallback behavior.
 - **Date**: 2026-09-14
-- **Status**: active
+- **Status**: superseded by AD-036
 
 ### AD-021
 - **Decision**: For `payload_version=2`, `mode="recalculate"`, `estrutura_inalterada=true`, the snapshot is the complete universe of the recalculation; for `estrutura_inalterada=false`, Bubble must send the full structural inputs needed by `runScheduleEngine`.
@@ -280,12 +280,20 @@
 - **Date**: 2026-09-17
 - **Status**: active
 
+### AD-036
+- **Decision**: Remove localAtuacao from engine field handling, schedule lines, Bubble records and field-specific persistence fallbacks. Payloads need not send it; legacy metadata is ignored.
+- **Reason**: The user retired the field from the payload contract. No parser/controller rule requiring it was found; previous behavior already accepted its absence.
+- **Scope**: Activity normalization/types, generated and snapshot lines, previous-row metadata and Bubble create/idempotent-patch persistence.
+- **Date**: 2026-09-17
+- **Status**: active
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-17
 
 - **Feature**: Replace the unreliable event-replay delta v3 with a guardian-based payload v4 while keeping full v2 recalculation stable.
 - **Phase / Task**: Diagnosis and Bubble-side containment/design complete; motor v4 implementation has not started.
+- **Retired field**: localAtuacao handling and its Bubble fallbacks removed; all 194 sequential tests and TypeScript build pass. Feature evidence: `.specs/features/remove-local-atuacao/`. This follow-up is local pending publication.
 - **V2 follow-up**: `702ec3f` implements calendar-day paralysis and ordered new-event application over current snapshots. Build and 191 sequential tests pass, including delay/paralysis/delay/paralysis across separate requests and within one request. Local implementation only; not pushed or deployed. Feature evidence: `.specs/features/paralysis-calendar-days/`.
 - **Clone-boundary follow-up**: `dc71b0e` repairs cascade dependency dates after historical/current shifting. FK0002 Live attachment confirmed duration-five master, release dependency, sparse predecessor history, and zero-delta old event; local synthetic regressions reproduced release 2026-09-16 and now require 2026-09-22 after final occurrence 2026-09-21. Build and 194 sequential tests pass. Local only, no push/deploy; feature evidence: `.specs/features/cascade-clone-boundary/`.
 - **Completed**: v3 root-cause analysis; v3 disabled in Bubble Test; Bubble reports guardian fields/workflows and v4 payload builder applied behind the disabled key; recoverable refusal codes configured for silent full fallback; current motor HTML error sanitization, lookup retry heartbeat, and terminal webhook ordering are on `main`; first full-path work-start payload inspected and accepted as valid v2 input.

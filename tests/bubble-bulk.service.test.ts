@@ -617,22 +617,12 @@ describe("Bubble bulk persistence", () => {
     }), "retrying atividade obra bulk without ambiente x obra reference");
   });
 
-  it("retries Atividade x Obra without local atuacao when Bubble rejects a batch containing the field", async () => {
+  it("persists Atividade x Obra without sending legacy local atuacao", async () => {
     const log = { warn: vi.fn(), info: vi.fn() } as unknown as Logger;
-    let atividadeObraPostAttempts = 0;
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       if (_init?.method === "GET") return atividadeObraLookupResponse();
       if (_init?.method === "PATCH") {
         return { ok: true, status: 204, text: async (): Promise<string> => "" };
-      }
-
-      atividadeObraPostAttempts += 1;
-      if (atividadeObraPostAttempts === 1) {
-        return {
-          ok: false,
-          status: 400,
-          text: async (): Promise<string> => "{\"status\":\"error\",\"message\":\"Invalid data for field localAtuacao: value is not a valid option\"}\n"
-        };
       }
 
       return {
@@ -649,13 +639,8 @@ describe("Bubble bulk persistence", () => {
     await persistScheduleBulks(payload, lines, { requestId: "req_local_atuacao_retry", log });
 
     const atividadeObraPostCalls = findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST");
-    expect(fetchMock).toHaveBeenCalledTimes(8);
-    expect(String(atividadeObraPostCalls[0]?.[1]?.body)).toContain("\"localAtuacao\"");
-    expect(String(atividadeObraPostCalls[1]?.[1]?.body)).not.toContain("\"localAtuacao\"");
-    expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(expect.objectContaining({
-      requestId: "req_local_atuacao_retry",
-      statusCode: 400
-    }), "retrying atividade obra bulk without local atuacao field");
+    expect(atividadeObraPostCalls).toHaveLength(1);
+    expect(String(atividadeObraPostCalls[0]?.[1]?.body)).not.toContain("\"localAtuacao\"");
   });
 
   it("does not repost an Atividade x Obra retry batch when Bubble already created it before returning an error", async () => {
@@ -1176,7 +1161,7 @@ describe("Bubble bulk persistence", () => {
     });
   });
 
-  it("maps service localAtuacao to the Bubble Data API field in Atividade x Obra records", () => {
+  it("ignores legacy service localAtuacao in schedule lines and Bubble records", () => {
     const { payload, lines } = payloadWithOneLine({
       atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }]
     });
@@ -1184,14 +1169,12 @@ describe("Bubble bulk persistence", () => {
     const [line] = lines;
     const [record] = buildAtividadeObraRecords(payload, lines);
 
-    expect(line?.localAtuacao).toBe("Indoor");
-    expect(record).toMatchObject({
-      atividade: "serv_1",
-      localAtuacao: "indoor"
-    });
+    expect(line).not.toHaveProperty("localAtuacao");
+    expect(record).toMatchObject({ atividade: "serv_1" });
+    expect(record).not.toHaveProperty("localAtuacao");
   });
 
-  it("omits Bubble localAtuacao option-set field when payload localAtuacao is blank", () => {
+  it("accepts services, purchases and projects without localAtuacao", () => {
     const payload = normalizePayload(basePayload({
       versao_cronograma_unique_id: "versao_1",
       cronograma_unique_id: "cronograma_1",
@@ -1201,9 +1184,9 @@ describe("Bubble bulk persistence", () => {
         { id: "compra_prod", ambienteId: "amb_1", produtoId: "prod_compra", produtoNome: "Compra", quantidade: 1, "id produto composto": "composto_1" }
       ],
       atividades_json: [
-        { id: "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_serv", ordem: 1, duracao: 1, localAtuacao: "" },
-        { id: "compra_1", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "composto_1", localAtuacao: "" },
-        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1", localAtuacao: "" }
+        { id: "serv_1", nome: "Servico", tipo: "Servico", produto: "prod_serv", ordem: 1, duracao: 1 },
+        { id: "compra_1", nome: "Recebimento", tipo: "Compra", produto: "prod_compra", ordem: 1, etapaCompra: "Recebimento", atividadeServicoAncoraId: "composto_1" },
+        { id: "projeto_1", nome: "Projeto", tipo: "Projeto", produto: "prod_compra", ordem: 1, atividadeServicoAncoraId: "composto_1" }
       ]
     }));
     const result = runScheduleEngine(payload);
@@ -1218,7 +1201,7 @@ describe("Bubble bulk persistence", () => {
     expect(records.every((record) => !Object.prototype.hasOwnProperty.call(record, "localAtuacao"))).toBe(true);
   });
 
-  it("uses recalculate atividade_obra_json localAtuacao when present before falling back to catalog activity", () => {
+  it("ignores localAtuacao from historical atividade_obra_json records", () => {
     const { payload, lines } = payloadWithOneLine({
       atividades_json: [{ "unique id": "serv_1", nome: "Servico", tipo: "Servico", ordem: 1, duracao: 1, localAtuacao: "Indoor" }],
       atividade_obra_json: [{
@@ -1231,10 +1214,8 @@ describe("Bubble bulk persistence", () => {
 
     const [record] = buildAtividadeObraRecords(payload, lines);
 
-    expect(record).toMatchObject({
-      atividade: "serv_1",
-      localAtuacao: "outdoor"
-    });
+    expect(record).toMatchObject({ atividade: "serv_1" });
+    expect(record).not.toHaveProperty("localAtuacao");
   });
 
   it("uses activity responsible when previous Atividade x Obra record has blank responsible", () => {
