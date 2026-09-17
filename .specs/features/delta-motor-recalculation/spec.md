@@ -1,5 +1,7 @@
 # Delta Motor Recalculation Specification
 
+> **Operational status (2026-09-17): superseded and disabled.** The payload v3 fast path remains implemented for historical compatibility but must not be enabled. Real Bubble runs showed recurring `STATE_DRIFT` because the latest active request was not a stable structural base, event history had no cutoff, date-only events could shift calendar day, and delta requests could become nested bases. The replacement is the guardian-based payload v4 contract recorded in `docs/delta-v4-guardian-contract-2026-09-17.md` and decisions AD-028 through AD-033.
+
 ## Problem Statement
 
 Bubble currently computes dependent schedule deltas before calling the engine. Large works can time out while Bubble traverses the dependency graph. The engine must accept a self-contained v3 recalculation request, rebuild the active schedule from the stored base payload and event history, apply the new pencil event, and patch only rows whose dates changed.

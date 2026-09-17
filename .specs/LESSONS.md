@@ -118,3 +118,43 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: Public schedule errors should summarize upstream HTML responses instead of forwarding them.
 - **Grounding**: Bubble displays `error_message` in the UI, and Cloudflare/Bubble HTML error pages are too noisy for users while the full body is still available in engine logs.
 - **Scope**: Schedule webhook error messages, API error responses, and external-service failure handling.
+
+### L-024
+- **Lesson**: A fast recalculation base must be the immutable structural materialization, never whichever request happens to belong to the latest active version.
+- **Grounding**: Repeated v3 `STATE_DRIFT` runs used active-version requests from retry/retomada flows and could later nest one delta payload inside another, while the complete v2 fallback succeeded.
+- **Scope**: Bubble version lifecycle, delta base selection, and schedule reconstruction.
+
+### L-025
+- **Lesson**: Event replay over a persisted base requires an explicit event watermark; never replay the entire history when the base request may already contain events.
+- **Grounding**: FK0002 sent all obra events in `events_old` even when an event was already present in the selected base request, allowing the same logical change to be incorporated twice.
+- **Scope**: Event-sourced recalculation contracts and Bubble payload assembly.
+
+### L-026
+- **Lesson**: Calendar-only values must be serialized independently of execution timezone and must not be stored at a UTC day boundary.
+- **Grounding**: The same EventoCronograma record stored at `2026-09-07T00:00:00Z` appeared as both `2026-09-07` and `2026-09-06` in different payloads, changing business-day normalization.
+- **Scope**: Bubble date formatting, EventoCronograma persistence, and schedule date parsing.
+
+### L-027
+- **Lesson**: Use Bubble's current persisted dates as the source of truth for affected rows; historical replay is suitable for audit but not for proving current schedule state.
+- **Grounding**: v3 could only proceed when `base.payload + events_old` reproduced every date exactly, so missing, duplicated, timezone-shifted, or newly interpreted events caused recurring `STATE_DRIFT` despite a healthy full fallback.
+- **Scope**: Delta calculation, Bubble Data API hydration, and drift guards.
+
+### L-028
+- **Lesson**: Treat in-memory schedule bases as disposable accelerators and recover cold caches from a durable source inside the same job.
+- **Grounding**: Render instance recycling already interrupted long jobs, so a motor-only memory cache cannot safely own guardian bases or require users to resend them manually after restart.
+- **Scope**: Render lifecycle, motor caching, guardian payload resolution, and `BASE_UNKNOWN` handling.
+
+### L-029
+- **Lesson**: Test stateful recalculation contracts as a sequence of generation, first recalculation, and second recalculation, not only as isolated requests.
+- **Grounding**: Existing v3 tests covered individual success and drift branches but did not catch that a successful delta could become the next base or that event history could be reapplied on the following recalculation.
+- **Scope**: Schedule controller integration tests and Bubble Test acceptance.
+
+### L-030
+- **Lesson**: Do not surface a recoverable optimization failure when the authoritative fallback can complete the same user action.
+- **Grounding**: Bubble displayed `STATE_DRIFT` before automatically succeeding through the full recalculation, making a working operation appear broken.
+- **Scope**: Bubble fallback workflows, webhook error classification, and loading UI.
+
+### L-031
+- **Lesson**: An idempotent bulk retry must prove remote uniqueness after ambiguous partial writes, not only deduplicate the generated input before persistence.
+- **Grounding**: Job `schedule_job_mu2rz12w_pft6xlf5` generated and reported 4,676 unique rows with `dedupDroppedCount=0`, but Bubble held 4,802 rows after 10 retries because 126 external IDs were persisted twice.
+- **Scope**: Atividade x Obra bulk retry reconciliation, eventual-consistency lookups, and terminal persistence verification.

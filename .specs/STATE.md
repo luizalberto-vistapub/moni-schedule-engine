@@ -176,7 +176,7 @@
 - **Trade-off**: The v3 path depends on complete preserved active-version payloads and trustworthy event history; when `BASE_STATE_INVALID` or `STATE_DRIFT` occurs, Bubble must fall back to the v2 full payload path.
 - **Scope**: Schedule recalculation contracts, event persistence, Bubble fallback behavior, and Atividade x Obra date patching.
 - **Date**: 2026-09-15
-- **Status**: active
+- **Status**: superseded by AD-028
 
 ### AD-023
 - **Decision**: Atividade x Obra bulk create concurrency is opt-in through `BUBBLE_BULK_CREATE_CONCURRENCY`, with default `1`.
@@ -218,18 +218,66 @@
 - **Date**: 2026-09-16
 - **Status**: active
 
+### AD-028
+- **Decision**: Disable the payload v3 delta shortcut and route date recalculations through the complete payload v2 path until the guardian-based v4 contract passes sequential recalculation tests.
+- **Reason**: Real Bubble runs repeatedly entered `STATE_DRIFT` and then succeeded through the complete fallback, so the shortcut added latency and a visible false failure without providing a reliable fast path.
+- **Trade-off**: Recalculations remain slower and carry the complete snapshot while v4 is built, but users receive one authoritative result without the known failing preflight.
+- **Scope**: Bubble feature flags, date recalculation routing, user-visible error handling, and motor compatibility.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-029
+- **Decision**: Payload v4 uses the last successfully completed structural version as an immutable guardian, identified by `base_id` and a motor-produced canonical `base_hash`; delta executions never replace the guardian.
+- **Reason**: The latest active request can be a retry, fallback, or nested delta, while the last structural materialization is the stable source for identities and dependencies. Bubble already retains one payload per obra, so protecting the guardian does not require a second persisted payload.
+- **Trade-off**: Bubble cleanup must preserve the guardian until a replacement structural version is confirmed, and the motor must validate the referenced payload before using it.
+- **Scope**: Bubble `VersaoCronograma` lifecycle, payload cleanup, structural recalculation contract, and v4 base resolution.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-030
+- **Decision**: In v4, the motor must use the guardian for structure and dependencies but read current dates for the affected Atividade x Obra rows from Bubble before applying the new event; `events_old` is not part of the v4 request.
+- **Reason**: Reconstructing current dates from a historical request plus an unbounded event stream fails when an event is duplicated, formatted on another calendar day, omitted, or replayed by a newer algorithm.
+- **Trade-off**: Each delta requires Data API reads for the affected rows, but it removes historical replay as the source of truth and limits drift checks to real concurrent changes.
+- **Scope**: Delta calculation, Bubble Data API lookups, event contract, and `STATE_DRIFT` semantics.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-031
+- **Decision**: Bubble remains the durable source for guardian payloads; motor caches are optional accelerators and a cold cache must recover automatically by fetching `VersaoCronograma/<base_id>` through the Bubble Data API and verifying `base_hash`.
+- **Reason**: Render instances can restart, so an in-memory cache cannot provide durable base storage and must not turn a healthy recalculation into a manual retry.
+- **Trade-off**: A cold cache transfers the large guardian payload again and costs an extra Bubble read, but no new persistence service is required.
+- **Scope**: Motor caching, Render lifecycle, Bubble Data API, and v4 `BASE_UNKNOWN` behavior.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-032
+- **Decision**: Recoverable fast-path refusal codes (`STATE_DRIFT`, `BASE_STATE_INVALID`, `SCOPE_INSUFFICIENT`, and `BASE_UNKNOWN`) must remain invisible to users when Bubble can automatically complete the same operation through the full path.
+- **Reason**: Showing the first-attempt error before a successful fallback makes a working recalculation appear broken.
+- **Trade-off**: Technical refusal details move to version audit/logs; the UI reports an error only when the authoritative fallback also fails.
+- **Scope**: Bubble webhook handling, fallback orchestration, and schedule loading UI.
+- **Date**: 2026-09-17
+- **Status**: active
+
+### AD-033
+- **Decision**: Calendar dates crossing Bubble and the motor must use a timezone-stable representation, with new motor-written dates normalized to noon UTC and Bubble serialization fixed to the obra timezone or an explicit calendar-day format.
+- **Reason**: The same historical event stored at midnight UTC was serialized as both `2026-09-07` and `2026-09-06`, which changes weekend/holiday normalization and cascaded dates.
+- **Trade-off**: Historical midnight events require controlled cleanup or compatibility handling even after all new writes are stable.
+- **Scope**: EventoCronograma persistence, Bubble payload builders, date parsing, and historical data repair.
+- **Date**: 2026-09-17
+- **Status**: active
+
 ## Handoff
 
-### Current Snapshot - 2026-09-15
+### Current Snapshot - 2026-09-17
 
-- **Feature**: Promote Bubble bulk persistence, visible progress, lookup retry, and delta motor recalculation work from `codex/bubble-bulk-persistence` to `main`.
-- **Phase / Task**: Implementation and local promotion complete on `main`; adding lookup-retry heartbeats for Bubble watchdog compatibility.
-- **Completed**: async schedule jobs with progress webhooks; Bubble version-aware webhook routing; retry/cooldown for PATCH loops; retry/cooldown for Atividade x Obra Data API lookups; lookup retry heartbeat with current progress; detached processing webhooks drain before terminal `done`/`error`; numeric env defaults now use fallbacks when env vars are absent; initial schedule bulk metrics and dedup protection; localAtuacao guarded fallback; delta motor v3 for dependent activity-date recalculation; optional Atividade x Obra bulk create concurrency via `BUBBLE_BULK_CREATE_CONCURRENCY`; persistence progress now emits `1%`, `3%`, `5%`, then every `5%` through `100%`.
-- **Latest local test branch commits**: `70ac041 feat(progress): add early persistence updates`; `5675fca fix(bulk): retry atividade obra lookups` on `codex/bubble-bulk-persistence`.
-- **Latest local main commits**: `0477bbe feat(progress): add early persistence updates`; `a68939d fix(bulk): retry atividade obra lookups`.
-- **Latest verification before push**: `node node_modules\typescript\bin\tsc` passed; `node node_modules\vitest\vitest.mjs run` passed with 7 files and 184 tests; `git diff --check` passed.
-- **Bubble v3 test payload requirements**: send `payload_version: 3`, `estrutura_inalterada: true`, `scope.tipo: "delta_motor"`, target/date scope fields, `linhas_esperadas`, `base.versao_id`, `base.mode`, complete active-version `base.payload`, ordered `events_old`, and `events_json` containing only the new pencil event.
-- **Bulk create tuning**: default behavior remains serial; test can set `BUBBLE_BULK_CREATE_CONCURRENCY=2` or `3`. Etapa 3 remains controlled by `BUBBLE_PATCH_CONCURRENCY`; user stated `6` is the verified ideal value.
-- **Next step**: push `codex/bubble-bulk-persistence` for Bubble test and `main` for Live deployment.
-- **Blockers**: none after conflict resolution.
+- **Feature**: Replace the unreliable event-replay delta v3 with a guardian-based payload v4 while keeping full v2 recalculation stable.
+- **Phase / Task**: Diagnosis and Bubble-side containment/design complete; motor v4 implementation has not started.
+- **Completed**: v3 root-cause analysis; v3 disabled in Bubble Test; Bubble reports guardian fields/workflows and v4 payload builder applied behind the disabled key; recoverable refusal codes configured for silent full fallback; current motor HTML error sanitization, lookup retry heartbeat, and terminal webhook ordering are on `main`; first full-path work-start payload inspected and accepted as valid v2 input.
+- **Verified Test payload**: `payload_version=2`, `mode=recalculate`, `estrutura_inalterada=true`, explicit obra start `2026-10-01`, one `work_start_delayed` event for `2026-10-16`, zero old events, 4,676 editable/not-started snapshot rows, 4,676 unique external IDs, and no duplicates. Expected result is 4,676 date patches plus one new event.
+- **Target v4 contract**: request sends `base.base_id`, `base.base_hash`, target external ID, new date/type, and only `events_json`; motor resolves/validates the guardian, reads current affected-row dates from Bubble, applies the event, and patches only changed rows.
+- **Durability rule**: Bubble is the source of truth for guardian payloads. Cache miss must fetch and validate the guardian inside the same job; `BASE_UNKNOWN` is reserved for failed resolution, not ordinary cold cache.
+- **Next step**: finish sequential v2 regression tests in Bubble Test, then specify and implement motor payload v4 on `codex/bubble-bulk-persistence` before enabling the flag.
+- **Open risks / blockers**: v4 motor support is absent; exact Bubble Data API type/field names for guardian retrieval must be confirmed during implementation. Never enable the v4 flag against the current motor because it can interpret `estrutura_inalterada=true` as an empty snapshot recalculation. Separately, the 4,676-line initial generation that left 4,802 Bubble rows after 10 bulk retries still needs a persistence-level duplicate prevention/post-write verification fix.
+- **Repository state at capture**: `main` and `origin/main` point to `ef8debf`; `c8f8b39` is the earlier merge commit that promoted the Bubble bulk persistence updates.
+- **Uncommitted files**: `.specs/STATE.md`, `.specs/LESSONS.md`, `.specs/features/delta-motor-recalculation/spec.md`, `docs/delta-v4-guardian-contract-2026-09-17.md`.
 - **Branch**: `main`.
