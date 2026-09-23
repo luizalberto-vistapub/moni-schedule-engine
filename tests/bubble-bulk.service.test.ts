@@ -1605,6 +1605,7 @@ describe("Bubble bulk persistence", () => {
         id_atividade_obra_externo: "serv_1_2026-05-04_1",
         status: "Concluida",
         dataExecucao: "2026-05-06T12:00:00.000Z",
+        iniciadaPor: "user_started_1",
         observacao: "Executada no cronograma anterior",
         responsavelFranqueado: "user_1"
       }]
@@ -1620,6 +1621,7 @@ describe("Bubble bulk persistence", () => {
       versaoCronograma: "versao_1",
       status: "Concluida",
       dataExecucao: "2026-05-06T12:00:00.000Z",
+      iniciadaPor: "user_started_1",
       observacao: "Executada no cronograma anterior",
       responsavelFranqueado: "user_1"
     });
