@@ -1664,6 +1664,189 @@ describe("schedule controllers", () => {
     ]);
   });
 
+  it("repairs legacy inversions and a paused first clone left on Saturday during same-date maintenance", async () => {
+    const snapshot = [
+      {
+        "unique id": "division_1",
+        id_atividade_obra_externo: "division|yard|1",
+        atividade: "division",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-10-31",
+        dataFimPrevista: "2026-10-31",
+        status: "Pausada"
+      },
+      {
+        "unique id": "division_2",
+        id_atividade_obra_externo: "division|yard|2",
+        atividade: "division",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-11-02",
+        dataFimPrevista: "2026-11-02",
+        status: "Nao iniciada"
+      },
+      {
+        "unique id": "duct_1",
+        id_atividade_obra_externo: "duct|gadgets|1",
+        atividade: "duct",
+        ambiente_id: "gadgets",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-10-20",
+        dataFimPrevista: "2026-10-20",
+        status: "Pausada"
+      },
+      {
+        "unique id": "duct_2",
+        id_atividade_obra_externo: "duct|gadgets|2",
+        atividade: "duct",
+        ambiente_id: "gadgets",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-10-01",
+        dataFimPrevista: "2026-10-01",
+        status: "Nao iniciada"
+      }
+    ];
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-07-01" }],
+      atividades_json: [],
+      atividade_obra_snapshot: snapshot,
+      events_json: [{ type: "work_start_delayed", new_start_date: "2026-07-01" }]
+    }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+    expect(patches.division_1).toEqual({
+      dataInicioPrevista: "2026-10-30T12:00:00.000Z",
+      dataFimPrevista: "2026-10-30T12:00:00.000Z"
+    });
+    expect(patches.division_2).toBeUndefined();
+    expect(patches.duct_1).toBeUndefined();
+    expect(patches.duct_2).toEqual({
+      dataInicioPrevista: "2026-10-21T12:00:00.000Z",
+      dataFimPrevista: "2026-10-21T12:00:00.000Z"
+    });
+  });
+
+  it("keeps Saturday clones unchanged during maintenance for six-day work weeks", async () => {
+    const snapshot = [
+      {
+        "unique id": "division_1",
+        id_atividade_obra_externo: "division|yard|1",
+        atividade: "division",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-10-31",
+        dataFimPrevista: "2026-10-31",
+        status: "Pausada"
+      },
+      {
+        "unique id": "division_2",
+        id_atividade_obra_externo: "division|yard|2",
+        atividade: "division",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-11-02",
+        dataFimPrevista: "2026-11-02",
+        status: "Nao iniciada"
+      }
+    ];
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 6,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-07-01" }],
+      atividades_json: [],
+      atividade_obra_snapshot: snapshot,
+      events_json: [{ type: "work_start_delayed", new_start_date: "2026-07-01" }]
+    }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+  });
+
+  it("rewrites every clone from day one when an activity date event targets a later clone", async () => {
+    const snapshot = [
+      {
+        "unique id": "wall_1",
+        id_atividade_obra_externo: "wall|yard|1",
+        atividade: "wall",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-09-25",
+        dataFimPrevista: "2026-09-25",
+        status: "Pausada"
+      },
+      {
+        "unique id": "wall_2",
+        id_atividade_obra_externo: "wall|yard|2",
+        atividade: "wall",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-09-22",
+        dataFimPrevista: "2026-09-22",
+        status: "Nao iniciada"
+      },
+      {
+        "unique id": "plaster_1",
+        id_atividade_obra_externo: "plaster|yard|1",
+        atividade: "plaster",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-10-01",
+        dataFimPrevista: "2026-10-01",
+        status: "Nao iniciada"
+      }
+    ];
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-07-01" }],
+      atividades_json: [],
+      atividade_obra_snapshot: snapshot,
+      master_dependencies: [{ atividade: "plaster", deps: ["wall"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade_id: "wall",
+        id_atividade_obra_externo: "wall|yard|2",
+        new_start_date: "2026-10-30"
+      }]
+    }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+    expect(patches.wall_1).toEqual({
+      dataInicioPrevista: "2026-10-30T12:00:00.000Z",
+      dataFimPrevista: "2026-10-30T12:00:00.000Z"
+    });
+    expect(patches.wall_2).toEqual({
+      dataInicioPrevista: "2026-11-02T12:00:00.000Z",
+      dataFimPrevista: "2026-11-02T12:00:00.000Z"
+    });
+    expect(patches.plaster_1).toEqual({
+      dataInicioPrevista: "2026-11-05T12:00:00.000Z",
+      dataFimPrevista: "2026-11-05T12:00:00.000Z"
+    });
+  });
+
   it("reports scope insufficient when delta dependencies are outside the snapshot", async () => {
     const payload = basePayload({
       payload_version: 2,
@@ -1900,9 +2083,9 @@ describe("schedule controllers", () => {
     const records = persistedBulkBody("atividadexobra").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     const datesByExternalId = new Map(records.map((record) => [record.id_atividade_obra_externo, record.dataInicioPrevista]));
     expect(datesByExternalId.get("serv_1|amb_1|1")).toBe("2026-05-04T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_2|amb_1|1")).toBe("2026-05-05T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-11T12:00:00.000Z");
-    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-12T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2|amb_1|1")).toBe("2026-05-11T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_2|amb_1|2")).toBe("2026-05-12T12:00:00.000Z");
+    expect(datesByExternalId.get("serv_3|amb_1|1")).toBe("2026-05-13T12:00:00.000Z");
     expect(datesByExternalId.get("serv_4|amb_1|1")).toBe("2026-05-08T12:00:00.000Z");
   });
 
