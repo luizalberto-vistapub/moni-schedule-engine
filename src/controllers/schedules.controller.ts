@@ -600,7 +600,57 @@ function snapshotRecordCloneIndex(record: Record<string, unknown>): number {
 
 function movableSnapshotStatus(status: unknown): boolean {
   const normalized = normalizeText(status);
-  return !normalized || normalized === "nao iniciada" || normalized === "recalculada";
+  return !normalized || normalized === "nao iniciada" || normalized === "recalculada" || normalized === "pausada";
+}
+
+const frozenActivityGroupsCache = new WeakMap<object, Set<string>>();
+
+function snapshotRecordCloneGroupKey(record: Record<string, unknown>): string {
+  const externalId = snapshotRecordExternalId(record);
+  const currentExternalId = externalId.match(/^(.*\|[^|]+)\|\d+$/);
+  if (currentExternalId) return currentExternalId[1]!;
+
+  return [
+    activityRecordId(record),
+    stringValue(field(record, "ambiente_id", "ambiente", "ambienteId")),
+    stringValue(field(record, "obraAmbienteProdutoId", "produtoId", "produto")),
+    stringValue(field(record, "atividadeServicoAncoraId", "servico_ancora"))
+  ].join("|");
+}
+
+function recordHasExecutionEvidence(record: Record<string, unknown>): boolean {
+  const status = normalizeText(field(record, "status"));
+  const statusLocksActivity = Boolean(status)
+    && status !== "nao iniciada"
+    && status !== "recalculada"
+    && status !== "pausada";
+  const executionFields = [
+    "dataInicioExecucao",
+    "data_inicio_execucao",
+    "dataExecucao",
+    "dataExecução",
+    "iniciadaPor",
+    "Iniciada por"
+  ];
+  return statusLocksActivity || executionFields.some((key) => Boolean(field(record, key)));
+}
+
+function frozenActivityGroupKeys(payload: SchedulePayload): Set<string> {
+  const cached = frozenActivityGroupsCache.get(payload);
+  if (cached) return cached;
+
+  const frozen = new Set<string>();
+  if (payload.mode === "recalculate") {
+    for (const record of atividadeObraSnapshot(payload)) {
+      if (recordHasExecutionEvidence(record)) frozen.add(snapshotRecordCloneGroupKey(record));
+    }
+  }
+  frozenActivityGroupsCache.set(payload, frozen);
+  return frozen;
+}
+
+function activityGroupIsFrozen(payload: SchedulePayload, line: ScheduleLine): boolean {
+  return frozenActivityGroupKeys(payload).has(lineCloneGroupKey(line));
 }
 
 function scopeType(payload: SchedulePayload): string {
@@ -620,16 +670,18 @@ function isSnapshotAnchor(record: Record<string, unknown>): boolean {
 }
 
 function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
+  if (activityGroupIsFrozen(payload, line)) return false;
   if (!isSnapshotRecalculate(payload)) return true;
   if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
   return movableSnapshotStatus(field(line.raw, "status"));
 }
 
 function lineCanRepair(payload: SchedulePayload, line: ScheduleLine): boolean {
+  if (activityGroupIsFrozen(payload, line)) return false;
   if (!isSnapshotRecalculate(payload)) return true;
   if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
   const status = normalizeText(field(line.raw, "status"));
-  return movableSnapshotStatus(status) || status === "pausada";
+  return movableSnapshotStatus(status);
 }
 
 function masterDependencyEntries(payload: SchedulePayload): Array<{ activityId: string; deps: string[] }> {
@@ -772,10 +824,24 @@ function applyFromDateDelayedRecalculation(payload: SchedulePayload, result: Eng
   if (!fromDate) return result;
 
   const previousDates = previousActivityDatesBefore(payload, fromDate);
+  const allPreviousDates = previousActivityDates(payload);
   const days = eventDays(scheduleStartEvent);
+  const delayedGroupKeys = new Set(
+    result.lines
+      .filter((line) => {
+        const originalDate = allPreviousDates.get(activityLineKey(line.atividadeId, line.clone_index)) || line.data_programada;
+        return lineCanMove(payload, line) && originalDate >= fromDate;
+      })
+      .map(lineCloneGroupKey)
+  );
   const lines = result.lines
     .map((line) => {
       if (!lineCanMove(payload, line)) return line;
+      if (delayedGroupKeys.has(lineCloneGroupKey(line)) && days !== 0) {
+        const originalDate = allPreviousDates.get(activityLineKey(line.atividadeId, line.clone_index)) || line.data_programada;
+        const delayedDate = addDays(parseDateOnly(originalDate), days);
+        return withLineDate(line, formatDateOnly(nextBusinessDay(delayedDate, payload.dias_trabalho_semana)), payload);
+      }
       const previousDate = previousDates.get(activityLineKey(line.atividadeId, line.clone_index));
       if (previousDate) return withLineDate(line, previousDate, payload);
       if (line.data_programada < fromDate || days === 0) return line;
@@ -1129,9 +1195,21 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
       && line.produtoId === changedLine.produtoId
       && line.atividadeServicoAncoraId === anchorServiceId
     ));
+    const shiftedGroupKeys = new Set(
+      lines
+        .filter((line) => {
+          if (!lineCanMove(payload, line) || originalLineDate(line, previousDates) < cutoffDate) return false;
+          return (
+            line.tipo === "Compra"
+              && line.produtoId === changedLine.produtoId
+              && line.atividadeServicoAncoraId === anchorServiceId
+          ) || (line.tipo === "Serviço" && affectedServiceIds.has(line.atividadeId));
+        })
+        .map(lineCloneGroupKey)
+    );
     const shiftedPurchaseIds = new Set(
       purchaseChain
-        .filter((line) => originalLineDate(line, previousDates) >= cutoffDate)
+        .filter((line) => shiftedGroupKeys.has(lineCloneGroupKey(line)))
         .map((line) => line.atividadeId)
     );
 
@@ -1139,13 +1217,7 @@ function applyPurchaseChainRecalculation(payload: SchedulePayload, result: Engin
       if (!lineCanMove(payload, line)) return line;
       const lineOriginalDate = originalLineDate(line, previousDates);
       if (!lineOriginalDate) return line;
-
-      if (line.tipo === "Compra" && line.produtoId === changedLine.produtoId && line.atividadeServicoAncoraId === anchorServiceId) {
-        if (lineOriginalDate < cutoffDate) return withLineDate(line, lineOriginalDate, payload);
-        return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
-      }
-
-      if (line.tipo === "Serviço" && affectedServiceIds.has(line.atividadeId) && lineOriginalDate >= cutoffDate) {
+      if (shiftedGroupKeys.has(lineCloneGroupKey(line))) {
         return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
       }
 
@@ -1319,6 +1391,99 @@ function lineCloneGroupKey(line: ScheduleLine): string {
   ].join("|");
 }
 
+function preserveFrozenActivityDates(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const frozenGroups = frozenActivityGroupKeys(payload);
+  if (!frozenGroups.size) return result;
+
+  const previousDates = new Map<string, string>();
+  for (const record of atividadeObraSnapshot(payload)) {
+    const date = snapshotRecordDate(record);
+    if (!date) continue;
+    previousDates.set(
+      `${snapshotRecordCloneGroupKey(record)}:${snapshotRecordCloneIndex(record)}`,
+      date
+    );
+  }
+
+  const changedGroups = new Set<string>();
+  const lines = result.lines.map((line) => {
+    const groupKey = lineCloneGroupKey(line);
+    if (!frozenGroups.has(groupKey)) return line;
+    const previousDate = previousDates.get(`${groupKey}:${line.clone_index}`);
+    if (!previousDate || previousDate === line.data_programada) return line;
+    changedGroups.add(groupKey);
+    return withLineDate(line, previousDate, payload);
+  });
+  if (!changedGroups.size) return result;
+
+  const warnings = [...result.validations.warnings];
+  for (const groupKey of changedGroups) {
+    warnings.push(`activity_group_locked:${groupKey}: generated dates were discarded because execution has started`);
+  }
+  return {
+    ...result,
+    lines,
+    validations: { ...result.validations, warnings: [...new Set(warnings)] }
+  };
+}
+
+function eventTargetsCloneGroup(payload: SchedulePayload, event: Record<string, unknown>, groupLines: ScheduleLine[]): boolean {
+  const type = eventType(event);
+  if (type === "work_start_delayed") {
+    const startDate = obraStartDate(payload);
+    const requestedDate = recalculatedStartDate(payload, event);
+    return Boolean(startDate && requestedDate && formatDateOnly(startDate) !== requestedDate);
+  }
+  if (type === "from_date_delayed") {
+    const fromDate = recalculatedStartDate(payload, event);
+    return eventDays(event) !== 0 && Boolean(fromDate && groupLines.some((line) => line.data_programada >= fromDate));
+  }
+  if (
+    type !== "activity_date_changed_cascade"
+    && type !== "activity_date_changed_only"
+    && type !== "activity_start_delayed"
+  ) return false;
+
+  const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+  if (externalId) {
+    const eventGroup = externalId.match(/^(.*\|[^|]+)\|\d+$/)?.[1];
+    if (eventGroup) return eventGroup === lineCloneGroupKey(groupLines[0]!);
+  }
+  const activityId = activityStartEventActivityId(event);
+  return Boolean(activityId && groupLines.some((line) => line.atividadeId === activityId));
+}
+
+function appendActivityGroupWarnings(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const frozenGroups = frozenActivityGroupKeys(payload);
+  if (!frozenGroups.size) return result;
+
+  const warnings = [...result.validations.warnings];
+  const linesByGroup = new Map<string, ScheduleLine[]>();
+  for (const line of result.lines) {
+    const groupKey = lineCloneGroupKey(line);
+    linesByGroup.set(groupKey, [...(linesByGroup.get(groupKey) || []), line]);
+  }
+
+  for (const [groupKey, groupLines] of linesByGroup) {
+    if (!frozenGroups.has(groupKey)) continue;
+    const ordered = [...groupLines].sort((a, b) => (
+      a.clone_index - b.clone_index
+      || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
+    ));
+    if (activeRecalculateEvents(payload).some((event) => eventTargetsCloneGroup(payload, event, ordered))) {
+      warnings.push(`activity_group_locked:${groupKey}: recalculation skipped because execution has started`);
+    }
+    if (ordered.some((line, index) => index > 0 && line.data_programada <= ordered[index - 1]!.data_programada)) {
+      warnings.push(`activity_group_inconsistent:${groupKey}: clone dates are not strictly increasing; manual correction required`);
+    }
+  }
+
+  return {
+    ...result,
+    validations: { ...result.validations, warnings: [...new Set(warnings)] }
+  };
+}
+
 function lineTeamWeightKey(line: ScheduleLine, date: string): string {
   return `${date}:${line.equipe || "__sem_equipe__"}`;
 }
@@ -1429,10 +1594,12 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
     let currentPayload = payload;
     let result = snapshotEngineResult(payload);
     const normalizedDates: NormalizedDate[] = [];
+    const warnings: string[] = [];
     for (const event of payload.events_json) {
       const eventPayload = { ...currentPayload, events_old: [], events_json: [event] };
       result = calculateScheduleResult(eventPayload);
       normalizedDates.push(...(result.normalizedDates || []));
+      warnings.push(...result.validations.warnings);
       const snapshot = result.lines.map((line) => ({
         ...line.raw,
         dataInicioPrevista: line.data_programada,
@@ -1447,13 +1614,20 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
         atividade_obra_json: snapshot
       };
     }
-    return { ...result, normalizedDates: uniqueNormalizedDates(normalizedDates) };
+    return {
+      ...result,
+      validations: { ...result.validations, warnings: [...new Set(warnings)] },
+      normalizedDates: uniqueNormalizedDates(normalizedDates)
+    };
   }
   validateDeltaScope(payload);
 
-  const initialResult = isSnapshotRecalculate(payload)
-    ? snapshotEngineResult(payload)
-    : runScheduleEngine(payload);
+  const initialResult = preserveFrozenActivityDates(
+    payload,
+    isSnapshotRecalculate(payload)
+      ? snapshotEngineResult(payload)
+      : runScheduleEngine(payload)
+  );
 
   const recalculatedResult = applyFromDateDelayedRecalculation(
     payload,
@@ -1467,10 +1641,10 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
   );
 
   const normalizedInputDates = inputNormalizedDates(payload, recalculatedResult);
-  return normalizeCalculatedLineDates(payload, {
+  return appendActivityGroupWarnings(payload, normalizeCalculatedLineDates(payload, {
     ...recalculatedResult,
     normalizedDates: uniqueNormalizedDates([...(recalculatedResult.normalizedDates || []), ...normalizedInputDates])
-  });
+  }));
 }
 
 interface DeltaMotorResult {
@@ -1727,6 +1901,7 @@ async function processScheduleJob(
         dedupDroppedCount: persistenceSummary.dedupDroppedCount,
         durationMs
       },
+      validations: result.validations,
       normalizedDates: result.normalizedDates || []
     }, webhookOptions);
 
