@@ -1286,23 +1286,94 @@ function uniqueNormalizedDates(dates: NormalizedDate[]): NormalizedDate[] {
   return [...byKey.values()];
 }
 
+function lineCloneGroupKey(line: ScheduleLine): string {
+  const currentExternalId = line.atividade_obra_id_externo.match(/^(.*\|[^|]+)\|\d+$/);
+  if (currentExternalId) return currentExternalId[1]!;
+
+  return [
+    line.atividadeId,
+    line.ambienteId || line.ambiente || "",
+    line.obraAmbienteProdutoId || line.produtoId || line.produto || "",
+    line.atividadeServicoAncoraId || ""
+  ].join("|");
+}
+
+function lineTeamWeightKey(line: ScheduleLine, date: string): string {
+  return `${date}:${line.equipe || "__sem_equipe__"}`;
+}
+
+function updateTeamWeight(teamWeightByDay: Map<string, number>, line: ScheduleLine, date: string, direction: 1 | -1): void {
+  if (line.tipo !== "Serviço") return;
+  const key = lineTeamWeightKey(line, date);
+  const nextWeight = (teamWeightByDay.get(key) || 0) + (line.peso * direction);
+  if (nextWeight > 0) teamWeightByDay.set(key, nextWeight);
+  else teamWeightByDay.delete(key);
+}
+
 function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineResult): EngineResult {
   const normalizedDates: NormalizedDate[] = [];
-  const lines = result.lines.map((line) => {
-    if (!lineCanMove(payload, line)) return line;
+  const linesByGroup = new Map<string, ScheduleLine[]>();
+  for (const line of result.lines) {
+    const groupKey = lineCloneGroupKey(line);
+    linesByGroup.set(groupKey, [...(linesByGroup.get(groupKey) || []), line]);
+  }
 
-    const parsedDate = parseDateOnly(line.data_programada);
-    if (isBusinessDay(parsedDate, payload.dias_trabalho_semana)) return line;
+  const teamWeightByDay = new Map<string, number>();
+  for (const line of result.lines) updateTeamWeight(teamWeightByDay, line, line.data_programada, 1);
 
-    const applied = formatDateOnly(nextBusinessDay(parsedDate, payload.dias_trabalho_semana));
-    normalizedDates.push({
-      id_atividade_obra_externo: line.atividade_obra_id_externo,
-      requested: line.data_programada,
-      applied,
-      reason: "non_working_day"
-    });
-    return withLineDate(line, applied, payload);
-  });
+  const normalizedByExternalId = new Map<string, ScheduleLine>();
+  for (const groupLines of linesByGroup.values()) {
+    let previousDate: Date | null = null;
+    const orderedLines = [...groupLines].sort((a, b) => (
+      a.clone_index - b.clone_index
+      || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
+    ));
+    for (const line of orderedLines) {
+      if (lineCanMove(payload, line)) updateTeamWeight(teamWeightByDay, line, line.data_programada, -1);
+    }
+
+    for (const line of orderedLines) {
+      const requestedDate = parseDateOnly(line.data_programada);
+      if (!lineCanMove(payload, line)) {
+        if (!previousDate || requestedDate > previousDate) previousDate = requestedDate;
+        normalizedByExternalId.set(line.atividade_obra_id_externo, line);
+        continue;
+      }
+
+      let appliedDate = nextBusinessDay(requestedDate, payload.dias_trabalho_semana);
+      if (previousDate && appliedDate <= previousDate) {
+        appliedDate = addBusinessDays(previousDate, 1, payload.dias_trabalho_semana);
+      }
+
+      let capacityAdjusted = false;
+      if (line.tipo === "Serviço") {
+        while ((teamWeightByDay.get(lineTeamWeightKey(line, formatDateOnly(appliedDate))) || 0) + line.peso > 10) {
+          appliedDate = addBusinessDays(appliedDate, 1, payload.dias_trabalho_semana);
+          capacityAdjusted = true;
+        }
+      }
+
+      const applied = formatDateOnly(appliedDate);
+      if (applied !== line.data_programada) {
+        normalizedDates.push({
+          id_atividade_obra_externo: line.atividade_obra_id_externo,
+          requested: line.data_programada,
+          applied,
+          reason: capacityAdjusted
+            ? "team_capacity"
+            : !isBusinessDay(requestedDate, payload.dias_trabalho_semana)
+              ? "non_working_day"
+              : "clone_sequence_collision"
+        });
+      }
+      const normalizedLine = applied === line.data_programada ? line : withLineDate(line, applied, payload);
+      normalizedByExternalId.set(line.atividade_obra_id_externo, normalizedLine);
+      updateTeamWeight(teamWeightByDay, normalizedLine, applied, 1);
+      previousDate = appliedDate;
+    }
+  }
+
+  const lines = result.lines.map((line) => normalizedByExternalId.get(line.atividade_obra_id_externo) || line);
 
   if (!normalizedDates.length) return result;
 
