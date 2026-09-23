@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { ZodError, type ZodIssue } from "zod";
 import { BaseStateInvalidError, BubbleBulkConfigError, BubbleBulkPayloadError, BubbleBulkRequestError, persistScheduleBulks, persistScheduleDatePatches, persistScheduleDeltaMotorPatches, StateDriftError } from "../services/bubble-bulk.service.js";
-import { addBusinessDays, isBusinessDay, nextBusinessDay } from "../services/business-days.service.js";
+import { addBusinessDays, isBusinessDay, nextBusinessDay, previousBusinessDay } from "../services/business-days.service.js";
 import { normalizePayload, parseSchedulePayload } from "../services/normalize-payload.service.js";
 import { buildScheduleAcceptedResponse, buildScheduleErrorResponse } from "../services/response-builder.service.js";
 import { sendScheduleWebhook, webhookBaseFields, webhookBubbleApiVersion } from "../services/schedule-webhook.service.js";
@@ -625,6 +625,13 @@ function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
   return movableSnapshotStatus(field(line.raw, "status"));
 }
 
+function lineCanRepair(payload: SchedulePayload, line: ScheduleLine): boolean {
+  if (!isSnapshotRecalculate(payload)) return true;
+  if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
+  const status = normalizeText(field(line.raw, "status"));
+  return movableSnapshotStatus(status) || status === "pausada";
+}
+
 function masterDependencyEntries(payload: SchedulePayload): Array<{ activityId: string; deps: string[] }> {
   return (payload.master_dependencies || []).flatMap((record) => {
     const activityId = stringValue(field(record, "atividade", "atividade_id", "activity_id", "id"));
@@ -1028,16 +1035,25 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
     const type = eventType(event);
     const activityId = activityStartEventActivityId(event);
     const targetKey = eventActivityLineKey(event);
+    const targetExternalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
     const newDate = recalculatedStartDate(payload, event);
     if (!activityId || !newDate) continue;
 
-    const targetLine = lines.find((line) => activityLineKey(line.atividadeId, line.clone_index) === targetKey)
+    const targetLine = lines.find((line) => targetExternalId && line.atividade_obra_id_externo === targetExternalId)
+      || lines.find((line) => activityLineKey(line.atividadeId, line.clone_index) === targetKey)
       || lines.find((line) => line.atividadeId === activityId);
     if (!targetLine) continue;
 
-    const originalTargetDate = previousDates.get(activityLineKey(targetLine.atividadeId, targetLine.clone_index))
-      || externalActivityDate(stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")))
-      || targetLine.data_programada;
+    const targetGroupKey = lineCloneGroupKey(targetLine);
+    const targetGroup = lines
+      .filter((line) => lineCloneGroupKey(line) === targetGroupKey)
+      .sort((a, b) => a.clone_index - b.clone_index || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo));
+    const originalFirstLine = targetGroup[0] || targetLine;
+    const originalTargetDate = isSnapshotRecalculate(payload)
+      ? originalFirstLine.data_programada
+      : previousDates.get(activityLineKey(originalFirstLine.atividadeId, originalFirstLine.clone_index))
+        || externalActivityDate(targetExternalId)
+        || originalFirstLine.data_programada;
     if (!originalTargetDate) continue;
 
     const deltaDays = differenceInCalendarDays(parseDateOnly(originalTargetDate), parseDateOnly(newDate));
@@ -1049,15 +1065,20 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
         affectedActivityIds.add(serviceId);
       }
     }
+    const targetDates = new Map(
+      targetGroup.map((line, index) => [
+        line.atividade_obra_id_externo,
+        formatDateOnly(addBusinessDays(parseDateOnly(newDate), index, payload.dias_trabalho_semana))
+      ])
+    );
 
     lines = lines.map((line) => {
-      if (!lineCanMove(payload, line)) return line;
-      const lineKey = activityLineKey(line.atividadeId, line.clone_index);
-      if (type === "activity_date_changed_only") {
-        return lineKey === targetKey ? withLineDate(line, newDate, payload) : line;
+      const targetDate = targetDates.get(line.atividade_obra_id_externo);
+      if (targetDate) {
+        return lineCanRepair(payload, line) ? withLineDate(line, targetDate, payload) : line;
       }
+      if (type === "activity_date_changed_only" || !lineCanMove(payload, line)) return line;
 
-      if (line.atividadeId === targetLine.atividadeId && line.clone_index < targetLine.clone_index) return line;
       if (!affectedActivityIds.has(line.atividadeId)) return line;
 
       const lineOriginalDate = originalLineDate(line, previousDates);
@@ -1322,6 +1343,12 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
   for (const line of result.lines) updateTeamWeight(teamWeightByDay, line, line.data_programada, 1);
 
   const normalizedByExternalId = new Map<string, ScheduleLine>();
+  const sameDateMaintenance = isSnapshotRecalculate(payload)
+    && activeRecalculateEvents(payload).some((event) => (
+      eventType(event) === "work_start_delayed"
+      && explicitObraStartDate(payload)
+      && requestedRecalculateDate(payload, event) === eventDateOnly(explicitObraStartDate(payload), payload)
+    ));
   for (const groupLines of linesByGroup.values()) {
     let previousDate: Date | null = null;
     const orderedLines = [...groupLines].sort((a, b) => (
@@ -1329,18 +1356,28 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
       || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
     ));
     for (const line of orderedLines) {
-      if (lineCanMove(payload, line)) updateTeamWeight(teamWeightByDay, line, line.data_programada, -1);
+      if (lineCanRepair(payload, line)) updateTeamWeight(teamWeightByDay, line, line.data_programada, -1);
     }
 
-    for (const line of orderedLines) {
+    for (let lineIndex = 0; lineIndex < orderedLines.length; lineIndex += 1) {
+      const line = orderedLines[lineIndex]!;
       const requestedDate = parseDateOnly(line.data_programada);
-      if (!lineCanMove(payload, line)) {
+      if (!lineCanRepair(payload, line)) {
         if (!previousDate || requestedDate > previousDate) previousDate = requestedDate;
         normalizedByExternalId.set(line.atividade_obra_id_externo, line);
         continue;
       }
 
       let appliedDate = nextBusinessDay(requestedDate, payload.dias_trabalho_semana);
+      const nextLineDate = orderedLines[lineIndex + 1]?.data_programada;
+      if (
+        sameDateMaintenance
+        && lineIndex === 0
+        && !isBusinessDay(requestedDate, payload.dias_trabalho_semana)
+        && nextLineDate === formatDateOnly(appliedDate)
+      ) {
+        appliedDate = previousBusinessDay(requestedDate, payload.dias_trabalho_semana);
+      }
       if (previousDate && appliedDate <= previousDate) {
         appliedDate = addBusinessDays(previousDate, 1, payload.dias_trabalho_semana);
       }

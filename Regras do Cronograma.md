@@ -206,9 +206,11 @@ Antes de reposicionar um grupo, as reservas de peso de seus clones móveis são 
 
 ### 7.4 Linhas imutáveis
 
-Em recálculo por snapshot, somente linhas com estado móvel podem ser alteradas. Em geral, são móveis linhas sem status, `Não iniciada` ou `Recalculada`.
+Em recálculo por snapshot, linhas sem status, `Não iniciada`, `Recalculada` ou `Pausada` podem ser saneadas. Uma atividade pausada não pode conservar clones fora de ordem ou em fim de semana.
 
-Linhas concluídas, iniciadas, pausadas ou usadas como âncoras de um escopo delta permanecem imutáveis. Uma linha imutável ainda funciona como limite cronológico para clones móveis posteriores.
+Linhas concluídas/finalizadas e linhas usadas como âncoras de um escopo delta permanecem imutáveis. Uma linha imutável ainda funciona como limite cronológico para clones móveis posteriores.
+
+Em um recálculo de manutenção para a mesma data, o padrão legado em que o primeiro clone ficou em um dia não útil imediatamente antes do segundo clone é reparado preservando o segundo clone: o primeiro é colocado no dia útil anterior. Exemplo: `sábado + segunda` torna-se `sexta + segunda`.
 
 ### 7.5 Diagnóstico
 
@@ -291,11 +293,11 @@ O contrato ainda exige:
 
 ### 10.3 Mudança somente da atividade
 
-`activity_date_changed_only` altera apenas a linha identificada pelo evento. Não deve deslocar dependentes.
+`activity_date_changed_only` reescreve todos os clones da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Não desloca atividades dependentes.
 
 ### 10.4 Mudança com cascata
 
-`activity_date_changed_cascade` altera a linha alvo, clones posteriores aplicáveis e atividades dependentes, respeitando mobilidade, dependências e normalização final.
+`activity_date_changed_cascade` reescreve todos os clones da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Depois desloca atividades dependentes, respeitando dependências e normalização final. O clone referenciado pelo evento serve para identificar a instância; ele não limita a reescrita aos clones daquele índice em diante.
 
 ### 10.5 Paralisação a partir de uma data
 
@@ -395,6 +397,9 @@ Uma implementação compatível deve testar pelo menos:
 28. rejeição de nova versão igual à anterior;
 29. rejeição de snapshot incompleto;
 30. detecção de estado divergente no motor delta.
+31. evento apontando para o Dia 2 reescrevendo a atividade inteira a partir do Dia 1;
+32. autocorreção de `sábado + segunda` para `sexta + segunda` em manutenção;
+33. correção de clone pausado fora de ordem sem alterar linhas concluídas.
 
 ## 16. Invariantes finais
 
