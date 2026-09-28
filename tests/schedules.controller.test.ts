@@ -1034,6 +1034,90 @@ describe("schedule controllers", () => {
     expect(patches.wall_2).toMatchObject({ dataInicioPrevista: "2026-10-21T12:00:00.000Z" });
   });
 
+  it("returns done with a warning when a frozen clone group keeps an unjustified gap", async () => {
+    const snapshot = [
+      [1, "2026-09-18"],
+      [2, "2026-09-23"]
+    ].map(([clone, date]) => ({
+      "unique id": `wall_${clone}`,
+      atividade: "wall",
+      id_atividade_obra_externo: `wall|amb_1|${clone}`,
+      ambiente_id: "amb_1",
+      tipo: "Servico",
+      equipe: "Civil",
+      peso: 5,
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Concluida",
+      scopeRole: "editable"
+    }));
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      mode: "recalculate",
+      payload_version: 2,
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-09-18" }],
+      atividade_obra_snapshot: snapshot,
+      events_json: [{ type: "work_start_delayed", new_start_date: "2026-09-18" }]
+    }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    expect(doneBody.status).toBe("done");
+    expect(doneBody.validations).toEqual({
+      errors: [],
+      warnings: [
+        "activity_group_gap_unexplained:group=wall|amb_1:expected=2026-09-21:actual=2026-09-23"
+      ]
+    });
+  });
+
+  it("returns done with dependency and team-capacity audit warnings", async () => {
+    const snapshot = [
+      ["root", "amb_1", "2026-10-20", "Montagem", 1],
+      ["successor", "amb_1", "2026-10-19", "Gestor", 1],
+      ["busy_a", "amb_2", "2026-10-20", "Civil", 6],
+      ["busy_b", "amb_3", "2026-10-20", "Civil", 6]
+    ].map(([activity, environment, date, team, weight]) => ({
+      "unique id": activity,
+      atividade: activity,
+      id_atividade_obra_externo: `${activity}|${environment}|1`,
+      ambiente_id: environment,
+      tipo: "Servico",
+      equipe: team,
+      peso: weight,
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Concluida",
+      scopeRole: "editable"
+    }));
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      mode: "recalculate",
+      payload_version: 2,
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-10-01" }],
+      atividade_obra_snapshot: snapshot,
+      master_dependencies: [{ atividade: "successor", deps: ["root"] }],
+      events_json: [{ type: "work_start_delayed", new_start_date: "2026-10-01" }]
+    }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    expect(doneBody.status).toBe("done");
+    expect(doneBody.validations).toEqual({
+      errors: [],
+      warnings: [
+        "team_capacity_exceeded:date=2026-10-20:team=Civil:load=12",
+        "dependency_order_violation:group=successor|amb_1:required=2026-10-21:actual=2026-10-19"
+      ]
+    });
+  });
+
   it("changes only the selected atividade obra date without dependents", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       const rows = String((init as { body?: string })?.body || "").split("\n").filter(Boolean);

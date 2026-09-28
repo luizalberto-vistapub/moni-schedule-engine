@@ -1687,6 +1687,99 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
   };
 }
 
+function skippedBusinessDaysHaveNoCapacity(
+  payload: SchedulePayload,
+  line: ScheduleLine,
+  expected: string,
+  actual: string,
+  teamWeightByDay: Map<string, number>
+): boolean {
+  if (line.tipo !== "Serviço" || !line.equipe || expected >= actual) return false;
+  let cursor = parseDateOnly(expected);
+  while (formatDateOnly(cursor) < actual) {
+    const occupiedWeight = teamWeightByDay.get(lineTeamWeightKey(line, formatDateOnly(cursor))) || 0;
+    if (occupiedWeight + line.peso <= 10) return false;
+    cursor = addBusinessDays(cursor, 1, payload.dias_trabalho_semana);
+  }
+  return true;
+}
+
+function appendScheduleAuditWarnings(payload: SchedulePayload, result: EngineResult): EngineResult {
+  const warnings = [...result.validations.warnings];
+  const teamWeightByDay = new Map<string, number>();
+  const linesByActivity = new Map<string, ScheduleLine[]>();
+  const linesByGroup = new Map<string, ScheduleLine[]>();
+
+  for (const line of result.lines) {
+    updateTeamWeight(teamWeightByDay, line, line.data_programada, 1);
+    linesByActivity.set(line.atividadeId, [...(linesByActivity.get(line.atividadeId) || []), line]);
+    const groupKey = lineCloneGroupKey(line);
+    linesByGroup.set(groupKey, [...(linesByGroup.get(groupKey) || []), line]);
+  }
+
+  for (const [key, load] of teamWeightByDay) {
+    if (load <= 10) continue;
+    const separator = key.indexOf(":");
+    const date = key.slice(0, separator);
+    const team = key.slice(separator + 1);
+    warnings.push(`team_capacity_exceeded:date=${date}:team=${team}:load=${load}`);
+  }
+
+  const groupCountByActivity = new Map<string, number>();
+  for (const groupLines of linesByGroup.values()) {
+    const activityId = groupLines[0]!.atividadeId;
+    groupCountByActivity.set(activityId, (groupCountByActivity.get(activityId) || 0) + 1);
+  }
+
+  for (const [groupKey, groupLines] of linesByGroup) {
+    const ordered = [...groupLines].sort((a, b) => (
+      a.clone_index - b.clone_index
+      || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
+    ));
+    if (groupHasExplicitDateEvent(payload, ordered, groupCountByActivity.get(ordered[0]!.atividadeId) || 1)) continue;
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1]!;
+      const current = ordered[index]!;
+      const expected = formatDateOnly(addBusinessDays(parseDateOnly(previous.data_programada), 1, payload.dias_trabalho_semana));
+      if (current.data_programada <= expected) continue;
+      if (skippedBusinessDaysHaveNoCapacity(payload, current, expected, current.data_programada, teamWeightByDay)) continue;
+      warnings.push(`activity_group_gap_unexplained:group=${groupKey}:expected=${expected}:actual=${current.data_programada}`);
+    }
+  }
+
+  const dependencies = dependencyIdsByActivity(payload);
+  for (const [activityId, dependencyIds] of dependencies) {
+    if (!dependencyIds.length) continue;
+    const predecessorDates = dependencyIds.flatMap((dependencyId) => (
+      linesByActivity.get(dependencyId) || []
+    ).map((line) => line.data_programada));
+    if (!predecessorDates.length) continue;
+    const required = formatDateOnly(addBusinessDays(
+      parseDateOnly(predecessorDates.sort().at(-1)!),
+      1,
+      payload.dias_trabalho_semana
+    ));
+    const activityGroups = [...linesByGroup.entries()].filter(([, groupLines]) => groupLines[0]!.atividadeId === activityId);
+    for (const [groupKey, groupLines] of activityGroups) {
+      const ordered = [...groupLines].sort((a, b) => a.clone_index - b.clone_index);
+      const first = ordered[0]!;
+      if (first.data_programada < required) {
+        warnings.push(`dependency_order_violation:group=${groupKey}:required=${required}:actual=${first.data_programada}`);
+        continue;
+      }
+      if (first.data_programada === required) continue;
+      if (groupHasExplicitDateEvent(payload, ordered, activityGroups.length)) continue;
+      if (skippedBusinessDaysHaveNoCapacity(payload, first, required, first.data_programada, teamWeightByDay)) continue;
+      warnings.push(`dependency_gap_unexplained:group=${groupKey}:required=${required}:actual=${first.data_programada}`);
+    }
+  }
+
+  return {
+    ...result,
+    validations: { ...result.validations, warnings: [...new Set(warnings)] }
+  };
+}
+
 function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResult {
   if (isSnapshotRecalculate(payload) && payload.events_json.length > 1) {
     let currentPayload = payload;
@@ -1739,10 +1832,10 @@ function calculateScheduleResult(payload: NormalizedSchedulePayload): EngineResu
   );
 
   const normalizedInputDates = inputNormalizedDates(payload, recalculatedResult);
-  return appendActivityGroupWarnings(payload, normalizeCalculatedLineDates(payload, {
+  return appendScheduleAuditWarnings(payload, appendActivityGroupWarnings(payload, normalizeCalculatedLineDates(payload, {
     ...recalculatedResult,
     normalizedDates: uniqueNormalizedDates([...(recalculatedResult.normalizedDates || []), ...normalizedInputDates])
-  }));
+  })));
 }
 
 interface DeltaMotorResult {
