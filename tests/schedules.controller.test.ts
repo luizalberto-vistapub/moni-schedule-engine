@@ -925,6 +925,54 @@ describe("schedule controllers", () => {
     expect(patches.done_1).toBeUndefined();
   });
 
+  it("removes inherited clone gaps when a cascade frees the intervening business days", async () => {
+    const snapshot = [
+      ["root", 1, "2026-10-23"],
+      ["root", 2, "2026-10-26"],
+      ["wall", 1, "2026-10-27"],
+      ["wall", 2, "2026-10-30"]
+    ].map(([activity, clone, date]) => ({
+      "unique id": `${activity}_${clone}`,
+      atividade: activity,
+      id_atividade_obra_externo: `${activity}|amb_1|${clone}`,
+      ambiente_id: "amb_1",
+      tipo: "Servico",
+      equipe: "Montador estrutura",
+      peso: 1,
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Nao iniciada",
+      scopeRole: "editable"
+    }));
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      mode: "recalculate",
+      payload_version: 2,
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-10-01" }],
+      atividade_obra_snapshot: snapshot,
+      master_dependencies: [{ atividade: "wall", deps: ["root"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade: "root",
+        id_atividade_obra_externo: "root|amb_1|1",
+        data: "2026-10-16"
+      }]
+    }));
+
+    expect(response.status).toBe(202);
+    await waitForDoneWebhook();
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+
+    expect(patches.root_1).toMatchObject({ dataInicioPrevista: "2026-10-16T12:00:00.000Z" });
+    expect(patches.root_2).toMatchObject({ dataInicioPrevista: "2026-10-19T12:00:00.000Z" });
+    expect(patches.wall_1).toMatchObject({ dataInicioPrevista: "2026-10-20T12:00:00.000Z" });
+    expect(patches.wall_2).toMatchObject({ dataInicioPrevista: "2026-10-21T12:00:00.000Z" });
+  });
+
   it("changes only the selected atividade obra date without dependents", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       const rows = String((init as { body?: string })?.body || "").split("\n").filter(Boolean);

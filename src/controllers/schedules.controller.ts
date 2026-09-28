@@ -1541,6 +1541,11 @@ function updateTeamWeight(teamWeightByDay: Map<string, number>, line: ScheduleLi
 
 function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineResult): EngineResult {
   const normalizedDates: NormalizedDate[] = [];
+  const snapshotDatesByExternalId = new Map(
+    atividadeObraSnapshot(payload)
+      .map((record) => [snapshotRecordExternalId(record), snapshotRecordDate(record)] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1]))
+  );
   const linesByGroup = new Map<string, ScheduleLine[]>();
   for (const line of result.lines) {
     const groupKey = lineCloneGroupKey(line);
@@ -1563,6 +1568,9 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
       a.clone_index - b.clone_index
       || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
     ));
+    const compactInheritedGaps = !isSnapshotRecalculate(payload) || orderedLines.some((line) => (
+      snapshotDatesByExternalId.get(line.atividade_obra_id_externo) !== line.data_programada
+    ));
     for (const line of orderedLines) {
       if (lineCanRepair(payload, line)) updateTeamWeight(teamWeightByDay, line, line.data_programada, -1);
     }
@@ -1576,7 +1584,7 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
         continue;
       }
 
-      let appliedDate = nextBusinessDay(requestedDate, payload.dias_trabalho_semana);
+      let appliedDate: Date = nextBusinessDay(requestedDate, payload.dias_trabalho_semana);
       const nextLineDate = orderedLines[lineIndex + 1]?.data_programada;
       if (
         sameDateMaintenance
@@ -1586,10 +1594,12 @@ function normalizeCalculatedLineDates(payload: SchedulePayload, result: EngineRe
       ) {
         appliedDate = previousBusinessDay(requestedDate, payload.dias_trabalho_semana);
       }
-      if (previousDate && appliedDate <= previousDate) {
-        appliedDate = addBusinessDays(previousDate, 1, payload.dias_trabalho_semana);
+      if (previousDate) {
+        const nextCloneDate = addBusinessDays(previousDate, 1, payload.dias_trabalho_semana);
+        if (appliedDate <= previousDate || (compactInheritedGaps && appliedDate > nextCloneDate)) {
+          appliedDate = nextCloneDate;
+        }
       }
-
       let capacityAdjusted = false;
       if (line.tipo === "Serviço") {
         while ((teamWeightByDay.get(lineTeamWeightKey(line, formatDateOnly(appliedDate))) || 0) + line.peso > 10) {
