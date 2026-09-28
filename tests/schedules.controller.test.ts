@@ -3114,7 +3114,7 @@ describe("schedule controllers", () => {
       job_id: response.body.job_id,
       status: "error",
       error_code: "BUBBLE_BULK_REQUEST_ERROR",
-      error_message: "Bubble atividade obra bulk failed before any created records could be confirmed; refusing blind retry",
+      error_message: "Bubble bulk atividadexobra failed with 401: Unauthorized",
       failed_step: "bulk_create"
     });
   });

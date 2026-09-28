@@ -866,6 +866,31 @@ describe("Bubble bulk persistence", () => {
     expect(findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(1);
   });
 
+  it("returns deterministic Atividade x Obra bulk 400 errors without reconciliation", async () => {
+    const { payload, lines } = payloadWithOneLine();
+    let lookupCount = 0;
+    const responseText = '{"status":"error","message":"Unrecognized field: iniciadaPor"}';
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "GET") {
+        lookupCount += 1;
+        return atividadeObraLookupResponse();
+      }
+      return {
+        ok: false,
+        status: 400,
+        text: async (): Promise<string> => responseText
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(persistScheduleBulks(payload, lines)).rejects.toThrow(
+      `Bubble bulk atividadexobra failed with 400: ${responseText}`
+    );
+
+    expect(lookupCount).toBe(1);
+    expect(findFetchCalls(fetchMock, "/api/1.1/obj/atividadexobra/bulk", "POST")).toHaveLength(1);
+  });
+
   it("updates existing Atividade x Obra records by external id instead of creating duplicates", async () => {
     const { payload, lines } = payloadWithOneLine();
     const externalId = lines[0]!.atividade_obra_id_externo;
@@ -1621,15 +1646,32 @@ describe("Bubble bulk persistence", () => {
       versaoCronograma: "versao_1",
       status: "Concluida",
       dataExecucao: "2026-05-06T12:00:00.000Z",
-      iniciadaPor: "user_started_1",
+      "Iniciada por": "user_started_1",
       observacao: "Executada no cronograma anterior",
       responsavelFranqueado: "user_1"
     });
+    expect(JSON.parse(String(postCall![1]?.body))).not.toHaveProperty("iniciadaPor");
     const createdPatchCall = findFetchCall(fetchMock, "/api/1.1/obj/atividadexobra/created_axo_1", "PATCH");
     expect(JSON.parse(String(createdPatchCall?.[1]?.body))).toMatchObject({
       "Atividade x Obra Master": "created_axo_1",
       master: true
     });
+  });
+
+  it("omits empty activity start user aliases from recreated records", () => {
+    const { payload, lines } = payloadWithOneLine({
+      atividade_obra_json: [{
+        atividade: "serv_1",
+        "ambiente x obra": "amb_1",
+        indice_clone: 1,
+        iniciadaPor: ""
+      }]
+    });
+
+    const [record] = buildAtividadeObraRecords(payload, lines);
+
+    expect(record).not.toHaveProperty("iniciadaPor");
+    expect(record).not.toHaveProperty("Iniciada por");
   });
 
   it("does not patch duplicated previous Atividade x Obra ids when recalculating a new version", async () => {
