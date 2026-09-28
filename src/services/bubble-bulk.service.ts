@@ -1103,6 +1103,10 @@ export function buildAtividadeObraRecords(payload: NormalizedSchedulePayload, li
       nomeObra: currentObraNome,
       nomeProduto: line.produto || "",
       "Produto (raiz)": line.produtoId || "",
+      produtocomposto_custom_produto: line.produtoCompostoId || "",
+      origemcomposicao_custom_memorial_descritivo: line.origemComposicaoId || "",
+      diadobloco_number: line.clone_index,
+      totaldiasdobloco_number: line.totalDiasDoBloco || 1,
       obra: currentObraId,
       ordemRaiz: line.ordem,
       ordemCronograma: line.ordemCronograma,
@@ -1218,6 +1222,7 @@ function catalogDependencyRoot(
 
 function sameLineContext(a: ScheduleLine, b: ScheduleLine, options: { sameProduct?: boolean } = {}): boolean {
   return (a.ambienteId || "") === (b.ambienteId || "")
+    && (!(a.produtoCompostoId && b.produtoCompostoId) || a.produtoCompostoId === b.produtoCompostoId)
     && (!options.sameProduct || (a.produtoId || "") === (b.produtoId || ""));
 }
 

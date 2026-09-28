@@ -604,8 +604,19 @@ function snapshotRecordDate(record: Record<string, unknown>): string {
 }
 
 function snapshotRecordCloneIndex(record: Record<string, unknown>): number {
+  const blockDay = numberValue(field(record, "diaDoBloco", "diadobloco_number"), 0);
+  if (blockDay > 0) return Math.trunc(blockDay);
   const external = snapshotRecordExternalId(record);
   return externalActivityParts(external)?.cloneIndex || 1;
+}
+
+function snapshotRecordCompositionOriginId(record: Record<string, unknown>): string {
+  return stringValue(field(
+    record,
+    "origemComposicao",
+    "origemComposicaoId",
+    "origemcomposicao_custom_memorial_descritivo"
+  ));
 }
 
 function movableSnapshotStatus(status: unknown): boolean {
@@ -616,6 +627,9 @@ function movableSnapshotStatus(status: unknown): boolean {
 const frozenActivityGroupsCache = new WeakMap<object, Set<string>>();
 
 function snapshotRecordCloneGroupKey(record: Record<string, unknown>): string {
+  const compositionOriginId = snapshotRecordCompositionOriginId(record);
+  if (compositionOriginId) return `${snapshotRecordActivityId(record)}|composition:${compositionOriginId}`;
+
   const externalId = snapshotRecordExternalId(record);
   const currentExternalId = externalId.match(/^(.*\|[^|]+)\|\d+$/);
   if (currentExternalId) return currentExternalId[1]!;
@@ -660,7 +674,8 @@ function frozenActivityGroupKeys(payload: SchedulePayload): Set<string> {
 }
 
 function activityGroupIsFrozen(payload: SchedulePayload, line: ScheduleLine): boolean {
-  return frozenActivityGroupKeys(payload).has(lineCloneGroupKey(line));
+  const frozenGroups = frozenActivityGroupKeys(payload);
+  return frozenGroups.has(lineCloneGroupKey(line)) || frozenGroups.has(legacyLineCloneGroupKey(line));
 }
 
 function scopeType(payload: SchedulePayload): string {
@@ -1327,6 +1342,8 @@ function snapshotLineFromRecord(
     atividadeServicoAncoraNome: null,
     atividadeServicoAncoraExternoId: null,
     obraAmbienteProdutoId: null,
+    produtoCompostoId: stringValue(field(record, "produtoComposto", "produtoCompostoId", "produtocomposto_custom_produto")) || null,
+    origemComposicaoId: snapshotRecordCompositionOriginId(record) || null,
     produtoId,
     ambienteId: stringValue(field(record, "ambiente_id", "ambiente", "ambienteId")) || null,
     ambienteItemComposicaoId: null,
@@ -1352,6 +1369,7 @@ function snapshotLineFromRecord(
     ordem: numberValue(field(record, "ordem"), 0),
     ordemCronograma: numberValue(field(record, "ordemCronograma", "ordem_cronograma", "ordem"), 0),
     clone_index: cloneIndex,
+    totalDiasDoBloco: numberValue(field(record, "totalDiasDoBloco", "totaldiasdobloco_number"), 1),
     anchor_service_name: null,
     interdependenciasMasterIds: [],
     raw: record
@@ -1468,6 +1486,12 @@ function uniqueNormalizedDates(dates: NormalizedDate[]): NormalizedDate[] {
 }
 
 function lineCloneGroupKey(line: ScheduleLine): string {
+  if (line.origemComposicaoId) return `${line.atividadeId}|composition:${line.origemComposicaoId}`;
+
+  return legacyLineCloneGroupKey(line);
+}
+
+function legacyLineCloneGroupKey(line: ScheduleLine): string {
   const currentExternalId = line.atividade_obra_id_externo.match(/^(.*\|[^|]+)\|\d+$/);
   if (currentExternalId) return currentExternalId[1]!;
 
@@ -1487,19 +1511,18 @@ function preserveFrozenActivityDates(payload: SchedulePayload, result: EngineRes
   for (const record of atividadeObraSnapshot(payload)) {
     const date = snapshotRecordDate(record);
     if (!date) continue;
-    previousDates.set(
-      `${snapshotRecordCloneGroupKey(record)}:${snapshotRecordCloneIndex(record)}`,
-      date
-    );
+    previousDates.set(snapshotRecordExternalId(record), date);
   }
 
   const changedGroups = new Set<string>();
   const lines = result.lines.map((line) => {
     const groupKey = lineCloneGroupKey(line);
-    if (!frozenGroups.has(groupKey)) return line;
-    const previousDate = previousDates.get(`${groupKey}:${line.clone_index}`);
+    const legacyGroupKey = legacyLineCloneGroupKey(line);
+    const frozenGroupKey = frozenGroups.has(groupKey) ? groupKey : legacyGroupKey;
+    if (!frozenGroups.has(frozenGroupKey)) return line;
+    const previousDate = previousDates.get(line.atividade_obra_id_externo);
     if (!previousDate || previousDate === line.data_programada) return line;
-    changedGroups.add(groupKey);
+    changedGroups.add(frozenGroupKey);
     return withLineDate(line, previousDate, payload);
   });
   if (!changedGroups.size) return result;
@@ -1534,8 +1557,7 @@ function eventTargetsCloneGroup(payload: SchedulePayload, event: Record<string, 
 
   const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
   if (externalId) {
-    const eventGroup = externalId.match(/^(.*\|[^|]+)\|\d+$/)?.[1];
-    if (eventGroup) return eventGroup === lineCloneGroupKey(groupLines[0]!);
+    return groupLines.some((line) => line.atividade_obra_id_externo === externalId);
   }
   const activityId = activityStartEventActivityId(event);
   return Boolean(activityId && groupLines.some((line) => line.atividadeId === activityId));
@@ -1553,7 +1575,7 @@ function appendActivityGroupWarnings(payload: SchedulePayload, result: EngineRes
   }
 
   for (const [groupKey, groupLines] of linesByGroup) {
-    if (!frozenGroups.has(groupKey)) continue;
+    if (!groupLines.some((line) => activityGroupIsFrozen(payload, line))) continue;
     const ordered = [...groupLines].sort((a, b) => (
       a.clone_index - b.clone_index
       || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
@@ -1891,6 +1913,10 @@ function lineSnapshotRecord(line: ScheduleLine): Record<string, unknown> {
     id_atividade_obra_externo: line.atividade_obra_id_externo,
     atividade: line.atividadeId,
     ambiente_id: line.ambienteId || "",
+    produtoComposto: line.produtoCompostoId || "",
+    origemComposicao: line.origemComposicaoId || "",
+    diaDoBloco: line.clone_index,
+    totalDiasDoBloco: line.totalDiasDoBloco || 1,
     tipo: line.tipo,
     ordem: line.ordem,
     peso: line.peso,

@@ -287,6 +287,14 @@
 - **Date**: 2026-09-17
 - **Status**: active
 
+### AD-043
+- **Decision**: Identify each generated activity block by the `unique id` of its originating Memorial descritivo entry. Persist the composite product, composition origin, day within the block, and total block days without changing `id_atividade_obra_externo`; snapshots with this context group clones by activity plus composition origin, while legacy snapshots retain the prior fallback and warnings.
+- **Reason**: `ambienteItemComposicaoId` can be shared by several composite products in the same environment, whereas the Memorial entry has exactly the required block granularity. The engine already receives and retains that entry while generating each line.
+- **Trade-off**: Existing rows gain precise grouping only after structural recreation and Bubble snapshot echo. In-place date recalculation does not backfill structural metadata. The variable-duration formula remains unchanged until Bubble confirms the intended rule.
+- **Scope**: Schedule generation, Atividade x Obra persistence, snapshot hydration, clone grouping, execution locks, and recalculation events.
+- **Date**: 2026-09-28
+- **Status**: active on `test`; pending Bubble Test validation
+
 ## Handoff
 
 ### Current Snapshot - 2026-09-17

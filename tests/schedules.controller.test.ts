@@ -460,6 +460,60 @@ describe("schedule controllers", () => {
     expect(doneBody.validations).toEqual({ warnings: [], errors: [] });
   });
 
+  it("recalculates only the targeted composition block in the same activity and environment", async () => {
+    const blockRows = [
+      ["axo_fria_1", 1, "memorial_fria", 1, "2026-10-05"],
+      ["axo_fria_2", 2, "memorial_fria", 2, "2026-10-06"],
+      ["axo_ralo_1", 3, "memorial_ralo", 1, "2026-10-05"],
+      ["axo_ralo_2", 4, "memorial_ralo", 2, "2026-10-06"]
+    ] as const;
+    const atividade_obra_snapshot = blockRows.map(([id, externalIndex, origin, blockDay, date]) => ({
+      "unique id": id,
+      id_atividade_obra_externo: `instalacao|banheiro|${externalIndex}`,
+      atividade: "instalacao",
+      ambiente_id: "banheiro",
+      produtoComposto: origin === "memorial_fria" ? "composto_fria" : "composto_ralo",
+      origemComposicao: origin,
+      diaDoBloco: blockDay,
+      totalDiasDoBloco: 2,
+      tipo: "Servico",
+      duracao: 1,
+      peso: 1,
+      ordem: 1,
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Nao iniciada",
+      scopeRole: "editable"
+    }));
+
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-10-01" }],
+      atividades_json: [],
+      atividade_obra_snapshot,
+      events_json: [{
+        type: "activity_date_changed_only",
+        atividade: "instalacao",
+        id_atividade_obra_externo: "instalacao|banheiro|1",
+        new_start_date: "2026-10-12"
+      }]
+    }));
+
+    expect(response.status).toBe(202);
+    await waitForWebhookBody("done");
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+
+    expect(patches.axo_fria_1).toMatchObject({ dataInicioPrevista: "2026-10-12T12:00:00.000Z" });
+    expect(patches.axo_fria_2).toMatchObject({ dataInicioPrevista: "2026-10-13T12:00:00.000Z" });
+    expect(patches.axo_ralo_1).toBeUndefined();
+    expect(patches.axo_ralo_2).toBeUndefined();
+  });
+
   it("uses the Bubble unique id as the v3 line identity fallback", async () => {
     const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
       payload_version: 3,

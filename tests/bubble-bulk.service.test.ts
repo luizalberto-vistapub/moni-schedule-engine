@@ -1693,4 +1693,44 @@ describe("Bubble bulk persistence", () => {
 
     await expect(persistScheduleBulks(payload, lines)).rejects.toThrow("obra_json[0].unique id");
   });
+
+  it("writes Bubble composition context and block counters with exact API keys", () => {
+    const payload = normalizePayload(basePayload({
+      versao_cronograma_unique_id: "versao_1",
+      cronograma_unique_id: "cronograma_1",
+      obra_json: [{ "unique id": "obra_1", dataInicio: "2026-05-04" }],
+      obra_ambiente_json: [{ "unique id": "amb_item_1", "id ambiente x obra": "amb_obra_1", nome: "Banheiro" }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [{
+        "unique id": "memorial_ralo",
+        "id ambiente item composicao": "amb_item_1",
+        "id produto composto": "composto_ralo",
+        "id produto simples": "produto_instalacao"
+      }],
+      atividades_json: [{
+        id: "atividade_instalacao",
+        nome: "Instalacao",
+        tipo: "Servico",
+        produto: "produto_instalacao",
+        ordem: 1,
+        duracao: 2
+      }]
+    }));
+
+    const records = buildAtividadeObraRecords(payload, runScheduleEngine(payload).lines);
+
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      produtocomposto_custom_produto: "composto_ralo",
+      origemcomposicao_custom_memorial_descritivo: "memorial_ralo",
+      diadobloco_number: 1,
+      totaldiasdobloco_number: 2
+    });
+    expect(records[1]).toMatchObject({
+      produtocomposto_custom_produto: "composto_ralo",
+      origemcomposicao_custom_memorial_descritivo: "memorial_ralo",
+      diadobloco_number: 2,
+      totaldiasdobloco_number: 2
+    });
+  });
 });

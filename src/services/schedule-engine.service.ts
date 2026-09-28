@@ -172,7 +172,15 @@ function formatCodigoD(daysFromStart: number): string {
   return `D${daysFromStart}`;
 }
 
-function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | null, activity: NormalizedActivity, date: Date, cloneIndex: number, anchor?: NormalizedActivity): ScheduleLine {
+function buildLine(
+  ctx: PlacementContext,
+  product: ObraAmbienteProdutoPayload | null,
+  activity: NormalizedActivity,
+  date: Date,
+  cloneIndex: number,
+  anchor?: NormalizedActivity,
+  totalClones = 1
+): ScheduleLine {
   const dateOnly = formatDateOnly(date);
   const rawAmbienteId = getAmbienteLookupId(product);
   const ambiente = rawAmbienteId ? ctx.ambientesById.get(rawAmbienteId) : undefined;
@@ -192,6 +200,8 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     atividadeServicoAncoraNome: anchor?.nome || null,
     atividadeServicoAncoraExternoId: null,
     obraAmbienteProdutoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
+    produtoCompostoId: getCompositeProductId(product),
+    origemComposicaoId: product ? String(product.id || product.unique_id || product["unique id"] || "") || null : null,
     produtoId: getProductId(product),
     ambienteId,
     ambienteItemComposicaoId: getAmbienteItemComposicaoId(product),
@@ -216,6 +226,7 @@ function buildLine(ctx: PlacementContext, product: ObraAmbienteProdutoPayload | 
     ordem: activity.ordem,
     ordemCronograma: 0,
     clone_index: cloneIndex,
+    totalDiasDoBloco: totalClones,
     anchor_service_name: anchor?.nome || null,
     interdependenciasMasterIds: [],
     raw: activity.raw
@@ -329,7 +340,7 @@ function placeService(ctx: PlacementContext, service: NormalizedActivity, produc
     if (!firstDate) firstDate = cursor;
     lastDate = cursor;
     cloneDates.push(cursor);
-    ctx.lines.push(buildLine(ctx, product, service, cursor, cloneIndex));
+    ctx.lines.push(buildLine(ctx, product, service, cursor, cloneIndex, undefined, totalClones));
     reserveServiceDate(ctx, service, product, cursor);
     cursor = addBusinessDays(cursor, 1, ctx.payload.dias_trabalho_semana);
   }

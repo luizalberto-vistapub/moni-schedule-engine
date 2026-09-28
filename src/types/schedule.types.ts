@@ -9,6 +9,8 @@ export interface ScheduleLine {
   atividadeServicoAncoraNome: string | null;
   atividadeServicoAncoraExternoId: string | null;
   obraAmbienteProdutoId: string | null;
+  produtoCompostoId?: string | null;
+  origemComposicaoId?: string | null;
   produtoId: string | null;
   ambienteId: string | null;
   ambienteItemComposicaoId: string | null;
@@ -33,6 +35,7 @@ export interface ScheduleLine {
   ordem: number;
   ordemCronograma: number;
   clone_index: number;
+  totalDiasDoBloco?: number;
   anchor_service_name: string | null;
   interdependenciasMasterIds: string[];
   raw: Record<string, unknown>;

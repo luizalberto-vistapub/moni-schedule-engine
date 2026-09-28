@@ -1671,4 +1671,72 @@ describe("schedule engine", () => {
     expect(lineA!.data_programada).toBe("2026-05-04");
     expect(lineB!.data_programada).toBe("2026-05-11");
   });
+
+  it("identifies each composition block and restarts its block day", () => {
+    const payload = normalizePayload(basePayload({
+      obra_ambiente_json: [{ "unique id": "amb_item_1", "id ambiente x obra": "amb_obra_1", nome: "Banheiro" }],
+      obra_ambiente_produto_json: [],
+      obra_ambiente_item_composicao_json: [
+        {
+          "unique id": "memorial_agua_fria",
+          "id ambiente item composicao": "amb_item_1",
+          "id produto composto": "composto_agua_fria",
+          "id produto simples": "produto_instalacao"
+        },
+        {
+          "unique id": "memorial_ralo",
+          "id ambiente item composicao": "amb_item_1",
+          "id produto composto": "composto_ralo",
+          "id produto simples": "produto_instalacao"
+        }
+      ],
+      atividades_json: [{
+        id: "atividade_instalacao",
+        nome: "Instalacao",
+        tipo: "Servico",
+        produto: "produto_instalacao",
+        ordem: 1,
+        duracao: 2
+      }]
+    }));
+
+    const lines = runScheduleEngine(payload).lines;
+
+    expect([...lines].sort((a, b) => a.external_index - b.external_index).map((line) => ({
+      externalId: line.atividade_obra_id_externo,
+      produtoCompostoId: line.produtoCompostoId,
+      origemComposicaoId: line.origemComposicaoId,
+      diaDoBloco: line.clone_index,
+      totalDiasDoBloco: line.totalDiasDoBloco
+    }))).toEqual([
+      {
+        externalId: "atividade_instalacao|amb_obra_1|1",
+        produtoCompostoId: "composto_agua_fria",
+        origemComposicaoId: "memorial_agua_fria",
+        diaDoBloco: 1,
+        totalDiasDoBloco: 2
+      },
+      {
+        externalId: "atividade_instalacao|amb_obra_1|2",
+        produtoCompostoId: "composto_agua_fria",
+        origemComposicaoId: "memorial_agua_fria",
+        diaDoBloco: 2,
+        totalDiasDoBloco: 2
+      },
+      {
+        externalId: "atividade_instalacao|amb_obra_1|3",
+        produtoCompostoId: "composto_ralo",
+        origemComposicaoId: "memorial_ralo",
+        diaDoBloco: 1,
+        totalDiasDoBloco: 2
+      },
+      {
+        externalId: "atividade_instalacao|amb_obra_1|4",
+        produtoCompostoId: "composto_ralo",
+        origemComposicaoId: "memorial_ralo",
+        diaDoBloco: 2,
+        totalDiasDoBloco: 2
+      }
+    ]);
+  });
 });

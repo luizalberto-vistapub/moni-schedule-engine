@@ -158,3 +158,8 @@ This repository does not currently include `scripts/lessons.py`, so this file is
 - **Lesson**: An idempotent bulk retry must prove remote uniqueness after ambiguous partial writes, not only deduplicate the generated input before persistence.
 - **Grounding**: Job `schedule_job_mu2rz12w_pft6xlf5` generated and reported 4,676 unique rows with `dedupDroppedCount=0`, but Bubble held 4,802 rows after 10 retries because 126 external IDs were persisted twice.
 - **Scope**: Atividade x Obra bulk retry reconciliation, eventual-consistency lookups, and terminal persistence verification.
+
+### L-039
+- **Lesson**: A display counter or environment-level composition id cannot identify a repeated activity block. Carry the source record identity from generation through persistence and snapshots, and derive the block-local day independently of the stable external-id counter.
+- **Grounding**: The same simple product can occur under several composite products in one environment; those blocks share activity, environment, simple product, and sometimes quantity, while only the originating Memorial descritivo record is unique at block granularity.
+- **Scope**: Structural generation, clone grouping, Bubble fields, snapshot contracts, and recalculation event targeting.
