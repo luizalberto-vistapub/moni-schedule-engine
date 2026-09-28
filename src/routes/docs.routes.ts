@@ -236,7 +236,7 @@ export function buildOpenApiDocument() {
           type: "object",
           required: ["cronograma_unique_id", "dias_trabalho_semana"],
           properties: {
-            payload_version: { type: "integer", enum: [2], description: "Versao do contrato enxuto de recalculo. O generate continua aceitando o payload legado." },
+            payload_version: { type: "integer", enum: [2, 3], description: "Versao do contrato enxuto de recalculo. No v3 snapshot, atividade pode ser omitida quando a linha traz identidade e atributos proprios. O generate continua aceitando o payload legado." },
             estrutura_inalterada: { type: "boolean", description: "Quando true no recalculate, o motor usa atividade_obra_snapshot e nao recria linhas nem vinculos." },
             estrutura_id: { type: "string", description: "Identidade estrutural usada pelo Bubble para garantir que o snapshot representa a estrutura atual." },
             cronograma_unique_id: { type: "string" },

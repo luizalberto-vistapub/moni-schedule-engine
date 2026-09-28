@@ -199,6 +199,12 @@ function isDeltaMotorRecalculate(payload: SchedulePayload): boolean {
     && scopeType(payload) === "delta_motor";
 }
 
+function isCatalogIndependentSnapshotV3(payload: SchedulePayload): boolean {
+  return String(payload.payload_version) === "3"
+    && isSnapshotRecalculate(payload)
+    && !isDeltaMotorRecalculate(payload);
+}
+
 function versionId(payload: SchedulePayload): string {
   return stringValue(field(payload as unknown as Record<string, unknown>, "versao_cronograma_unique_id", "versao_cronograma_id", "versaoCronograma", "version_id"));
 }
@@ -269,14 +275,18 @@ function validateRecalculateContract(mode: ScheduleMode, payload: SchedulePayloa
     }
 
     snapshot.forEach((record, index) => {
-      if (!stringValue(field(record, "unique id", "unique_id", "id", "_id"))) {
+      const catalogIndependentV3 = isCatalogIndependentSnapshotV3(payload);
+      const bubbleId = stringValue(field(record, "unique id", "unique_id", "id", "_id"));
+      const externalId = snapshotRecordExternalId(record);
+      if (catalogIndependentV3) return;
+      if (!bubbleId) {
         issues.push({
           code: "custom" as const,
           path: ["atividade_obra_snapshot", index, "unique id"],
           message: "snapshot items must include Bubble unique id when estrutura_inalterada=true"
         });
       }
-      if (!snapshotRecordExternalId(record)) {
+      if (!externalId) {
         issues.push({
           code: "custom" as const,
           path: ["atividade_obra_snapshot", index, "id_atividade_obra_externo"],
@@ -1303,9 +1313,42 @@ function snapshotLineFromRecord(
   };
 }
 
+function catalogIndependentSnapshotItemErrors(record: Record<string, unknown>, index: number): string[] {
+  const bubbleId = stringValue(field(record, "unique id", "unique_id", "id", "_id"));
+  const externalId = snapshotRecordExternalId(record) || bubbleId;
+  const identifier = externalId || `snapshot-index-${index}`;
+  const errors: string[] = [];
+  if (!externalId) errors.push("missing id_atividade_obra_externo or Bubble unique id");
+  if (!snapshotRecordDate(record)) errors.push("missing dataInicioPrevista");
+  const type = normalizeText(field(record, "tipo"));
+  if (!type) errors.push("missing tipo");
+  else if (!["servico", "compra", "projeto"].includes(type)) errors.push("invalid tipo");
+
+  for (const name of ["duracao", "peso", "ordem"] as const) {
+    const raw = field(record, name);
+    if (raw === undefined || raw === null || raw === "") {
+      errors.push(`missing ${name}`);
+      continue;
+    }
+    const value = typeof raw === "number" ? raw : Number(stringValue(raw));
+    if (!Number.isFinite(value) || (name === "duracao" && value <= 0)) errors.push(`invalid ${name}`);
+  }
+  return errors.map((error) => `snapshot_item_invalid:${identifier}: ${error}`);
+}
+
 function snapshotEngineResult(payload: SchedulePayload): EngineResult {
   const anchorsByActivity = masterAnchorsByActivity(payload);
-  const lines = atividadeObraSnapshot(payload)
+  const snapshot = atividadeObraSnapshot(payload);
+  const invalidRecords = new Set<Record<string, unknown>>();
+  const errors = isCatalogIndependentSnapshotV3(payload)
+    ? snapshot.flatMap((record, index) => {
+      const recordErrors = catalogIndependentSnapshotItemErrors(record, index);
+      if (recordErrors.length) invalidRecords.add(record);
+      return recordErrors;
+    })
+    : [];
+  const lines = snapshot
+    .filter((record) => !invalidRecords.has(record))
     .map((record) => snapshotLineFromRecord(record, payload, anchorsByActivity))
     .filter((line): line is ScheduleLine => Boolean(line));
 
@@ -1313,7 +1356,7 @@ function snapshotEngineResult(payload: SchedulePayload): EngineResult {
     lines: refreshLineDependencies(payload, lines),
     validations: {
       warnings: [],
-      errors: []
+      errors
     }
   };
 }

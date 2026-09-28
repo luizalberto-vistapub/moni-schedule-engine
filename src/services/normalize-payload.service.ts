@@ -57,10 +57,10 @@ export function parseSchedulePayload(input: unknown, routeMode: ScheduleMode): S
   if (!envelope.success) return payloadSchema.parse(input);
 
   const bodyMode = envelope.data.mode?.trim() || routeMode;
-  const isV2Recalculate = String(envelope.data.payload_version) === "2"
+  const isSnapshotRecalculate = ["2", "3"].includes(String(envelope.data.payload_version))
     && bodyMode === "recalculate";
 
-  return (isV2Recalculate ? payloadV2SnapshotRecalculateSchema : payloadSchema).parse(input);
+  return (isSnapshotRecalculate ? payloadV2SnapshotRecalculateSchema : payloadSchema).parse(input);
 }
 
 function normalizeActivityType(value: unknown): NormalizedActivity["tipo"] {
@@ -149,9 +149,41 @@ function snapshotDateOnly(record: Record<string, unknown>): string | undefined {
   return date?.slice(0, 10);
 }
 
+function isCatalogIndependentSnapshotV3(payload: SchedulePayload): boolean {
+  const scopeType = snapshotString(payload.scope || {}, "tipo", "type");
+  return String(payload.payload_version) === "3"
+    && payload.mode === "recalculate"
+    && payload.estrutura_inalterada === true
+    && scopeType !== "delta_motor";
+}
+
+function snapshotExternalIdentity(record: Record<string, unknown>): string | undefined {
+  return snapshotString(record, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id")
+    || snapshotString(record, "unique id", "unique_id", "id", "_id");
+}
+
+function activityIdentityFromExternalId(externalId: string): string {
+  const current = externalId.match(/^(.*)\|[^|]*\|\d+$/);
+  if (current) return current[1]!;
+  const legacy = externalId.match(/^(.*)_\d{4}-\d{2}-\d{2}_\d+$/);
+  return legacy?.[1] || externalId;
+}
+
+function normalizeCatalogIndependentSnapshotRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const externalId = snapshotExternalIdentity(record);
+  if (!externalId) return record;
+  const activityId = snapshotString(record, "atividade", "atividade_id", "activity_id", "atividadeId")
+    || activityIdentityFromExternalId(externalId);
+  return {
+    ...record,
+    id_atividade_obra_externo: externalId,
+    atividade: activityId
+  };
+}
+
 function obraFromSnapshot(payload: SchedulePayload): ObraPayload | null {
   if (payload.obra_json.length) return null;
-  if (String(payload.payload_version) !== "2" || payload.mode !== "recalculate") return null;
+  if (!["2", "3"].includes(String(payload.payload_version)) || payload.mode !== "recalculate") return null;
 
   const snapshot = snapshotRecords(payload);
   const firstRecordWithObra = snapshot.find((record) => snapshotString(record, "obra", "obra_id", "id_obra", "obraId", "obraUniqueId"));
@@ -301,11 +333,15 @@ function normalizeCompositionProduct(product: ObraAmbienteItemComposicaoPayload)
 }
 
 export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePayload {
-  const synthesizedObra = obraFromSnapshot(payload);
+  const atividadeObraSnapshot = isCatalogIndependentSnapshotV3(payload)
+    ? (payload.atividade_obra_snapshot || []).map(normalizeCatalogIndependentSnapshotRecord)
+    : payload.atividade_obra_snapshot;
+  const payloadWithSnapshot = { ...payload, atividade_obra_snapshot: atividadeObraSnapshot };
+  const synthesizedObra = obraFromSnapshot(payloadWithSnapshot);
   const obraJson = synthesizedObra ? [synthesizedObra] : payload.obra_json;
   const previousAtividadeObraJson = payload.atividade_obra_json.length
     ? payload.atividade_obra_json
-    : payload.atividade_obra_snapshot || [];
+    : atividadeObraSnapshot || [];
   const compositionProducts = payload.obra_ambiente_item_composicao_json || [];
   const obraAmbienteProdutoJson = payload.obra_ambiente_produto_json || [];
   const obraAmbienteProdutos = obraAmbienteProdutoJson.length
@@ -335,6 +371,7 @@ export function normalizePayload(payload: SchedulePayload): NormalizedSchedulePa
     obra_ambiente_produto_json: obraAmbienteProdutos,
     obra_ambiente_item_composicao_json: compositionProducts,
     atividade_obra_json: previousAtividadeObraJson,
+    atividade_obra_snapshot: atividadeObraSnapshot,
     atividades_json: [...baseActivities, ...projectActivities]
   };
 }

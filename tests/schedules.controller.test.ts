@@ -419,6 +419,152 @@ describe("schedule controllers", () => {
     expect(response.body.validations.errors).toContain("work_start_delayed snapshot recalculation requires obra_json[0].dataInicio");
   });
 
+  it("recalculates a catalog-independent v3 snapshot item without atividade", async () => {
+    const payload = basePayload({
+      payload_version: 3,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      obra_json: [],
+      atividades_json: [],
+      atividade_obra_snapshot: [{
+        "unique id": "ao_legacy_1",
+        id_atividade_obra_externo: "legacy_wall|yard|1",
+        tipo: "Servico",
+        duracao: 1,
+        peso: 2,
+        ordem: 10,
+        dataInicioPrevista: "2026-09-17",
+        dataFimPrevista: "2026-09-17",
+        status: "Nao iniciada"
+      }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        id_atividade_obra_externo: "legacy_wall|yard|1",
+        new_start_date: "2026-09-18"
+      }]
+    });
+
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(payload);
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(1);
+    expect(String(patchCalls[0]![0])).toContain("ao_legacy_1");
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toEqual({
+      dataInicioPrevista: "2026-09-18T12:00:00.000Z",
+      dataFimPrevista: "2026-09-18T12:00:00.000Z"
+    });
+    expect(doneBody.validations).toEqual({ warnings: [], errors: [] });
+  });
+
+  it("uses the Bubble unique id as the v3 line identity fallback", async () => {
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 3,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      obra_json: [],
+      atividades_json: [],
+      atividade_obra_snapshot: [{
+        "unique id": "ao_without_external_id",
+        tipo: "Servico",
+        duracao: 1,
+        peso: 2,
+        ordem: 10,
+        dataInicioPrevista: "2026-09-17",
+        dataFimPrevista: "2026-09-17",
+        status: "Nao iniciada"
+      }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        id_atividade_obra_externo: "ao_without_external_id",
+        new_start_date: "2026-09-18"
+      }]
+    }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(1);
+    expect(String(patchCalls[0]![0])).toContain("ao_without_external_id");
+    expect(doneBody.validations).toEqual({ warnings: [], errors: [] });
+  });
+
+  it("reports and skips only invalid catalog-independent v3 snapshot items", async () => {
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 3,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-09-17" }],
+      atividades_json: [],
+      atividade_obra_snapshot: [
+        {
+          "unique id": "ao_valid",
+          id_atividade_obra_externo: "valid_wall|yard|1",
+          tipo: "Servico",
+          duracao: 1,
+          peso: 2,
+          ordem: 10,
+          dataInicioPrevista: "2026-09-17",
+          dataFimPrevista: "2026-09-17",
+          status: "Nao iniciada"
+        },
+        {
+          "unique id": "ao_invalid",
+          id_atividade_obra_externo: "invalid_wall|yard|1",
+          tipo: "Servico",
+          peso: 2,
+          ordem: 20,
+          dataInicioPrevista: "2026-09-18",
+          dataFimPrevista: "2026-09-18",
+          status: "Nao iniciada"
+        }
+      ],
+      events_json: [{ type: "work_start_delayed", new_start_date: "2026-09-21" }]
+    }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    const patchCalls = fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH");
+    expect(patchCalls).toHaveLength(1);
+    expect(String(patchCalls[0]![0])).toContain("ao_valid");
+    expect(doneBody.metrics).toMatchObject({ linesCount: 1, patchedCount: 1 });
+    expect(doneBody.validations).toEqual({
+      warnings: [],
+      errors: ["snapshot_item_invalid:invalid_wall|yard|1: missing duracao"]
+    });
+  });
+
+  it("keeps atividade required for v2 snapshot recalculation", async () => {
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      atividade_obra_snapshot: [{
+        "unique id": "ao_1",
+        id_atividade_obra_externo: "serv_1|yard|1",
+        tipo: "Servico",
+        dataInicioPrevista: "2026-09-17"
+      }],
+      events_json: [{
+        type: "activity_date_changed_only",
+        id_atividade_obra_externo: "serv_1|yard|1",
+        new_start_date: "2026-09-18"
+      }]
+    }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.validations.errors).toContain("snapshot items must include atividade when estrutura_inalterada=true");
+  });
+
   it("lets a new work start reset override stale activity events from previous recalculations", async () => {
     const response = await request(app)
       .post("/api/v1/schedules/recalculate")

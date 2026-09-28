@@ -345,6 +345,14 @@ O snapshot deve conter, para cada linha:
 - data prevista;
 - status e contexto suficientes para decidir mobilidade e agrupamento.
 
+### 11.1 Snapshot v3 independente do catálogo
+
+No `payload_version = 3` por snapshot, fora do escopo `delta_motor`, `atividade` é opcional e serve apenas para rastreabilidade. A identidade operacional é `id_atividade_obra_externo`; para uma linha existente, o Bubble `unique id` pode ser usado como alternativa e é normalizado internamente como identidade externa.
+
+Cada item deve informar ao menos data prevista, `tipo`, `duracao`, `peso` e `ordem`. Um item sem esses dados é excluído daquele cálculo e aparece em `validations.errors` como `snapshot_item_invalid:<identidade>: <motivo>`; os demais itens continuam sendo processados. O v2 mantém suas validações anteriores, inclusive a obrigatoriedade de `atividade`.
+
+O v3 com `scope.tipo = delta_motor` mantém o contrato de reconstrução por payload-base já existente e não usa esse modo independente do catálogo.
+
 ## 12. Motor delta
 
 No contrato delta do `payload_version = 3`:
