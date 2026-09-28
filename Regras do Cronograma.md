@@ -204,11 +204,15 @@ Antes de reposicionar um grupo, as reservas de peso de seus clones móveis são 
 - A mesma atividade e o mesmo produto podem existir em ambientes diferentes sem compartilhar o cursor de datas.
 - Corrigir clones em um ambiente não deve deslocar clones válidos de outro ambiente.
 
-### 7.4 Linhas imutáveis
+### 7.4 Atividades imutáveis
 
-Em recálculo por snapshot, linhas sem status, `Não iniciada`, `Recalculada` ou `Pausada` podem ser saneadas. Uma atividade pausada não pode conservar clones fora de ordem ou em fim de semana.
+O bloqueio é aplicado à instância completa `atividade|contexto`, nunca a uma linha isolada. Se qualquer clone tiver status iniciado, concluído, finalizado, executado ou outro status avançado, ou possuir `dataInicioExecucao`, `dataExecucao` ou `iniciadaPor`, todos os clones da instância ficam imutáveis.
 
-Linhas concluídas/finalizadas e linhas usadas como âncoras de um escopo delta permanecem imutáveis. Uma linha imutável ainda funciona como limite cronológico para clones móveis posteriores.
+Grupos sem evidência de execução, inclusive grupos `Não iniciada`, `Recalculada` ou `Pausada` sem carimbo de execução, podem ser saneados. Quando adiados, todos os clones do grupo afetado avançam juntos, preservando a ordem e sem antecipação em relação às datas anteriores.
+
+Linhas usadas como âncoras de um escopo delta também permanecem imutáveis. Em recriação estrutural, as datas anteriores de grupos executados prevalecem sobre as datas recém-geradas. Status, carimbos de execução e `iniciadaPor` são copiados para os novos registros.
+
+Uma atividade protegida nunca é antecipada automaticamente para reparar uma inversão histórica. A inconsistência permanece intacta até uma correção deliberada dos dados.
 
 Em um recálculo de manutenção para a mesma data, o padrão legado em que o primeiro clone ficou em um dia não útil imediatamente antes do segundo clone é reparado preservando o segundo clone: o primeiro é colocado no dia útil anterior. Exemplo: `sábado + segunda` torna-se `sexta + segunda`.
 
@@ -219,6 +223,11 @@ Alterações automáticas são informadas em `normalizedDates`:
 - `non_working_day`: a data solicitada ou calculada caiu em dia não útil;
 - `clone_sequence_collision`: a data já estava ocupada por clone anterior ou quebrava a ordem crescente;
 - `team_capacity`: a soma dos pesos da equipe ultrapassaria `10` na data candidata.
+
+Bloqueios e inconsistências que exigem intervenção são informados em `validations.warnings`:
+
+- `activity_group_locked`: o recálculo ou as datas recém-geradas foram ignorados porque há evidência de execução no grupo;
+- `activity_group_inconsistent`: as datas dos clones protegidos não estão estritamente crescentes e devem ser corrigidas deliberadamente.
 
 ## 8. Compras
 
@@ -293,18 +302,20 @@ O contrato ainda exige:
 
 ### 10.3 Mudança somente da atividade
 
-`activity_date_changed_only` reescreve todos os clones da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Não desloca atividades dependentes.
+`activity_date_changed_only` reescreve todos os clones não executados da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Não desloca atividades dependentes. Se qualquer clone da instância tiver evidência de execução, o grupo inteiro é preservado e o bloqueio é diagnosticado.
 
 ### 10.4 Mudança com cascata
 
-`activity_date_changed_cascade` reescreve todos os clones da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Depois desloca atividades dependentes, respeitando dependências e normalização final. O clone referenciado pelo evento serve para identificar a instância; ele não limita a reescrita aos clones daquele índice em diante.
+`activity_date_changed_cascade` reescreve todos os clones não executados da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Depois desloca atividades dependentes, respeitando dependências, bloqueios por execução e normalização final. O clone referenciado pelo evento serve para identificar a instância; ele não limita a reescrita aos clones daquele índice em diante.
+
+A instância diretamente alterada é reconstruída em dias úteis consecutivos, e não por soma de dias corridos seguida de normalização isolada. Assim, uma atividade de sete dias iniciada numa quinta-feira em obra de cinco dias ocupa `quinta, sexta, segunda, terça, quarta, quinta, sexta`, sem colapsar sábado e domingo na mesma segunda-feira. A mesma garantia de datas úteis estritamente crescentes é reaplicada a cada grupo dependente após a propagação.
 
 ### 10.5 Paralisação a partir de uma data
 
 `from_date_delayed`:
 
-- preserva linhas anteriores à data de corte;
-- adiciona os dias informados às linhas afetadas;
+- preserva atividades inteiramente anteriores à data de corte;
+- se qualquer clone não executado alcançar a data de corte, adiciona os dias informados a todos os clones da instância;
 - normaliza o resultado para dias úteis;
 - mantém a ordem dos eventos quando vários eventos são processados.
 
@@ -400,6 +411,12 @@ Uma implementação compatível deve testar pelo menos:
 31. evento apontando para o Dia 2 reescrevendo a atividade inteira a partir do Dia 1;
 32. autocorreção de `sábado + segunda` para `sexta + segunda` em manutenção;
 33. correção de clone pausado fora de ordem sem alterar linhas concluídas.
+34. congelamento de todos os clones quando qualquer clone da instância tiver evidência de execução;
+35. preservação das datas anteriores de grupos executados durante recriação estrutural;
+36. diagnóstico de grupo executado fora de ordem sem antecipação automática;
+37. adiamento conjunto de atividade não executada que cruza a data de corte;
+38. preservação de `iniciadaPor` em registros recriados.
+39. cascata de sete clones iniciada numa quinta-feira ocupando sete dias úteis consecutivos, sem colisão após o fim de semana.
 
 ## 16. Invariantes finais
 
@@ -411,5 +428,6 @@ Para considerar um resultado válido:
 - dependências apontam para linhas existentes;
 - capacidade de equipe não é excedida;
 - compras e projetos mantêm suas âncoras;
-- linhas imutáveis não são alteradas;
+- atividades com qualquer evidência de execução não têm nenhum clone alterado;
+- inconsistências históricas em atividades protegidas são diagnosticadas e nunca corrigidas por antecipação automática;
 - um recálculo com a mesma data pode ser usado para aplicar novas regras de conformidade ao snapshot existente.

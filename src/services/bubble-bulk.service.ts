@@ -36,6 +36,8 @@ const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "dataInicioExecucao",
   "dataExecucao",
   "dataExecu\u00e7\u00e3o",
+  "iniciadaPor",
+  "Iniciada por",
   "dataAprovacao",
   "dataReprovacao",
   "observacao"

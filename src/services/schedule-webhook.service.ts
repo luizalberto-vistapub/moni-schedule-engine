@@ -33,6 +33,10 @@ export interface ScheduleWebhookPayload {
     bulkRetryCount?: number;
     dedupDroppedCount?: number;
   };
+  validations?: {
+    warnings: string[];
+    errors: string[];
+  };
   normalizedDates?: NormalizedDate[];
   error_code?: string;
   error_message?: string;
