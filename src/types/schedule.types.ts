@@ -51,5 +51,5 @@ export interface NormalizedDate {
   id_atividade_obra_externo: string;
   requested: string;
   applied: string;
-  reason: "non_working_day" | "clone_sequence_collision" | "team_capacity";
+  reason: "non_working_day" | "clone_sequence_collision" | "team_capacity" | "dependency_gap";
 }

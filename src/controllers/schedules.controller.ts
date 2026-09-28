@@ -1055,9 +1055,26 @@ function validateDeltaScope(payload: SchedulePayload): void {
   }
 }
 
-function enforceCascadeServiceDependencies(payload: SchedulePayload, lines: ScheduleLine[], affectedActivityIds: Set<string>): ScheduleLine[] {
+function groupHasExplicitDateEvent(payload: SchedulePayload, groupLines: ScheduleLine[], activityGroupCount: number): boolean {
+  return [...payload.events_old, ...payload.events_json].some((event) => {
+    if (!isActivityDateChangeEvent(eventType(event))) return false;
+    const externalId = stringValue(field(event, "id_atividade_obra_externo", "atividade_obra_external_id", "line_id"));
+    if (externalId) {
+      const eventGroup = externalId.match(/^(.*\|[^|]+)\|\d+$/)?.[1];
+      if (eventGroup) return eventGroup === lineCloneGroupKey(groupLines[0]!);
+    }
+    return activityGroupCount === 1 && activityStartEventActivityId(event) === groupLines[0]!.atividadeId;
+  });
+}
+
+function enforceCascadeServiceDependencies(
+  payload: SchedulePayload,
+  lines: ScheduleLine[],
+  affectedActivityIds: Set<string>
+): { lines: ScheduleLine[]; normalizedDates: NormalizedDate[] } {
   const dependencies = dependencyIdsByActivity(payload);
   const linesByActivity = new Map<string, ScheduleLine[]>();
+  const normalizedDates: NormalizedDate[] = [];
   for (const line of lines) {
     if (line.tipo !== "Servi\u00e7o") continue;
     linesByActivity.set(line.atividadeId, [...(linesByActivity.get(line.atividadeId) || []), line]);
@@ -1070,21 +1087,39 @@ function enforceCascadeServiceDependencies(payload: SchedulePayload, lines: Sche
     const predecessorIds = dependencies.get(activityId) || [];
     for (const predecessorId of predecessorIds) visit(predecessorId);
     const predecessorDates = predecessorIds.flatMap((id) => (linesByActivity.get(id) || []).map((line) => line.data_programada));
-    const movable = (linesByActivity.get(activityId) || []).filter((line) => lineCanMove(payload, line));
-    if (predecessorDates.length && movable.length) {
+    const activityLines = linesByActivity.get(activityId) || [];
+    const groups = new Map<string, ScheduleLine[]>();
+    for (const line of activityLines) {
+      const groupKey = lineCloneGroupKey(line);
+      groups.set(groupKey, [...(groups.get(groupKey) || []), line]);
+    }
+    if (predecessorDates.length && groups.size) {
       const endDate = predecessorDates.sort().at(-1)!;
-      const earliest = movable.map((line) => line.data_programada).sort()[0]!;
       const required = formatDateOnly(addBusinessDays(parseDateOnly(endDate), 1, payload.dias_trabalho_semana));
-      if (earliest < required) {
-        let businessDays = 0;
-        let cursor = nextBusinessDay(parseDateOnly(earliest), payload.dias_trabalho_semana);
-        while (formatDateOnly(cursor) < required) {
-          cursor = addBusinessDays(cursor, 1, payload.dias_trabalho_semana);
-          businessDays += 1;
-        }
-        linesByActivity.set(activityId, (linesByActivity.get(activityId) || []).map((line) => lineCanMove(payload, line)
-          ? withLineDate(line, formatDateOnly(addBusinessDays(parseDateOnly(line.data_programada), businessDays, payload.dias_trabalho_semana)), payload)
-          : line));
+      for (const groupLines of groups.values()) {
+        const ordered = [...groupLines].sort((a, b) => (
+          a.clone_index - b.clone_index
+          || a.atividade_obra_id_externo.localeCompare(b.atividade_obra_id_externo)
+        ));
+        if (!ordered.some((line) => lineCanMove(payload, line))) continue;
+        if (groupHasExplicitDateEvent(payload, ordered, groups.size)) continue;
+
+        const rebuilt = ordered.map((line, index) => {
+          if (!lineCanMove(payload, line)) return line;
+          const applied = formatDateOnly(addBusinessDays(parseDateOnly(required), index, payload.dias_trabalho_semana));
+          if (applied === line.data_programada) return line;
+          normalizedDates.push({
+            id_atividade_obra_externo: line.atividade_obra_id_externo,
+            requested: line.data_programada,
+            applied,
+            reason: "dependency_gap"
+          });
+          return withLineDate(line, applied, payload);
+        });
+        const rebuiltByExternalId = new Map(rebuilt.map((line) => [line.atividade_obra_id_externo, line]));
+        linesByActivity.set(activityId, (linesByActivity.get(activityId) || []).map((line) => (
+          rebuiltByExternalId.get(line.atividade_obra_id_externo) || line
+        )));
       }
     }
     visiting.delete(activityId);
@@ -1092,7 +1127,10 @@ function enforceCascadeServiceDependencies(payload: SchedulePayload, lines: Sche
   };
   for (const activityId of affectedActivityIds) visit(activityId);
   const updated = new Map([...linesByActivity.values()].flat().map((line) => [line.atividade_obra_id_externo, line]));
-  return lines.map((line) => updated.get(line.atividade_obra_id_externo) || line);
+  return {
+    lines: lines.map((line) => updated.get(line.atividade_obra_id_externo) || line),
+    normalizedDates
+  };
 }
 
 function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {
@@ -1106,6 +1144,7 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
 
   const previousDates = previousActivityDates(payload);
   let lines = result.lines;
+  const normalizedDates = [...(result.normalizedDates || [])];
 
   for (const event of events) {
     const type = eventType(event);
@@ -1162,14 +1201,20 @@ function applyActivityDateChangeRecalculation(payload: SchedulePayload, result: 
       return withLineDate(line, formatDateOnly(addDays(parseDateOnly(lineOriginalDate), deltaDays)), payload);
     });
     if (type === "activity_date_changed_cascade") {
-      lines = enforceCascadeServiceDependencies(payload, lines, affectedActivityIds);
+      const enforced = enforceCascadeServiceDependencies(payload, lines, affectedActivityIds);
+      lines = enforced.lines;
+      normalizedDates.push(...enforced.normalizedDates);
     }
   }
 
   lines = lines
     .sort((a, b) => a.data_programada.localeCompare(b.data_programada) || a.ordem - b.ordem || a.clone_index - b.clone_index);
 
-  return { ...result, lines: refreshLineDependencies(payload, lines) };
+  return {
+    ...result,
+    lines: refreshLineDependencies(payload, lines),
+    normalizedDates: uniqueNormalizedDates(normalizedDates)
+  };
 }
 
 function applyPurchaseChainRecalculation(payload: SchedulePayload, result: EngineResult): EngineResult {

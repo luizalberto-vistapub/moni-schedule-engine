@@ -877,7 +877,7 @@ describe("schedule controllers", () => {
     }
   });
 
-  it("preserves working-day clone spacing, later dates and completed rows in cascade repair", async () => {
+  it("compacts unjustified dependency slack while preserving explicit and completed dates", async () => {
     const rows = [
       ["root", 1, "2026-09-14", "Nao iniciada"],
       ["mount", 1, "2026-09-18", "Nao iniciada"],
@@ -912,17 +912,78 @@ describe("schedule controllers", () => {
         { atividade: "done", deps: ["mount"] },
         { atividade: "mount", deps: ["root"] }
       ],
+      events_old: [{
+        tipo: "activity_date_changed_only",
+        atividade: "late",
+        id_atividade_obra_externo: "late|amb_1|1",
+        data: "2026-09-29"
+      }],
       events_json: [{ type: "activity_date_changed_cascade", atividade: "root", id_atividade_obra_externo: "root|amb_1|1", data: "2026-09-14" }]
     }));
     expect(response.status).toBe(202);
     await waitForDoneWebhook();
     const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
       .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
-    expect(patches.release_1).toEqual({ dataInicioPrevista: "2026-09-22T12:00:00.000Z", dataFimPrevista: "2026-09-22T12:00:00.000Z" });
-    expect(patches.release_2).toEqual({ dataInicioPrevista: "2026-09-23T12:00:00.000Z", dataFimPrevista: "2026-09-23T12:00:00.000Z" });
-    expect(patches.next_1).toEqual({ dataInicioPrevista: "2026-09-24T12:00:00.000Z", dataFimPrevista: "2026-09-24T12:00:00.000Z" });
+    expect(patches.mount_1).toEqual({ dataInicioPrevista: "2026-09-15T12:00:00.000Z", dataFimPrevista: "2026-09-15T12:00:00.000Z" });
+    expect(patches.mount_2).toEqual({ dataInicioPrevista: "2026-09-16T12:00:00.000Z", dataFimPrevista: "2026-09-16T12:00:00.000Z" });
+    expect(patches.release_1).toEqual({ dataInicioPrevista: "2026-09-17T12:00:00.000Z", dataFimPrevista: "2026-09-17T12:00:00.000Z" });
+    expect(patches.release_2).toEqual({ dataInicioPrevista: "2026-09-18T12:00:00.000Z", dataFimPrevista: "2026-09-18T12:00:00.000Z" });
+    expect(patches.next_1).toEqual({ dataInicioPrevista: "2026-09-21T12:00:00.000Z", dataFimPrevista: "2026-09-21T12:00:00.000Z" });
     expect(patches.late_1).toBeUndefined();
     expect(patches.done_1).toBeUndefined();
+  });
+
+  it("pulls an unjustified distant successor to the first business day after its predecessor", async () => {
+    const snapshot = [
+      ["root", 1, "2026-10-23"],
+      ["root", 2, "2026-10-26"],
+      ["conference", 1, "2027-01-25"]
+    ].map(([activity, clone, date]) => ({
+      "unique id": `${activity}_${clone}`,
+      atividade: activity,
+      id_atividade_obra_externo: `${activity}|amb_1|${clone}`,
+      ambiente_id: "amb_1",
+      tipo: "Servico",
+      equipe: activity === "conference" ? "Gestor" : "Montador estrutura",
+      peso: 1,
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Nao iniciada",
+      scopeRole: "editable"
+    }));
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      mode: "recalculate",
+      payload_version: 2,
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-10-01" }],
+      atividade_obra_snapshot: snapshot,
+      master_dependencies: [{ atividade: "conference", deps: ["root"] }],
+      events_json: [{
+        type: "activity_date_changed_cascade",
+        atividade: "root",
+        id_atividade_obra_externo: "root|amb_1|1",
+        data: "2026-10-16"
+      }]
+    }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+
+    expect(patches.root_1).toMatchObject({ dataInicioPrevista: "2026-10-16T12:00:00.000Z" });
+    expect(patches.root_2).toMatchObject({ dataInicioPrevista: "2026-10-19T12:00:00.000Z" });
+    expect(patches.conference_1).toMatchObject({ dataInicioPrevista: "2026-10-20T12:00:00.000Z" });
+    expect(doneBody.normalizedDates).toContainEqual({
+      id_atividade_obra_externo: "conference|amb_1|1",
+      requested: "2027-01-18",
+      applied: "2026-10-20",
+      reason: "dependency_gap"
+    });
+    expect(doneBody.status).toBe("done");
   });
 
   it("removes inherited clone gaps when a cascade frees the intervening business days", async () => {
@@ -2061,8 +2122,8 @@ describe("schedule controllers", () => {
       dataFimPrevista: "2026-11-02T12:00:00.000Z"
     });
     expect(patches.plaster_1).toEqual({
-      dataInicioPrevista: "2026-11-05T12:00:00.000Z",
-      dataFimPrevista: "2026-11-05T12:00:00.000Z"
+      dataInicioPrevista: "2026-11-03T12:00:00.000Z",
+      dataFimPrevista: "2026-11-03T12:00:00.000Z"
     });
   });
 
