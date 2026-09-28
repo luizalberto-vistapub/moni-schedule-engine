@@ -308,6 +308,8 @@ O contrato ainda exige:
 
 `activity_date_changed_cascade` reescreve todos os clones não executados da instância da atividade, do Dia 1 ao Dia N, usando a data solicitada como início. Depois desloca atividades dependentes, respeitando dependências, bloqueios por execução e normalização final. O clone referenciado pelo evento serve para identificar a instância; ele não limita a reescrita aos clones daquele índice em diante.
 
+A instância diretamente alterada é reconstruída em dias úteis consecutivos, e não por soma de dias corridos seguida de normalização isolada. Assim, uma atividade de sete dias iniciada numa quinta-feira em obra de cinco dias ocupa `quinta, sexta, segunda, terça, quarta, quinta, sexta`, sem colapsar sábado e domingo na mesma segunda-feira. A mesma garantia de datas úteis estritamente crescentes é reaplicada a cada grupo dependente após a propagação.
+
 ### 10.5 Paralisação a partir de uma data
 
 `from_date_delayed`:
@@ -414,6 +416,7 @@ Uma implementação compatível deve testar pelo menos:
 36. diagnóstico de grupo executado fora de ordem sem antecipação automática;
 37. adiamento conjunto de atividade não executada que cruza a data de corte;
 38. preservação de `iniciadaPor` em registros recriados.
+39. cascata de sete clones iniciada numa quinta-feira ocupando sete dias úteis consecutivos, sem colisão após o fim de semana.
 
 ## 16. Invariantes finais
 

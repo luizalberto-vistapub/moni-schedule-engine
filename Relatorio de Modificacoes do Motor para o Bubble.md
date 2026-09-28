@@ -79,6 +79,8 @@ No evento `from_date_delayed`, se qualquer clone movel de um grupo estiver dentr
 
 Eventos de alteracao de data agora identificam o grupo exato, inclusive pelo `id_atividade_obra_externo` quando fornecido. A sequencia inteira e reconstruida a partir da nova data, em dias uteis consecutivos, e os dependentes continuam seguindo as regras do evento (`only` ou `cascade`).
 
+O incidente FK0004 de 22/09/2026 foi produzido pela versao anterior a essa correcao. O caso foi reproduzido como teste de regressao: sete clones iniciados em 17/09/2026 resultam em `17, 18, 21, 22, 23, 24, 25`, sem colisao e sem entrada em `normalizedDates`; o primeiro grupo dependente passa a iniciar em 28/09/2026.
+
 ## 3. Regras para atividades executadas
 
 ### 3.1 Bloqueio da atividade inteira
@@ -279,7 +281,7 @@ Foram adicionados testes para:
 - emissao dos warnings de bloqueio e inconsistencia;
 - preservacao de `iniciadaPor` na recriacao.
 
-Validacao local da implementacao: **203 testes aprovados em 7 arquivos**, build TypeScript aprovado e **75 testes** do controlador aprovados.
+Validacao local da implementacao: **204 testes aprovados em 7 arquivos**, build TypeScript aprovado e **76 testes** do controlador aprovados. A regressao FK0004 acrescentou um teste ao controlador.
 
 Commits relacionados:
 

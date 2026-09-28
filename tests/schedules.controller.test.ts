@@ -1872,6 +1872,87 @@ describe("schedule controllers", () => {
     });
   });
 
+  it("keeps cascade clone groups on distinct consecutive business days across a weekend", async () => {
+    const wallDates = [
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18"
+    ];
+    const dependentDates = ["2026-09-21", "2026-09-22", "2026-09-23"];
+    const snapshot = [
+      ...wallDates.map((date, index) => ({
+        "unique id": `wall_${index + 1}`,
+        id_atividade_obra_externo: `wall|yard|${index + 1}`,
+        atividade: "wall",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        ordem: 1,
+        peso: 1,
+        equipe: "team_wall",
+        dataInicioPrevista: date,
+        dataFimPrevista: date,
+        status: "Nao iniciada"
+      })),
+      ...dependentDates.map((date, index) => ({
+        "unique id": `plaster_${index + 1}`,
+        id_atividade_obra_externo: `plaster|yard|${index + 1}`,
+        atividade: "plaster",
+        ambiente_id: "yard",
+        tipo: "Servico",
+        ordem: 2,
+        peso: 1,
+        equipe: "team_plaster",
+        dataInicioPrevista: date,
+        dataFimPrevista: date,
+        status: "Nao iniciada"
+      }))
+    ];
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      dias_trabalho_semana: 5,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      obra_json: [{ id: "obra_1", dataInicio: "2026-07-01" }],
+      atividades_json: [],
+      atividade_obra_snapshot: snapshot,
+      master_dependencies: [{ atividade: "plaster", deps: ["wall"] }],
+      events_json: [{
+        tipo: "activity_date_changed_cascade",
+        atividade: "wall",
+        id_atividade_obra_externo: "wall|yard|1",
+        data: "2026-09-17",
+        dias: 0
+      }]
+    }));
+
+    expect(response.status, JSON.stringify(response.body)).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+    const patches = Object.fromEntries(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")
+      .map(([url, init]) => [String(url).split("/").pop(), JSON.parse(String((init as RequestInit).body))]));
+
+    expect(wallDates.map((_, index) => patches[`wall_${index + 1}`]?.dataInicioPrevista)).toEqual([
+      "2026-09-17T12:00:00.000Z",
+      "2026-09-18T12:00:00.000Z",
+      "2026-09-21T12:00:00.000Z",
+      "2026-09-22T12:00:00.000Z",
+      "2026-09-23T12:00:00.000Z",
+      "2026-09-24T12:00:00.000Z",
+      "2026-09-25T12:00:00.000Z"
+    ]);
+    expect(dependentDates.map((_, index) => patches[`plaster_${index + 1}`]?.dataInicioPrevista)).toEqual([
+      "2026-09-28T12:00:00.000Z",
+      "2026-09-29T12:00:00.000Z",
+      "2026-09-30T12:00:00.000Z"
+    ]);
+    expect(doneBody.normalizedDates).toEqual([]);
+  });
+
   it("reports scope insufficient when delta dependencies are outside the snapshot", async () => {
     const payload = basePayload({
       payload_version: 2,
