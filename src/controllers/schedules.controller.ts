@@ -625,6 +625,41 @@ function movableSnapshotStatus(status: unknown): boolean {
 }
 
 const frozenActivityGroupsCache = new WeakMap<object, Set<string>>();
+const ambiguousLegacyGroupsCache = new WeakMap<object, Set<string>>();
+
+function ambiguousLegacyCloneGroupKeys(payload: SchedulePayload): Set<string> {
+  const cached = ambiguousLegacyGroupsCache.get(payload);
+  if (cached) return cached;
+
+  const fixedDurationByActivity = new Map<string, number>();
+  for (const activity of payload.atividades_json) {
+    const activityId = stringValue(field(activity as unknown as Record<string, unknown>, "id", "unique_id", "unique id"));
+    const variable = Boolean(field(activity as unknown as Record<string, unknown>, "duracaoVariavel"));
+    const duration = numberValue(field(activity as unknown as Record<string, unknown>, "duracao"), 0);
+    if (activityId && !variable && duration > 0) fixedDurationByActivity.set(activityId, Math.trunc(duration));
+  }
+
+  const recordsByGroup = new Map<string, Record<string, unknown>[]>();
+  for (const record of atividadeObraSnapshot(payload)) {
+    if (snapshotRecordCompositionOriginId(record)) continue;
+    const key = snapshotRecordCloneGroupKey(record);
+    recordsByGroup.set(key, [...(recordsByGroup.get(key) || []), record]);
+  }
+
+  const ambiguous = new Set<string>();
+  for (const [groupKey, records] of recordsByGroup) {
+    const activityId = snapshotRecordActivityId(records[0]!);
+    const expectedDays = fixedDurationByActivity.get(activityId);
+    const blockDays = records
+      .map((record) => numberValue(field(record, "diaDoBloco", "diadobloco_number"), 0))
+      .filter((day) => day > 0);
+    const duplicateBlockDay = new Set(blockDays).size < blockDays.length;
+    if (duplicateBlockDay || (expectedDays && records.length > expectedDays)) ambiguous.add(groupKey);
+  }
+
+  ambiguousLegacyGroupsCache.set(payload, ambiguous);
+  return ambiguous;
+}
 
 function snapshotRecordCloneGroupKey(record: Record<string, unknown>): string {
   const compositionOriginId = snapshotRecordCompositionOriginId(record);
@@ -697,6 +732,7 @@ function isSnapshotAnchor(record: Record<string, unknown>): boolean {
 function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
   if (activityGroupIsFrozen(payload, line)) return false;
   if (!isSnapshotRecalculate(payload)) return true;
+  if (!line.origemComposicaoId && ambiguousLegacyCloneGroupKeys(payload).has(legacyLineCloneGroupKey(line))) return false;
   if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
   return movableSnapshotStatus(field(line.raw, "status"));
 }
@@ -704,6 +740,7 @@ function lineCanMove(payload: SchedulePayload, line: ScheduleLine): boolean {
 function lineCanRepair(payload: SchedulePayload, line: ScheduleLine): boolean {
   if (activityGroupIsFrozen(payload, line)) return false;
   if (!isSnapshotRecalculate(payload)) return true;
+  if (!line.origemComposicaoId && ambiguousLegacyCloneGroupKeys(payload).has(legacyLineCloneGroupKey(line))) return false;
   if (isDeltaScope(payload) && isSnapshotAnchor(line.raw)) return false;
   const status = normalizeText(field(line.raw, "status"));
   return movableSnapshotStatus(status);
@@ -1414,11 +1451,14 @@ function snapshotEngineResult(payload: SchedulePayload): EngineResult {
     .filter((record) => !invalidRecords.has(record))
     .map((record) => snapshotLineFromRecord(record, payload, anchorsByActivity))
     .filter((line): line is ScheduleLine => Boolean(line));
+  const contextWarnings = [...ambiguousLegacyCloneGroupKeys(payload)].map((groupKey) => (
+    `activity_group_context_missing:group=${groupKey}:legacy rows were preserved because composition blocks are ambiguous`
+  ));
 
   return {
     lines: refreshLineDependencies(payload, lines),
     validations: {
-      warnings: [],
+      warnings: contextWarnings,
       errors
     }
   };

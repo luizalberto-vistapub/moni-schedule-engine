@@ -514,6 +514,56 @@ describe("schedule controllers", () => {
     expect(patches.axo_ralo_2).toBeUndefined();
   });
 
+  it("preserves ambiguous legacy blocks without composition context and returns a warning", async () => {
+    const atividade_obra_snapshot = [
+      ["axo_1", 1, "2026-10-05"],
+      ["axo_2", 2, "2026-10-06"],
+      ["axo_3", 3, "2026-10-05"],
+      ["axo_4", 4, "2026-10-06"]
+    ].map(([id, externalIndex, date]) => ({
+      "unique id": id,
+      id_atividade_obra_externo: `instalacao|banheiro|${externalIndex}`,
+      atividade: "instalacao",
+      ambiente_id: "banheiro",
+      tipo: "Servico",
+      duracao: 1,
+      peso: 1,
+      ordem: 1,
+      dataInicioPrevista: date,
+      dataFimPrevista: date,
+      status: "Nao iniciada",
+      scopeRole: "editable"
+    }));
+
+    const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
+      payload_version: 2,
+      versao_cronograma_unique_id: "versao_2",
+      previous_version_id: "versao_1",
+      mode: "recalculate",
+      estrutura_inalterada: true,
+      obra_json: [{ id: "obra_1", dataInicio: "2026-10-01" }],
+      atividades_json: [{ id: "instalacao", nome: "Instalacao", tipo: "Servico", ordem: 1, duracao: 2 }],
+      atividade_obra_snapshot,
+      events_json: [{
+        type: "activity_date_changed_only",
+        atividade: "instalacao",
+        id_atividade_obra_externo: "instalacao|banheiro|1",
+        new_start_date: "2026-10-12"
+      }]
+    }));
+
+    expect(response.status).toBe(202);
+    const doneBody = await waitForWebhookBody("done");
+
+    expect(fetchCalls("/api/1.1/obj/atividadexobra/", "PATCH")).toHaveLength(0);
+    expect(doneBody.status).toBe("done");
+    const validations = doneBody.validations as { errors: string[]; warnings: string[] };
+    expect(validations.errors).toEqual([]);
+    expect(validations.warnings).toContain(
+      "activity_group_context_missing:group=instalacao|banheiro:legacy rows were preserved because composition blocks are ambiguous"
+    );
+  });
+
   it("uses the Bubble unique id as the v3 line identity fallback", async () => {
     const response = await request(app).post("/api/v1/schedules/recalculate").send(basePayload({
       payload_version: 3,

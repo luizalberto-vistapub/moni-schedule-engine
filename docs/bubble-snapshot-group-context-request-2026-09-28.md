@@ -1,6 +1,6 @@
 # Pedido ao Bubble: contexto de composição no snapshot
 
-> **Atualização:** o Bubble confirmou que o identificador correto é o `unique id` do registro de Memorial descritivo já recebido em `obra_ambiente_item_composicao_json`. A solução adotada preserva o ID externo e grava `produtoComposto`, `origemComposicao`, `diaDoBloco` e `totalDiasDoBloco`. O Bubble deverá ecoar esses campos no snapshot. A fórmula de duração variável continua pendente de confirmação e não foi alterada.
+> **Atualização:** o Bubble confirmou que o identificador correto é o `unique id` do registro de Memorial descritivo já recebido em `obra_ambiente_item_composicao_json`. A solução adotada preserva o ID externo e grava `produtoComposto`, `origemComposicao`, `diaDoBloco` e `totalDiasDoBloco`. O Bubble deverá ecoar esses campos no snapshot. A fórmula de duração variável vigente foi confirmada e permanece inalterada; `totalDiasDoBloco` registra a quantidade de linhas efetivamente criada.
 
 **Data:** 2026-09-28  
 **Ambiente analisado:** Live  
