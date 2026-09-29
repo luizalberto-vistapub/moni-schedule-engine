@@ -24,6 +24,8 @@ const DEFAULT_ATIVIDADE_OBRA_TYPE = "atividadexobra";
 const DEFAULT_EVENTO_CRONOGRAMA_TYPE = "eventocronograma";
 const DEFAULT_ATIVIDADE_OBRA_DEPENDENCIES_FIELD = "interdependencias MASTER (Atividade x Obra)";
 const ATIVIDADE_OBRA_MASTER_FIELD = "Atividade x Obra Master";
+const ATIVIDADE_OBRA_STARTED_BY_FIELD = "Iniciada por";
+const PREVIOUS_ATIVIDADE_OBRA_STARTED_BY_FIELDS = ["iniciadaPor", ATIVIDADE_OBRA_STARTED_BY_FIELD] as const;
 const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "responsavel",
   "responsavelFranqueado",
@@ -36,8 +38,6 @@ const PREVIOUS_ATIVIDADE_OBRA_FIELDS = [
   "dataInicioExecucao",
   "dataExecucao",
   "dataExecu\u00e7\u00e3o",
-  "iniciadaPor",
-  "Iniciada por",
   "dataAprovacao",
   "dataReprovacao",
   "observacao"
@@ -285,6 +285,10 @@ function previousAtividadeObraFields(payload: NormalizedSchedulePayload): Map<st
       const value = rawRecordValue(record, fieldName);
       if (value !== undefined) fields[fieldName] = value;
     }
+    const startedBy = PREVIOUS_ATIVIDADE_OBRA_STARTED_BY_FIELDS
+      .map((fieldName) => stringValue(rawRecordValue(record, fieldName)))
+      .find((value): value is string => value !== null);
+    if (startedBy) fields[ATIVIDADE_OBRA_STARTED_BY_FIELD] = startedBy;
 
     if (Object.keys(fields).length) {
       const equivalentKey = atividadeObraEquivalentKey(record);
@@ -1483,6 +1487,10 @@ async function postBulkBatch(
       statusCode: response.status,
       responseText
     }, "bubble bulk batch failed");
+    const deterministicClientError = response.status >= 400 && response.status < 500 && response.status !== 429;
+    if (typeName === config.atividadeObraType && deterministicClientError) {
+      throw new BubbleBulkRequestError(`Bubble bulk ${typeName} failed with ${response.status}: ${responseText}`);
+    }
     if (typeName === config.atividadeObraType) {
       return recoverAtividadeObraBulkRetry(typeName, url, batch, batch, config, options, batchIndex, false);
     }
