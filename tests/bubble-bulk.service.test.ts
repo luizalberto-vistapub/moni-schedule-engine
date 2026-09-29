@@ -1721,16 +1721,20 @@ describe("Bubble bulk persistence", () => {
 
     expect(records).toHaveLength(2);
     expect(records[0]).toMatchObject({
-      produtocomposto_custom_produto: "composto_ralo",
-      origemcomposicao_custom_memorial_descritivo: "memorial_ralo",
-      diadobloco_number: 1,
-      totaldiasdobloco_number: 2
+      produtoComposto: "composto_ralo",
+      origemComposicao: "memorial_ralo",
+      diaDoBloco: 1,
+      totalDiasDoBloco: 2
     });
     expect(records[1]).toMatchObject({
-      produtocomposto_custom_produto: "composto_ralo",
-      origemcomposicao_custom_memorial_descritivo: "memorial_ralo",
-      diadobloco_number: 2,
-      totaldiasdobloco_number: 2
+      produtoComposto: "composto_ralo",
+      origemComposicao: "memorial_ralo",
+      diaDoBloco: 2,
+      totalDiasDoBloco: 2
     });
+    expect(records[0]).not.toHaveProperty("produtocomposto_custom_produto");
+    expect(records[0]).not.toHaveProperty("origemcomposicao_custom_memorial_descritivo");
+    expect(records[0]).not.toHaveProperty("diadobloco_number");
+    expect(records[0]).not.toHaveProperty("totaldiasdobloco_number");
   });
 });

@@ -294,6 +294,7 @@
 - **Scope**: Schedule generation, Atividade x Obra persistence, snapshot hydration, clone grouping, execution locks, and recalculation events.
 - **Date**: 2026-09-28
 - **Status**: active on `test`; pending Bubble Test validation
+- **Data API note**: Swagger `version-23kta` exposes the writable names `produtoComposto`, `origemComposicao`, `diaDoBloco`, and `totalDiasDoBloco`; persistence must emit those exact names, not Bubble's internal storage keys.
 
 ## Handoff
 

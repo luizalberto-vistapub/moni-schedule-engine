@@ -2,6 +2,8 @@
 
 > **Atualização:** o Bubble confirmou que o identificador correto é o `unique id` do registro de Memorial descritivo já recebido em `obra_ambiente_item_composicao_json`. A solução adotada preserva o ID externo e grava `produtoComposto`, `origemComposicao`, `diaDoBloco` e `totalDiasDoBloco`. O Bubble deverá ecoar esses campos no snapshot. A fórmula de duração variável vigente foi confirmada e permanece inalterada; `totalDiasDoBloco` registra a quantidade de linhas efetivamente criada.
 
+> **Contrato Data API confirmado em 29/09/2026:** o Swagger de `version-23kta` expõe exatamente `produtoComposto`, `origemComposicao`, `diaDoBloco` e `totalDiasDoBloco`. O motor emite esses nomes no bulk; as chaves internas do editor não são enviadas.
+
 **Data:** 2026-09-28  
 **Ambiente analisado:** Live  
 **Obra de referência:** FK0002_Sidney Pereira Junior
